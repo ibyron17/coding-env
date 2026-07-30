@@ -1,0 +1,9 @@
+# install.sh 타임스탬프 백업
+*.bak-*
+
+# 머신·사용자 고유 설정. 개인 권한 허용 목록이 들어가므로 공유하지 않는다.
+# 사용자 전역 gitignore 에 의존하지 않고 레포 자체에서 제외한다.
+.claude/settings.local.json
+
+# macOS
+.DS_Store
