@@ -11,8 +11,10 @@ REPO_ROOT="$(cd "$(dirname "$0")" && pwd)"
 readonly REPO_ROOT
 readonly RULES_FILE_COUNT=37
 readonly AGENTS_FILE_COUNT=4
-readonly COMMANDS_FILE_COUNT=6
+readonly COMMANDS_FILE_COUNT=7
 readonly MAX_DIFF_LINES=20
+readonly MANIFEST_FILE_NAME=".coding-env.json"
+readonly MANIFEST_VERSION=1
 
 scope=""
 force_overwrite="false"
@@ -363,6 +365,76 @@ install_claude_md() {
   return 0
 }
 
+build_manifest_json() {
+  local installed_at="$1"
+  local installed_from_commit="$2"
+
+  cat <<EOF
+{
+  "version": $MANIFEST_VERSION,
+  "repo_path": "$REPO_ROOT",
+  "scope": "$scope",
+  "installed_at": "$installed_at",
+  "installed_from_commit": "$installed_from_commit",
+  "target_base_dir": "$target_base_dir",
+  "files_count": {
+    "CLAUDE_md": 1,
+    "rules": $RULES_FILE_COUNT,
+    "agents": $AGENTS_FILE_COUNT,
+    "commands": $COMMANDS_FILE_COUNT
+  }
+}
+EOF
+}
+
+save_manifest_file() {
+  local manifest_path="$target_base_dir/.claude/$MANIFEST_FILE_NAME"
+  local parent_directory
+  parent_directory=$(dirname "$manifest_path")
+
+  # parent 디렉토리 생성
+  if ! mkdir -p "$parent_directory"; then
+    log_error "manifest 부모 디렉토리 생성 실패: $parent_directory"
+    return 1
+  fi
+
+  # 설치 시점의 커밋 해시 가져오기 (실패 시 "unknown")
+  local installed_from_commit="unknown"
+  if command -v git &> /dev/null && [[ -d "$REPO_ROOT/.git" ]]; then
+    installed_from_commit=$(cd "$REPO_ROOT" && git rev-parse HEAD 2>/dev/null || echo "unknown")
+  fi
+
+  # ISO 8601 타임스탬프 생성
+  local installed_at
+  installed_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+
+  # 새 manifest 생성
+  local manifest
+  manifest=$(build_manifest_json "$installed_at" "$installed_from_commit")
+
+  # 기존 파일이 있으면 installed_at 제외하고 비교 (멱등성 확보)
+  if [[ -f "$manifest_path" ]]; then
+    local new_stripped
+    local old_stripped
+    new_stripped=$(printf '%s\n' "$manifest" | grep -v '"installed_at"')
+    old_stripped=$(grep -v '"installed_at"' "$manifest_path" 2>/dev/null || true)
+
+    if [[ "$new_stripped" == "$old_stripped" ]]; then
+      log_ok "manifest → 변경 없음"
+      return 0
+    fi
+  fi
+
+  # 내용이 다르거나 파일이 없으면 재기록
+  if ! printf '%s\n' "$manifest" > "$manifest_path"; then
+    log_error "manifest 파일 저장 실패: $manifest_path"
+    return 1
+  fi
+
+  log_ok "manifest → $manifest_path"
+  return 0
+}
+
 log_installation_plan() {
   log_info "coding-env 설치 계획 (scope: $scope, DRY-RUN)"
   log_info "대상: $target_base_dir"
@@ -385,6 +457,9 @@ log_installation_plan() {
     planned_total=$((planned_total + 1))
   fi
 
+  log_plan "mkdir -p $target_base_dir/.claude"
+  log_plan "save manifest → $target_base_dir/.claude/$MANIFEST_FILE_NAME"
+
   report_global_command_overlap
   log_done "${planned_total}개 파일이 대상에 반영될 예정. 실제 변경 없음"
   return 0
@@ -403,6 +478,7 @@ perform_installation() {
   install_directory "agents" "$REPO_ROOT/agents" "$target_agents_dir" "$AGENTS_FILE_COUNT" || return 1
   install_directory "commands" "$REPO_ROOT/commands" "$target_commands_dir" "$COMMANDS_FILE_COUNT" || return 1
   install_claude_md || return 1
+  save_manifest_file || return 1
   report_global_command_overlap
 
   log_done "$((RULES_FILE_COUNT + AGENTS_FILE_COUNT + COMMANDS_FILE_COUNT + 1))개 파일 반영 완료"

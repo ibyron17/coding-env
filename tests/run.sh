@@ -206,11 +206,11 @@ test_scope_project_new_install() {
     return 1
   fi
 
-  # commands 6개 확인
+  # commands 7개 확인
   local commands_count
   commands_count=$(count_files_recursive "./.claude/commands")
-  if ! assert_equals 6 "$commands_count" "commands 파일 개수"; then
-    record_failure "$test_name" "commands 파일 개수: 기대=6, 실제=$commands_count"
+  if ! assert_equals 7 "$commands_count" "commands 파일 개수"; then
+    record_failure "$test_name" "commands 파일 개수: 기대=7, 실제=$commands_count"
     return 1
   fi
 
@@ -277,6 +277,9 @@ test_idempotency() {
   # 상태 캡처
   local first_state
   first_state=$(find "./.claude" -type f -exec md5sum {} \; | sort)
+
+  # 초 경계를 넘겨 manifest 타임스탬프 재기록이 감지되도록 강제
+  sleep 1
 
   # 두 번째 실행
   "$INSTALL_SCRIPT" --scope project > /dev/null 2>&1
@@ -796,10 +799,10 @@ test_unmanaged_files_preserved() {
   ((passed_tests++))
 }
 
-# T17: prp 커맨드 6종이 설치되고 의존 사슬이 닫히는지 확인
+# T17: 커맨드 7종이 설치되고 의존 사슬이 닫히는지 확인
 test_commands_installed() {
   local test_name="T17"
-  local test_desc="커맨드 6종 설치 및 의존 사슬 완결"
+  local test_desc="커맨드 7종 설치 및 의존 사슬 완결"
   log_test_name "$test_name" "$test_desc"
 
   local sandbox
@@ -810,7 +813,7 @@ test_commands_installed() {
   "$INSTALL_SCRIPT" --scope project > /dev/null 2>&1
 
   local command_name
-  for command_name in prp-prd prp-plan prp-implement prp-pr prp-commit code-review; do
+  for command_name in prp-prd prp-plan prp-implement prp-pr prp-commit code-review env-update; do
     if [[ ! -f "./.claude/commands/$command_name.md" ]]; then
       record_failure "$test_name" "$command_name.md 미설치"
       return 1
@@ -859,8 +862,8 @@ test_global_command_overlap_report() {
     record_failure "$test_name" "우선순위 안내가 없거나 방향이 틀림 (전역>프로젝트여야 함)"
     return 1
   fi
-  if ! echo "$output" | grep -q "전역에 동일한 커맨드 5개"; then
-    record_failure "$test_name" "동일 5개 안내가 없음"
+  if ! echo "$output" | grep -q "전역에 동일한 커맨드 6개"; then
+    record_failure "$test_name" "동일 6개 안내가 없음"
     return 1
   fi
 
@@ -896,6 +899,102 @@ test_global_report_skipped_for_user_scope() {
   ((passed_tests++))
 }
 
+# T20: Manifest 생성 확인
+test_manifest_created_after_install() {
+  local test_name="T20"
+  local test_desc="Manifest 생성 및 기본 검증"
+  log_test_name "$test_name" "$test_desc"
+
+  local sandbox
+  sandbox=$(mktemp -d)
+  trap "rm -rf '$sandbox'" EXIT
+
+  cd "$sandbox"
+  "$INSTALL_SCRIPT" --scope project > /dev/null 2>&1
+
+  # Manifest 파일 존재 확인
+  if ! assert_file_exists "./.claude/.coding-env.json" "manifest 파일"; then
+    record_failure "$test_name" "manifest 파일 미존재"
+    return 1
+  fi
+
+  # Manifest 필드 검증 (grep 사용, jq 없음)
+  local manifest_content
+  manifest_content=$(cat "./.claude/.coding-env.json")
+
+  if ! echo "$manifest_content" | grep -q '"version": 1'; then
+    record_failure "$test_name" "version 필드 미발견 또는 잘못됨"
+    return 1
+  fi
+
+  if ! echo "$manifest_content" | grep -q '"scope": "project"'; then
+    record_failure "$test_name" "scope 필드 미발견 또는 값 잘못됨"
+    return 1
+  fi
+
+  if ! echo "$manifest_content" | grep -q '"repo_path"'; then
+    record_failure "$test_name" "repo_path 필드 미발견"
+    return 1
+  fi
+
+  log_ok "$test_name 통과"
+  ((passed_tests++))
+}
+
+# T21: Manifest 필드 완결성 및 dry-run 미생성
+test_manifest_fields_complete() {
+  local test_name="T21"
+  local test_desc="Manifest 필드 완결성 및 dry-run 검증"
+  log_test_name "$test_name" "$test_desc"
+
+  local sandbox
+  sandbox=$(mktemp -d)
+  trap "rm -rf '$sandbox'" EXIT
+
+  cd "$sandbox"
+  "$INSTALL_SCRIPT" --scope project > /dev/null 2>&1
+
+  local manifest_content
+  manifest_content=$(cat "./.claude/.coding-env.json")
+
+  # 필수 필드 확인
+  if ! echo "$manifest_content" | grep -q '"installed_at"'; then
+    record_failure "$test_name" "installed_at 필드 미발견"
+    return 1
+  fi
+
+  if ! echo "$manifest_content" | grep -q '"installed_from_commit"'; then
+    record_failure "$test_name" "installed_from_commit 필드 미발견"
+    return 1
+  fi
+
+  if ! echo "$manifest_content" | grep -q '"target_base_dir"'; then
+    record_failure "$test_name" "target_base_dir 필드 미발견"
+    return 1
+  fi
+
+  if ! echo "$manifest_content" | grep -q '"files_count"'; then
+    record_failure "$test_name" "files_count 필드 미발견"
+    return 1
+  fi
+
+  # dry-run 시 manifest 미생성 확인
+  local sandbox_dry
+  sandbox_dry=$(mktemp -d)
+  trap "rm -rf '$sandbox' '$sandbox_dry'" EXIT
+
+  cd "$sandbox_dry"
+  "$INSTALL_SCRIPT" --scope project --dry-run > /dev/null 2>&1
+
+  if [[ -f "./.claude/.coding-env.json" ]]; then
+    record_failure "$test_name" "--dry-run 시 manifest가 생성됨 (기대: 미생성)"
+    return 1
+  fi
+
+  log_ok "$test_name 통과"
+  ((passed_tests++))
+}
+
 register_and_run_tests() {
   test_scope_project_new_install || true
   test_scope_user_new_install || true
@@ -915,6 +1014,8 @@ register_and_run_tests() {
   test_commands_installed || true
   test_global_command_overlap_report || true
   test_global_report_skipped_for_user_scope || true
+  test_manifest_created_after_install || true
+  test_manifest_fields_complete || true
 }
 
 # 테스트 결과 요약 출력
@@ -964,7 +1065,7 @@ main() {
   echo ""
 
   # 전체 테스트 개수
-  total_tests=18  # T1~T19 (T11 결번)
+  total_tests=20  # T1~T21 (T11 결번)
 
   # 각 테스트 실행
   register_and_run_tests

@@ -51,9 +51,9 @@ cd /path/to/my-project
 | CLAUDE.md | 1 | `./CLAUDE.md` | `~/.claude/CLAUDE.md` | **항상** |
 | rules/ | 37 | `./.claude/rules/` | `~/.claude/rules/` | 12개 항상 · 25개 조건부 |
 | agents/ | 4 | `./.claude/agents/` | `~/.claude/agents/` | 호출 시 |
-| commands/ | 6 | `./.claude/commands/` | `~/.claude/commands/` | 호출 시 |
+| commands/ | 7 | `./.claude/commands/` | `~/.claude/commands/` | 호출 시 |
 
-**합계**: 48개 파일
+**합계**: 49개 파일
 
 상시 컨텍스트를 차지하는 것은 **CLAUDE.md 1개 + rules 12개 = 13개(약 34KB)** 뿐입니다.
 나머지는 조건이 맞을 때(rules 25개) 또는 호출할 때(agents 4개, commands 6개)만 로드됩니다.
@@ -81,6 +81,7 @@ cd /path/to/my-project
 | `prp-pr` | 184 | 브랜치 변경 분석 후 GitHub PR 생성 |
 | `prp-commit` | 131 | 자연어로 파일 지정해 커밋 (컨벤션: 프로젝트 CLAUDE.md > commitlint 설정 > 기본 형식) |
 | `code-review` | 289 | 로컬 변경 또는 PR 검수 |
+| `env-update` | 184 | coding-env 레포 업데이트 (manifest 기반 자동 갱신) |
 
 각 커맨드의 동작:
 
@@ -96,8 +97,11 @@ cd /path/to/my-project
   순으로 해석합니다.
 - **`/code-review`** — 로컬 미커밋 변경 또는 GitHub PR을 보안(CRITICAL)부터
   베스트 프랙티스(LOW)까지 심각도별로 검수하고, CRITICAL/HIGH 발견 시 커밋·머지 차단을 권고합니다.
+- **`/env-update`** — 설치된 coding-env를 최신 버전으로 업데이트합니다.
+  manifest 파일에서 레포 경로·scope를 읽어 자동으로 pull 후 재설치합니다.
+  변경이 있으면 사용자 확인을 받고, 로컬 수정 충돌 시 `--force` 여부를 묻습니다.
 
-**6종이 닫힌 의존 사슬을 이룹니다.** `prp-implement` 가 `/code-review`·`/prp-commit`·`/prp-pr` 을,
+**7종이 닫힌 의존 사슬을 이룹니다.** `prp-implement` 가 `/code-review`·`/prp-commit`·`/prp-pr` 을,
 `prp-pr` 이 `/code-review`·`/prp-commit` 을 호출합니다. 일부만 설치하면 사슬이 끊기므로 전부 배포합니다.
 배포되는 `agents/code-reviewer.md` 도 `/code-review` 를 참조합니다.
 
@@ -168,6 +172,37 @@ CLAUDE.md 「개발 워크플로우」의 3단계(설계 → 구현 → 검수)�
 
 자세한 구조는 [`rules/README.md`](./rules/README.md)를 참조하세요.
 
+## 환경 업데이트
+
+기존에 설치한 coding-env를 최신 버전으로 업데이트합니다.
+
+### 기본 사용법
+
+설치된 프로젝트 또는 전역 디렉토리 어디에서든:
+
+```bash
+/env-update
+```
+
+### 동작
+
+1. **Install manifest 확인**: 이전 설치 정보(레포 경로, scope) 읽기
+   - project 설치: `./.claude/.coding-env.json` 우선
+   - user 설치: `~/.claude/.coding-env.json` 우선
+   - 둘 다 없으면: 사용자에게 레포 경로를 대화형으로 물음
+2. **변경 감지**: 레포의 최신 커밋 확인 (git fetch)
+3. **사용자 확인**: 새 버전 있으면 사용자 확인 후 진행
+4. **Pull & 재설치**: `git pull --ff-only` 후 install.sh 재실행
+5. **Manifest 갱신**: install.sh가 자동으로 manifest 재기록
+
+### 주의
+
+- **Manifest는 설치 시 자동 생성**: 설치 후 `.claude/.coding-env.json` 파일이 생성되며, env-update가 읽어서 동작합니다.
+- **기존 설치(v1.0 이전)는 manifest 없음**: env-update 기능이 추가되기 전에 설치한 경우, manifest가 없어 첫 실행 때 레포 경로를 물어봅니다. 경로를 입력하면 그 이후부터는 자동입니다.
+- **dirty 상태 경고 후 계속**: 로컬에서 파일을 수정했으면 경고만 표시 후 진행합니다.
+- **충돌 시 --force 확인**: install.sh 실행 중 로컬 수정 파일 충돌 발생 시, `--force` 여부를 사용자에게 확인합니다.
+- **여러 scope 동시 설치**: project + user 둘 다 설치한 경우, 각각의 위치에서 별도로 `/env-update` 실행해야 합니다.
+
 ## 안전장치
 
 ### CLAUDE.md (프로젝트 고유 지침)
@@ -227,13 +262,14 @@ coding-env/
 │   ├── implementer.md
 │   ├── code-reviewer.md
 │   └── explore.md
-├── commands/                      # 6개 커맨드 (닫힌 의존 사슬)
+├── commands/                      # 7개 커맨드 (닫힌 의존 사슬)
 │   ├── prp-prd.md
 │   ├── prp-plan.md
 │   ├── prp-implement.md
 │   ├── prp-pr.md
 │   ├── prp-commit.md
-│   └── code-review.md
+│   ├── code-review.md
+│   └── env-update.md
 ├── docs/prps/
 │   └── coding-env.md              # 설계 문서 (PRP rev4)
 └── tests/
