@@ -1,13 +1,14 @@
 ---
 paths:
+  - "**/*.css"
+  - "**/*.scss"
+  - "**/*.sass"
+  - "**/*.less"
+  - "**/*.html"
   - "**/*.tsx"
   - "**/*.jsx"
   - "**/*.vue"
   - "**/*.svelte"
-  - "**/*.astro"
-  - "**/*.css"
-  - "**/*.scss"
-  - "**/*.html"
 ---
 > This file extends [common/security.md](../common/security.md) with web-specific security content.
 

@@ -49,14 +49,14 @@ cd /path/to/my-project
 | 항목 | 파일 수 | project 경로 | user 경로 | 로드 시점 |
 |------|--------|-------------|----------|----------|
 | CLAUDE.md | 1 | `./CLAUDE.md` | `~/.claude/CLAUDE.md` | **항상** |
-| rules/ | 79 | `./.claude/rules/` | `~/.claude/rules/` | 12개 항상 · 67개 조건부 |
+| rules/ | 37 | `./.claude/rules/` | `~/.claude/rules/` | 12개 항상 · 25개 조건부 |
 | agents/ | 4 | `./.claude/agents/` | `~/.claude/agents/` | 호출 시 |
 | commands/ | 6 | `./.claude/commands/` | `~/.claude/commands/` | 호출 시 |
 
-**합계**: 90개 파일
+**합계**: 48개 파일
 
-상시 컨텍스트를 차지하는 것은 **CLAUDE.md 1개 + rules 12개 = 13개(약 33KB)** 뿐입니다.
-나머지는 조건이 맞을 때(rules 67개) 또는 호출할 때(agents 4개, commands 6개)만 로드됩니다.
+상시 컨텍스트를 차지하는 것은 **CLAUDE.md 1개 + rules 12개 = 13개(약 34KB)** 뿐입니다.
+나머지는 조건이 맞을 때(rules 25개) 또는 호출할 때(agents 4개, commands 6개)만 로드됩니다.
 
 ### CLAUDE.md 구성
 
@@ -140,16 +140,18 @@ CLAUDE.md 「개발 워크플로우」의 3단계(설계 → 구현 → 검수)�
 
 ### rules 구성
 
-79개 규칙 파일은 다음과 같이 구성됩니다:
+37개 규칙 파일은 JS/TS + React + 웹 + React Native/Expo 스택에 맞춰 큐레이션되어 있습니다:
 
 | 분류 | 파일 수 | 로드 방식 | 설명 |
 |------|--------|----------|------|
 | common/ | 11 | **항상** | 언어 무관 원칙 (coding-style, testing, git-workflow, karpathy-guidelines 등) |
 | README.md | 1 | **항상** | rules 구조·우선순위 안내 |
-| web/ | 7 | **조건부** | 웹 프론트엔드 확장 — `paths` frontmatter(tsx/jsx/vue/svelte/astro/css/scss/html) 매칭 시 로드 |
-| 언어별 (12종: cpp, csharp, dart, golang, java, kotlin, perl, php, python, rust, swift, typescript) | 60 | **조건부** | 각 언어의 `paths` frontmatter로 매칭되는 파일이 있을 때만 로드 |
+| typescript/ | 5 | **조건부** | `paths`(ts/tsx/js/jsx) 매칭 시 로드 |
+| react/ | 5 | **조건부** | `paths`(tsx/jsx, components·hooks 디렉토리의 ts/js) 매칭 시 로드 |
+| web/ | 7 | **조건부** | `paths`(tsx/jsx/vue/svelte/css/scss/sass/less/html) 매칭 시 로드 |
+| react-native/ | 8 | **조건부** | React Native/Expo 확장 (accessibility·production-readiness 포함) |
 
-**항상 로드되는 rules**: 12개, ~25KB (CLAUDE.md 포함 시 13개, ~33KB)
+**항상 로드되는 rules**: 12개, ~26KB (CLAUDE.md 포함 시 13개, ~34KB)
 
 `common/karpathy-guidelines.md` 는 Andrej Karpathy의 관찰에서 파생된, LLM 코딩의 흔한 실패를 줄이기 위한 행동 지침입니다. 4개 원칙으로 구성됩니다:
 
@@ -160,7 +162,9 @@ CLAUDE.md 「개발 워크플로우」의 3단계(설계 → 구현 → 검수)�
 
 `paths` frontmatter가 없으므로 **설치된 모든 프로젝트에서 자동 적용**됩니다. `common/coding-style.md` 의 에러 처리 정책(실제 발생 가능한 실패만 처리)도 이 지침의 #2와 정렬되어 있습니다.
 
-**조건부 로드 예시**: Python 프로젝트에서는 `rules/python/coding-style.md`의 `paths: ["**/*.py"]` 가 `.py` 파일을 감지하면 자동 로드됩니다. 비매칭 파일(예: `**/*.ts`)은 로드되지 않으므로 컨텍스트 절약됩니다.
+**조건부 로드 방식**: `paths` 규칙은 Claude가 **매칭되는 파일을 실제로 Read/Edit하는 시점**에 동적으로 로드됩니다 ([공식 문서](https://code.claude.com/docs/en/memory) — "Path-scoped rules trigger when Claude reads files matching the pattern"). 예: `.tsx` 파일을 편집하는 순간 react/ 규칙이 붙습니다. 매칭 파일을 다루지 않는 세션에서는 로드되지 않아 컨텍스트를 절약합니다.
+
+**주의 — react-native/ 와 웹 규칙의 glob 겹침**: RN 소스도 `.ts(x)`라서 react-native 규칙 역시 `**/*.ts(x)`를 사용합니다(확장자로는 구분 불가). 따라서 순수 웹 프로젝트에서도 TS 파일 편집 시 RN 규칙이 함께 로드됩니다. 웹 전용 프로젝트라면 설치 후 `.claude/rules/react-native/` 를 삭제하세요 (RN 프로젝트에서는 반대로 web/ 삭제 가능). 단, 재설치하면 누락 파일로 간주되어 자동 복원되므로 그때 다시 삭제해야 합니다.
 
 자세한 구조는 [`rules/README.md`](./rules/README.md)를 참조하세요.
 
@@ -211,11 +215,13 @@ coding-env/
 ├── README.md                      # 이 파일
 ├── install.sh                     # 배포 스크립트 (순수 bash, 외부 의존 없음)
 ├── CLAUDE.md                      # 배포 대상 사용자 지침
-├── rules/                         # 79개 규칙
+├── rules/                         # 37개 규칙 (JS/TS·React·웹·RN/Expo 스택 큐레이션)
 │   ├── README.md                  # rules 구조 설명
 │   ├── common/                    # 언어 무관 (11개, karpathy-guidelines 포함)
-│   ├── web/                       # 웹 전용 (7개)
-│   └── {cpp, csharp, ..., typescript}/  # 언어별 (60개, 조건부 로드)
+│   ├── typescript/                # TS/JS 전용 (5개, 조건부 로드)
+│   ├── react/                     # React 전용 (5개, 조건부 로드)
+│   ├── react-native/              # React Native/Expo 전용 (8개, 조건부 로드)
+│   └── web/                       # 웹 프론트엔드 전용 (7개, 조건부 로드)
 ├── agents/                        # 4개 에이전트
 │   ├── design-architect.md
 │   ├── implementer.md

@@ -1,7 +1,8 @@
 # Rules
 ## Structure
 
-Rules are organized into a **common** layer plus **language-specific** and **domain-specific** directories:
+Rules are organized into a **common** layer plus **stack-specific** directories.
+This distribution is curated for a JavaScript/TypeScript + React + web stack:
 
 ```
 rules/
@@ -15,25 +16,23 @@ rules/
 │   ├── agents.md
 │   ├── security.md
 │   ├── code-review.md
-│   └── development-workflow.md
-├── typescript/      # TypeScript/JavaScript specific
-├── python/          # Python specific
-├── golang/          # Go specific
-├── web/             # Web and frontend specific (always loaded)
-├── swift/           # Swift specific
-└── php/             # PHP specific
+│   ├── development-workflow.md
+│   └── karpathy-guidelines.md
+├── typescript/      # TypeScript/JavaScript specific (conditional)
+├── react/           # React specific (conditional)
+├── react-native/    # React Native / Expo specific (conditional)
+└── web/             # Web frontend specific (conditional)
 ```
 
-- **common/** (10 files) contains universal principles — no language-specific code examples. **Always loaded at launch**, same priority as `.claude/CLAUDE.md`.
-- **web/** (7 files) contains domain-specific guidance for frontend and web projects. **Always loaded**.
-- **Language directories** (typescript, python, golang, swift, php) extend common rules with framework-specific patterns, tools, and code examples. Each file references its common counterpart.
-- **Conditional loading via `paths` frontmatter**: Language-specific files declare glob patterns in frontmatter (e.g., `paths: ["**/*.py"]`). Files are loaded only when the glob matches files in the current project. See [Claude docs: Memory](https://code.claude.com/docs/en/memory).
+- **common/** (11 files) contains universal principles — no language-specific code examples. **Always loaded at launch**, same priority as `CLAUDE.md`.
+- **typescript/**, **react/**, **react-native/**, **web/** extend common rules with stack-specific patterns, tools, and code examples. Each file references its common counterpart.
+- **Conditional loading via `paths` frontmatter**: Stack-specific files declare glob patterns in frontmatter (e.g., `paths: ["**/*.tsx"]`). A rule loads when Claude **reads or edits** a file matching the glob (not merely when matching files exist). Multiple globs are OR'd. See [Claude docs: Memory](https://code.claude.com/docs/en/memory).
 
 ## Installation
 
 ### Install All Rules (Default)
 
-All 79 rules are installed and conditionally loaded via `paths` frontmatter. Rule files without `paths` frontmatter (common/, web/, README.md) are always loaded. Language-specific files load only when their glob patterns match files in your project.
+All 37 rules are installed. Rule files without `paths` frontmatter (common/, README.md) are always loaded. Stack-specific files load only when their glob patterns match files in your project.
 
 ```bash
 # Install to project directory (.claude/rules/)
@@ -50,10 +49,10 @@ All 79 rules are installed and conditionally loaded via `paths` frontmatter. Rul
    - This README
    - Loaded at launch alongside `CLAUDE.md`
 
-2. **Conditionally loaded** (67 files):
-   - `web/` (7 files) — loads when frontend files match (`**/*.tsx`, `**/*.css`, `**/*.vue`, etc.)
-   - Language rules (60 files across 12 languages: cpp, csharp, dart, golang, java, kotlin, perl, php, python, rust, swift, typescript)
-   - Each file declares `paths: ["**/*.ext"]` frontmatter (e.g., `paths: ["**/*.ts", "**/*.tsx"]` for TypeScript)
+2. **Conditionally loaded** (17 files):
+   - `typescript/` (5 files) — loads when `**/*.ts`, `**/*.tsx`, `**/*.js`, `**/*.jsx` match
+   - `react/` (5 files) — loads when `**/*.tsx`, `**/*.jsx`, or `components/`·`hooks/` sources match
+   - `web/` (7 files) — loads when frontend files match (`**/*.tsx`, `**/*.css`, `**/*.html`, etc.)
    - Loaded only when glob matches project files
    - No setup required — matching happens automatically
 
@@ -88,11 +87,11 @@ For non-language domains like `web/`, follow the same layered pattern when there
 When language-specific rules and common rules conflict, **language-specific rules take precedence** (specific overrides general). This follows the standard layered configuration pattern (similar to CSS specificity or `.gitignore` precedence).
 
 - `rules/common/` defines universal defaults applicable to all projects.
-- `rules/golang/`, `rules/python/`, `rules/swift/`, `rules/php/`, `rules/typescript/`, etc. override those defaults where language idioms differ.
+- `rules/typescript/`, `rules/react/`, `rules/web/` override those defaults where stack idioms differ.
 
 ### Example
 
-`common/coding-style.md` recommends immutability as a default principle. A language-specific `golang/coding-style.md` can override this:
+`common/coding-style.md` recommends immutability as a default principle. A language-specific rules file (e.g., a `golang/coding-style.md`, if that language set is added) can override this:
 
 > Idiomatic Go uses pointer receivers for struct mutation — see [common/coding-style.md](../common/coding-style.md) for the general principle, but Go-idiomatic mutation is preferred here.
 

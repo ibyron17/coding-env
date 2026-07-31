@@ -1,13 +1,14 @@
 ---
 paths:
+  - "**/*.css"
+  - "**/*.scss"
+  - "**/*.sass"
+  - "**/*.less"
+  - "**/*.html"
   - "**/*.tsx"
   - "**/*.jsx"
   - "**/*.vue"
   - "**/*.svelte"
-  - "**/*.astro"
-  - "**/*.css"
-  - "**/*.scss"
-  - "**/*.html"
 ---
 > This file extends [common/patterns.md](../common/patterns.md) with web-specific design-quality guidance.
 

@@ -190,11 +190,11 @@ test_scope_project_new_install() {
     return 1
   fi
 
-  # rules 79개 확인
+  # rules 37개 확인
   local rules_count
   rules_count=$(count_files_recursive "./.claude/rules")
-  if ! assert_equals 79 "$rules_count" "rules 파일 개수"; then
-    record_failure "$test_name" "rules 파일 개수: 기대=79, 실제=$rules_count"
+  if ! assert_equals 37 "$rules_count" "rules 파일 개수"; then
+    record_failure "$test_name" "rules 파일 개수: 기대=37, 실제=$rules_count"
     return 1
   fi
 
@@ -321,11 +321,11 @@ test_partial_damage_recovery() {
     return 1
   fi
 
-  # rules 79개 확인
+  # rules 37개 확인
   local rules_count
   rules_count=$(count_files_recursive "./.claude/rules")
-  if ! assert_equals 79 "$rules_count" "rules 파일 개수"; then
-    record_failure "$test_name" "rules 파일 개수: 기대=79, 실제=$rules_count"
+  if ! assert_equals 37 "$rules_count" "rules 파일 개수"; then
+    record_failure "$test_name" "rules 파일 개수: 기대=37, 실제=$rules_count"
     return 1
   fi
 
@@ -595,23 +595,23 @@ test_paths_frontmatter_preserved() {
 
   "$INSTALL_SCRIPT" --scope project > /dev/null 2>&1
 
-  # python/coding-style.md 확인
-  local python_file="./.claude/rules/python/coding-style.md"
-  if ! assert_file_exists "$python_file" "python/coding-style.md"; then
-    record_failure "$test_name" "python/coding-style.md 미존재"
+  # react/coding-style.md 확인
+  local react_file="./.claude/rules/react/coding-style.md"
+  if ! assert_file_exists "$react_file" "react/coding-style.md"; then
+    record_failure "$test_name" "react/coding-style.md 미존재"
     return 1
   fi
 
   # 첫 줄이 --- 인지 확인
   local first_line
-  first_line=$(head -1 "$python_file")
+  first_line=$(head -1 "$react_file")
   if ! assert_equals "---" "$first_line" "첫 줄 YAML marker"; then
     record_failure "$test_name" "첫 줄이 '---'가 아님: $first_line"
     return 1
   fi
 
   # paths: 문자열 포함 확인
-  if ! grep -q "^paths:" "$python_file"; then
+  if ! grep -q "^paths:" "$react_file"; then
     record_failure "$test_name" "paths: 필드 미발견"
     return 1
   fi
