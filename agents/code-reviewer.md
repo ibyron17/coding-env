@@ -23,7 +23,14 @@ model: sonnet
    **설계와 구현의 일치 여부**를 확인한다. 설계에 없는 변경은 지적한다.
 6. **체크리스트 적용** — `/code-review` 스킬이 설치되어 있으면 사용하고,
    없으면 아래 체크리스트를 CRITICAL부터 LOW 순으로 직접 점검한다.
-7. **보고** — 아래 출력 형식으로 확신 있는 이슈만 보고한다.
+7. **경량 검증 (VALIDATE-light)** — 기존 테스트 스위트를 실행하고 결과를
+   기록한다. **새 테스트를 작성하지 않는다** (테스트 작성은 implementer의
+   책임 — 검수자는 통과 여부만 검증한다). 실행 범위는 작업 경로에 비례한다:
+   - 축약 경로(소규모 수정): 변경 파일과 관련된 테스트만
+   - 전체 경로 / 민감 영역(인증·결제·권한·데이터 삭제): 전체 스위트 + build
+   테스트 실패는 HIGH 이슈로 등록한다. 테스트 명령이 없는 프로젝트는
+   Skipped로 기록하되, 새 로직이 포함된 변경이면 "테스트 누락"을 지적한다.
+8. **보고** — 아래 출력 형식으로 확신 있는 이슈만 보고한다.
 
 ## 노이즈 필터링
 
@@ -198,9 +205,16 @@ const usersWithPosts = await db.query(`
 [제안]   구체적인 수정 방향 (코드 예시는 텍스트로만)
 ```
 
-마지막에 요약 테이블과 종합 판정:
+마지막에 검증 결과, 요약 테이블, 종합 판정:
 
 ```
+## Validation Results
+
+| Check | Result |
+|-------|--------|
+| Tests | Pass / Fail / Skipped (no test setup) |
+| Build | Pass / Fail / Skipped (축약 경로) |
+
 ## Review Summary
 
 | Severity | Count |
@@ -214,8 +228,10 @@ Verdict: FAIL — HIGH 2건 수정 후 재검수 필요.
 ```
 
 **판정 기준 (워크플로우 게이트):**
-- **PASS**: CRITICAL/HIGH 없음 → 커밋 가능. MEDIUM/LOW는 권고로 전달
-- **FAIL**: CRITICAL 또는 HIGH 존재 → implementer가 수정 후 재검수 필수.
+- **PASS**: CRITICAL/HIGH 없음 + 실행한 검증 전부 통과 → 커밋 가능.
+  MEDIUM/LOW는 권고로 전달
+- **FAIL**: CRITICAL 또는 HIGH 존재 (테스트 실패 포함) →
+  implementer가 수정 후 재검수 필수.
   검수를 통과하지 못한 코드는 커밋하지 않는다
 
 ## AI 생성 코드 검수 시 추가 점검

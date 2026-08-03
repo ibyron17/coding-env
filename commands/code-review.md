@@ -60,15 +60,37 @@ Read each changed file in full. Check for:
 - Missing tests for new code
 - Accessibility issues (a11y)
 
-### Phase 3 — REPORT
+### Phase 3 — VALIDATE (light)
+
+기존 테스트 스위트를 **실행·기록만** 한다. 새 테스트를 작성하지 않는다
+(테스트 작성은 implementer의 책임 — 검수자는 통과 여부만 검증한다).
+
+작업 경로에 비례해 실행 범위를 조절한다:
+
+| 작업 분류 | 실행 범위 |
+|---|---|
+| 축약 경로 (소규모 수정) | 변경 파일과 관련된 테스트만 (예: `npm test -- <관련 경로>`, `pytest <관련 경로>`, `go test ./<변경 패키지>/...`) |
+| 전체 경로 / 민감 영역 (인증·결제·권한·데이터 삭제) | 전체 스위트 + build |
+
+프로젝트 타입 감지와 명령은 PR Review Mode의 Phase 4 — VALIDATE와 동일한
+방식을 따른다 (`package.json`, `Cargo.toml`, `go.mod`, `pyproject.toml` 등).
+
+기록 규칙:
+- 각 명령의 pass/fail을 리포트의 Validation 표에 기록한다
+- **테스트 실패 = HIGH** 이슈로 등록한다 (커밋 차단 대상)
+- 테스트 명령이 없는 프로젝트는 `Skipped (no test setup)`으로 기록하고,
+  이번 변경에 새 로직이 포함되어 있으면 "테스트 누락"을 별도 이슈로 지적한다
+
+### Phase 4 — REPORT
 
 Generate report with:
 - Severity: CRITICAL, HIGH, MEDIUM, LOW
 - File location and line numbers
 - Issue description
 - Suggested fix
+- Validation results table (Phase 3의 실행 결과: 명령별 Pass / Fail / Skipped)
 
-Block commit if CRITICAL or HIGH issues found.
+Block commit if CRITICAL or HIGH issues found — including any test failure from Phase 3.
 Never approve code with security vulnerabilities.
 
 ---
