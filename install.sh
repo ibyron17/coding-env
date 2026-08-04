@@ -11,7 +11,7 @@ REPO_ROOT="$(cd "$(dirname "$0")" && pwd)"
 readonly REPO_ROOT
 readonly RULES_FILE_COUNT=37
 readonly AGENTS_FILE_COUNT=4
-readonly COMMANDS_FILE_COUNT=7
+readonly COMMANDS_FILE_COUNT=8
 readonly MAX_DIFF_LINES=20
 readonly MANIFEST_FILE_NAME=".coding-env.json"
 readonly MANIFEST_VERSION=1

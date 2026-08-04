@@ -5,5 +5,8 @@
 # 사용자 전역 gitignore 에 의존하지 않고 레포 자체에서 제외한다.
 .claude/settings.local.json
 
+# /dashboard 산출물. 세션별 진행 상황 상태 파일이라 프로젝트 로컬에만 존재하며 공유하지 않는다.
+.claude/dashboard.html
+
 # macOS
 .DS_Store

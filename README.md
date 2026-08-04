@@ -51,12 +51,12 @@ cd /path/to/my-project
 | CLAUDE.md | 1 | `./CLAUDE.md` | `~/.claude/CLAUDE.md` | **항상** |
 | rules/ | 37 | `./.claude/rules/` | `~/.claude/rules/` | 12개 항상 · 25개 조건부 |
 | agents/ | 4 | `./.claude/agents/` | `~/.claude/agents/` | 호출 시 |
-| commands/ | 7 | `./.claude/commands/` | `~/.claude/commands/` | 호출 시 |
+| commands/ | 8 | `./.claude/commands/` | `~/.claude/commands/` | 호출 시 |
 
-**합계**: 49개 파일
+**합계**: 50개 파일
 
 상시 컨텍스트를 차지하는 것은 **CLAUDE.md 1개 + rules 12개 = 13개(약 34KB)** 뿐입니다.
-나머지는 조건이 맞을 때(rules 25개) 또는 호출할 때(agents 4개, commands 6개)만 로드됩니다.
+나머지는 조건이 맞을 때(rules 25개) 또는 호출할 때(agents 4개, commands 8개)만 로드됩니다.
 
 ### CLAUDE.md 구성
 
@@ -82,6 +82,7 @@ cd /path/to/my-project
 | `prp-commit` | 131 | 자연어로 파일 지정해 커밋 (컨벤션: 프로젝트 CLAUDE.md > commitlint 설정 > 기본 형식) |
 | `code-review` | 289 | 로컬 변경 또는 PR 검수 |
 | `env-update` | 184 | coding-env 레포 업데이트 (manifest 기반 자동 갱신) |
+| `dashboard` | 327 | 세션 진행 상황을 프로젝트 로컬 HTML 대시보드로 기록 (init/step/log) |
 
 각 커맨드의 동작:
 
@@ -100,10 +101,15 @@ cd /path/to/my-project
 - **`/env-update`** — 설치된 coding-env를 최신 버전으로 업데이트합니다.
   manifest 파일에서 레포 경로·scope를 읽어 자동으로 pull 후 재설치합니다.
   변경이 있으면 사용자 확인을 받고, 로컬 수정 충돌 시 `--force` 여부를 묻습니다.
+- **`/dashboard`** — 전체 경로 작업의 진행 상황을 프로젝트 로컬 `.claude/dashboard.html`
+  하나로 기록합니다. `init`으로 생성, `step`으로 단계 상태를, `log`로 작업 추적 로그를
+  갱신합니다. 셸 스크립트나 상태 JSON 없이 메인 세션의 Edit만으로 DOM을 직접 갱신하는
+  방식이며, `prp-*` 체인과 무관하게 단독으로 동작합니다.
 
-**7종이 닫힌 의존 사슬을 이룹니다.** `prp-implement` 가 `/code-review`·`/prp-commit`·`/prp-pr` 을,
+**의존 사슬 7종 + 독립 커맨드 1종.** `prp-implement` 가 `/code-review`·`/prp-commit`·`/prp-pr` 을,
 `prp-pr` 이 `/code-review`·`/prp-commit` 을 호출합니다. 일부만 설치하면 사슬이 끊기므로 전부 배포합니다.
-배포되는 `agents/code-reviewer.md` 도 `/code-review` 를 참조합니다.
+배포되는 `agents/code-reviewer.md` 도 `/code-review` 를 참조합니다. `dashboard` 는 이 사슬을
+호출하지도, 호출받지도 않는 독립 커맨드입니다.
 
 `--scope project` 로 설치하면 전역(`~/.claude/commands/`)과 비교해 상황을 보고합니다.
 `--scope user` 는 설치 대상이 곧 전역이므로 비교를 생략합니다.
@@ -262,14 +268,15 @@ coding-env/
 │   ├── implementer.md
 │   ├── code-reviewer.md
 │   └── explore.md
-├── commands/                      # 7개 커맨드 (닫힌 의존 사슬)
+├── commands/                      # 8개 커맨드 (의존 사슬 7종 + 독립 커맨드 1종)
 │   ├── prp-prd.md
 │   ├── prp-plan.md
 │   ├── prp-implement.md
 │   ├── prp-pr.md
 │   ├── prp-commit.md
 │   ├── code-review.md
-│   └── env-update.md
+│   ├── env-update.md
+│   └── dashboard.md
 ├── docs/prps/
 │   └── coding-env.md              # 설계 문서 (PRP rev4)
 └── tests/

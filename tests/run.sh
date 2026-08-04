@@ -206,11 +206,11 @@ test_scope_project_new_install() {
     return 1
   fi
 
-  # commands 7개 확인
+  # commands 8개 확인
   local commands_count
   commands_count=$(count_files_recursive "./.claude/commands")
-  if ! assert_equals 7 "$commands_count" "commands 파일 개수"; then
-    record_failure "$test_name" "commands 파일 개수: 기대=7, 실제=$commands_count"
+  if ! assert_equals 8 "$commands_count" "commands 파일 개수"; then
+    record_failure "$test_name" "commands 파일 개수: 기대=8, 실제=$commands_count"
     return 1
   fi
 
@@ -799,10 +799,10 @@ test_unmanaged_files_preserved() {
   ((passed_tests++))
 }
 
-# T17: 커맨드 7종이 설치되고 의존 사슬이 닫히는지 확인
+# T17: 커맨드 8종(의존 사슬 7종 + 독립 커맨드 1종)이 설치되고 의존 사슬이 닫히는지 확인
 test_commands_installed() {
   local test_name="T17"
-  local test_desc="커맨드 7종 설치 및 의존 사슬 완결"
+  local test_desc="커맨드 8종 설치 및 의존 사슬 완결"
   log_test_name "$test_name" "$test_desc"
 
   local sandbox
@@ -813,7 +813,7 @@ test_commands_installed() {
   "$INSTALL_SCRIPT" --scope project > /dev/null 2>&1
 
   local command_name
-  for command_name in prp-prd prp-plan prp-implement prp-pr prp-commit code-review env-update; do
+  for command_name in prp-prd prp-plan prp-implement prp-pr prp-commit code-review env-update dashboard; do
     if [[ ! -f "./.claude/commands/$command_name.md" ]]; then
       record_failure "$test_name" "$command_name.md 미설치"
       return 1
@@ -862,8 +862,8 @@ test_global_command_overlap_report() {
     record_failure "$test_name" "우선순위 안내가 없거나 방향이 틀림 (전역>프로젝트여야 함)"
     return 1
   fi
-  if ! echo "$output" | grep -q "전역에 동일한 커맨드 6개"; then
-    record_failure "$test_name" "동일 6개 안내가 없음"
+  if ! echo "$output" | grep -q "전역에 동일한 커맨드 7개"; then
+    record_failure "$test_name" "동일 7개 안내가 없음"
     return 1
   fi
 
@@ -995,6 +995,74 @@ test_manifest_fields_complete() {
   ((passed_tests++))
 }
 
+# T22: dashboard 템플릿 무결성 — LLM 지시문 방식이라 런타임 Edit 결과는 검증 대상이 아니고,
+# 설치·문서 정합성만 자동 검증한다 (하위 검증 T22-1~T22-5).
+test_dashboard_template_integrity() {
+  local test_name="T22"
+  local test_desc="dashboard 템플릿 무결성 (T22-1~T22-5)"
+  log_test_name "$test_name" "$test_desc"
+
+  local sandbox
+  sandbox=$(mktemp -d)
+  trap "rm -rf '$sandbox'" EXIT
+
+  cd "$sandbox"
+  "$INSTALL_SCRIPT" --scope project > /dev/null 2>&1
+
+  local dashboard_command_file="./.claude/commands/dashboard.md"
+
+  # T22-1: commands/dashboard.md 설치됨
+  if ! assert_file_exists "$dashboard_command_file" "dashboard.md"; then
+    record_failure "$test_name" "T22-1: dashboard.md 미설치"
+    return 1
+  fi
+
+  # T22-2: 필수 셀렉터 11종이 템플릿에 모두 존재
+  local required_selector
+  for required_selector in dz-title dz-subtitle dz-progress-bar dz-progress-pct dz-step- \
+    dz-current dz-current-meta dz-current-clock dz-next dz-log dz-updated; do
+    if ! grep -q "$required_selector" "$dashboard_command_file"; then
+      record_failure "$test_name" "T22-2: 셀렉터 미발견: $required_selector"
+      return 1
+    fi
+  done
+
+  # T22-3: 결과 배지 4종 CSS class 정의 존재
+  local badge_class
+  for badge_class in impl pass fail commit; do
+    if ! grep -q "\.badge\.${badge_class}" "$dashboard_command_file"; then
+      record_failure "$test_name" "T22-3: 배지 class 미발견: .badge.$badge_class"
+      return 1
+    fi
+  done
+
+  # T22-4: 필터 라디오 3종과 CSS 규칙 존재
+  if ! grep -q "dzf-review:checked" "$dashboard_command_file"; then
+    record_failure "$test_name" "T22-4: 필터 CSS 규칙(dzf-review:checked) 미발견"
+    return 1
+  fi
+  if ! grep -q 'id="dzf-all"' "$dashboard_command_file" \
+    || ! grep -q 'id="dzf-impl"' "$dashboard_command_file" \
+    || ! grep -q 'id="dzf-review"' "$dashboard_command_file"; then
+    record_failure "$test_name" "T22-4: 필터 라디오 3종 미발견"
+    return 1
+  fi
+
+  # T22-5: install.sh 의 COMMANDS_FILE_COUNT 가 실제 파일 수와 일치 (재발 방지책)
+  # 이번 변경처럼 커맨드를 추가하고 상수를 안 고치는 실수를 잡는 목적.
+  local declared_count
+  declared_count=$(grep -oE '^readonly COMMANDS_FILE_COUNT=[0-9]+' "$INSTALL_SCRIPT" | grep -oE '[0-9]+$')
+  local actual_count
+  actual_count=$(ls "$REPO_ROOT/commands"/*.md | wc -l | xargs echo)
+  if ! assert_equals "$actual_count" "$declared_count" "COMMANDS_FILE_COUNT 일치"; then
+    record_failure "$test_name" "T22-5: COMMANDS_FILE_COUNT=$declared_count, 실제 파일 수=$actual_count"
+    return 1
+  fi
+
+  log_ok "$test_name 통과"
+  ((passed_tests++))
+}
+
 register_and_run_tests() {
   test_scope_project_new_install || true
   test_scope_user_new_install || true
@@ -1016,6 +1084,7 @@ register_and_run_tests() {
   test_global_report_skipped_for_user_scope || true
   test_manifest_created_after_install || true
   test_manifest_fields_complete || true
+  test_dashboard_template_integrity || true
 }
 
 # 테스트 결과 요약 출력
@@ -1065,7 +1134,7 @@ main() {
   echo ""
 
   # 전체 테스트 개수
-  total_tests=20  # T1~T21 (T11 결번)
+  total_tests=21  # T1~T22 (T11 결번)
 
   # 각 테스트 실행
   register_and_run_tests
