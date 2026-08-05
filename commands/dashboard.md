@@ -1,6 +1,6 @@
 ---
 description: "세션 진행 상황을 프로젝트 로컬 HTML 대시보드로 기록 — init/step/log + on/off 스위치"
-argument-hint: "init \"<제목>\" \"<단계1|단계2|...>\" | step <n> <done|active|wait> | log <impl|pass|fail|commit> \"<요약>\" [...] | on | off"
+argument-hint: "init \"<제목>\" \"<단계1|...> 또는 <그룹A:단계1,단계2|그룹B:...>\" | step <n>|<g>.<p> <done|active|wait> | log <impl|pass|fail|commit> \"<요약>\" [...] | on | off"
 ---
 
 # Dashboard
@@ -20,9 +20,14 @@ argument-hint: "init \"<제목>\" \"<단계1|단계2|...>\" | step <n> <done|act
 
 ```
 /dashboard init "<제목>" "<단계1|단계2|...>"
-/dashboard step <n> <done|active|wait>
+/dashboard init "<제목>" "<그룹A:단계1,단계2|그룹B:단계1,단계2>"
+/dashboard step <n> <done|active|wait>            # 그룹 1개 — 단계 번호
+/dashboard step <g>.<p> <done|active|wait>        # 그룹 2개 이상 — 행.열
 /dashboard log <impl|pass|fail|commit> "<한 줄 요약>" ["상세"] [--round N]
+/dashboard on | off
 ```
+
+`step` 의 첫 인자에 `.` 이 있으면 매트릭스 칸, 없으면 선형 단계다. 인덱스는 모두 1부터 시작한다.
 
 ## CLAUDE.md 트리거 (메인 세션 전용, 참고)
 
@@ -34,6 +39,9 @@ argument-hint: "init \"<제목>\" \"<단계1|단계2|...>\" | step <n> <done|act
 | 구현 완료 | `step 3 done` + `log impl` |
 | 검수 PASS / FAIL | `step 4 done|wait` + `log pass|fail` |
 | 커밋·푸시 | `log commit` |
+
+> 그룹 모드에서는 `step <n>` 자리에 `step <g>.<p>` 를 쓴다. 한 단계가 여러 그룹에 걸쳐 끝나면
+> 그룹 수만큼 호출한다(칸 단위 갱신이 곧 진행률의 단위다).
 
 ---
 
@@ -53,9 +61,25 @@ argument-hint: "init \"<제목>\" \"<단계1|단계2|...>\" | step <n> <done|act
 | `#dz-subtitle` | 텍스트 | 단계 흐름 요약 · 작업 유형 |
 | `#dz-progress-bar` | inline `style="width:N%"` | 완료 단계 / 전체 단계 |
 | `#dz-progress-pct` | 텍스트 | `3/6 · 50%` |
-| `#dz-step-{n}` | `class` 속성 + 자식 `.chip` 텍스트 | `done`\|`active`\|`wait` / `완료`\|`진행중`\|`대기` |
+| `#dz-step-{n}` **(그룹 1개)** | `class` 속성 + 자식 `.chip` 텍스트 | `done`\|`active`\|`wait` / `완료`\|`진행중`\|`대기` |
+| `#dz-cell-{g}-{p}` **(그룹 2개 이상)** | `data-state` 속성 + 칸 텍스트 | `done`\|`active`\|`wait`\|`na` / `완료`\|`진행중`\|`대기`\|`–` |
 | `#dz-log` | 자식 `<li>` **prepend** + `data-current-session` 속성 | 로그 항목(최신이 위) / 현재 세션 번호 |
 | `#dz-updated` | 텍스트 | 갱신 시각 |
+
+진행 시각화 행은 **렌더링 분기에 따라 둘 중 하나**만 존재한다(셀렉터 개수는 여전히 7이며,
+한 파일 안에 `#dz-step-*` 과 `#dz-cell-*` 이 공존하지 않는다). 문법·모드 판정·매트릭스 마크업은
+아래 [진행 시각화 규격](#진행-시각화-규격--그룹--단계-모델) 참조.
+
+**init 시점에만 생성되고 이후 치환되지 않는 구조 요소** (위 표에 넣지 않는다):
+
+- `#dz-matrix` — 매트릭스 `<table>` 자체
+- `#dz-group-{g}` — 행 머리 `<th>`. 그룹명 텍스트를 담는다
+
+**불변식 (이 두 가지가 깨지면 `step` 의 결정성이 무너진다)**
+
+1. **한 파일에 `#dz-step-*` 과 `#dz-cell-*` 이 동시에 존재하지 않는다.** `init` 이 둘 중 하나만 만든다.
+2. **`<li id="dz-step-…">` 와 `<td id="dz-cell-…">` 는 반드시 한 줄에 하나씩 생성한다.**
+   `step` 의 완료 칸 카운트가 `grep -c`(줄 단위 계수)에 의존하기 때문이다.
 
 `data-current-session` 은 새 행이 아니라 `#dz-log` 행의 하위 개념이다 — `log` 절차가
 어차피 매번 grep 하는 `#dz-log` 여는 태그에 얹혀 있어 탐색 단계를 늘리지 않는다
@@ -95,6 +119,118 @@ argument-hint: "init \"<제목>\" \"<단계1|단계2|...>\" | step <n> <done|act
 
 ---
 
+## 진행 시각화 규격 — 그룹 × 단계 모델
+
+`init` 두 번째 인자는 **선형 문법**과 **그룹 문법** 중 하나로 해석된다. 그룹이 1개면 기존과 완전히
+동일한 단계 띠(`#dz-step-{n}`)로, 2개 이상이면 매트릭스 표(행=그룹, 열=단계)로 렌더링한다.
+
+### 개념 모델
+
+```
+Session
+  title   : string
+  groups  : Group[]          # 순서 있음. len(groups) >= 1
+Group
+  name    : string | null    # 선형 문법으로 만들어진 그룹 1개만 null 을 가진다
+  phases  : string[]         # 순서 있음. len(phases) >= 1
+Cell
+  state   : "done" | "active" | "wait" | "na"
+```
+
+- **칸(Cell)** = (그룹, 단계) 쌍 중 **그 그룹이 실제로 가진 단계**. 진행률의 단위다.
+- **전체 칸 수 `N` = Σ len(group.phases)**. 열 수 × 그룹 수가 **아니다**.
+- `na` 는 표를 직사각형으로 유지하기 위한 **자리 채움**이며 칸이 아니다(분모에 들어가지 않는다).
+- 게이트는 별도 개념이 아니라 `phases` 길이가 1인 그룹이다.
+
+### 문자열 문법 (`init` 두 번째 인자)
+
+```
+선형 문법 :  "단계1|단계2|단계3"                                   ← 기존. 그대로 동작한다
+그룹 문법 :  "그룹A:단계1,단계2|그룹B:단계1,단계2|그룹C:단계1"
+```
+
+**모드 판정 규칙 (결정적)** — `|` 로 나눈 세그먼트 목록을 보고:
+
+| 조건 | 해석 |
+|------|------|
+| 모든 세그먼트에 `:` 가 **없다** | 선형 문법. 전체를 **이름 없는 그룹 1개**로 정규화한다 |
+| 모든 세그먼트에 `:` 가 **있다** | 그룹 문법. 세그먼트마다 첫 `:` 앞=그룹명, 뒤를 `,` 로 나눈 것=단계 목록 |
+| **섞여 있다** | 오타다. 한쪽으로 추측 해석하지 않고 **보고 후 중단**한다 |
+
+- 그룹명·단계명에 `|` `:` `,` 를 쓰지 않는다(구분자와 충돌).
+- 그룹 문법으로 그룹을 1개만 준 경우(`"worktree:설계,구현"`)도 유효하다. 렌더링은 **그룹 수**로
+  결정되므로 선형 화면이 나오고, 잃어버릴 뻔한 그룹명은 `#dz-subtitle` 앞머리에 들어간다.
+
+### 열(column) 확정 규칙
+
+열 목록 = **모든 그룹의 단계명을 최초 등장 순서로 중복 없이 모은 것**(합집합).
+
+- 모든 그룹이 같은 단계 목록을 가지는 일반적인 경우, 열 목록 = 그 목록이고 `na` 칸은 하나도 생기지 않는다.
+- 어떤 그룹에 없는 단계의 자리는 `data-state="na"` 칸이 된다.
+- 셀 좌표 `{p}` 는 **열 번호**(합집합 순번)이지 그룹 내 순번이 아니다. 직사각형인 경우 둘은 같다.
+- 관례(강제 아님): 게이트처럼 단계가 1개인 그룹은 인자 목록 **맨 뒤**에 둔다. 그래야 그 그룹만의
+  고유 열이 표의 오른쪽 끝에 생겨 `na` 칸이 한곳에 모인다.
+
+### 매트릭스 마크업 (`init` 6단계가 생성)
+
+`.card` 안, 기존 `<ol class="steps" id="dz-steps">...</ol>` 이 있던 자리를 통째로 대체한다.
+**칸은 반드시 한 줄에 하나씩** 쓴다.
+
+```html
+    <table class="matrix" id="dz-matrix">
+      <thead>
+        <tr>
+          <th class="corner">영역</th>
+          <th>설계</th>
+          <th>구현</th>
+          <th>테스트</th>
+          <th>검수</th>
+          <th>승인</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <th class="group" id="dz-group-1">worktree 격리</th>
+          <td class="cell" id="dz-cell-1-1" data-state="active">진행중</td>
+          <td class="cell" id="dz-cell-1-2" data-state="wait">대기</td>
+          <td class="cell" id="dz-cell-1-3" data-state="wait">대기</td>
+          <td class="cell" id="dz-cell-1-4" data-state="wait">대기</td>
+          <td class="cell" id="dz-cell-1-5" data-state="na">–</td>
+        </tr>
+        <tr>
+          <th class="group" id="dz-group-2">G-1 PRP 승인</th>
+          <td class="cell" id="dz-cell-2-1" data-state="na">–</td>
+          <td class="cell" id="dz-cell-2-2" data-state="na">–</td>
+          <td class="cell" id="dz-cell-2-3" data-state="na">–</td>
+          <td class="cell" id="dz-cell-2-4" data-state="na">–</td>
+          <td class="cell" id="dz-cell-2-5" data-state="active">진행중</td>
+        </tr>
+      </tbody>
+    </table>
+```
+
+### 매트릭스 CSS (템플릿 `<style>` 에 상주)
+
+`.chip` 규칙 바로 뒤, `.badge` 규칙 앞에 있다. **새 색 토큰을 만들지 않는다** — 상태별 색쌍은
+기존 `.chip`/`.num` 이 쓰던 것과 글자 하나까지 동일하다.
+
+```css
+  table.matrix{width:100%;border-collapse:collapse;margin:14px 0 0;font-size:14px}
+  .matrix th,.matrix td{border:1px solid var(--line);padding:9px 10px}
+  .matrix thead th{font-size:12px;font-weight:800;background:var(--soft);color:var(--muted);text-align:center}
+  .matrix th.corner{text-align:left}
+  .matrix th.group{text-align:left;font-weight:700;color:var(--navy);width:34%}
+  .matrix td.cell{text-align:center;font-size:12px;font-weight:800;background:var(--soft);color:var(--muted)}
+  .matrix td.cell[data-state="done"]{background:#E5F3EE;color:var(--green)}
+  .matrix td.cell[data-state="active"]{background:#EAF2FB;color:var(--blue)}
+  .matrix td.cell[data-state="na"]{background:#fff;color:var(--line)}
+```
+
+`wait` 에는 규칙이 없다 — `td.cell` 기본값이 곧 대기 상태다(선형 분기에서 `li` 기본값이 대기인 것과 같은 구조).
+이 CSS 는 선형 세션에서는 매칭 대상이 없어 아무 일도 하지 않는다.
+
+---
+
 ## `init` — 메인 세션이 수행할 절차
 
 1. `.claude/dashboard.html` 존재 여부를 확인한다.
@@ -130,20 +266,43 @@ argument-hint: "init \"<제목>\" \"<단계1|단계2|...>\" | step <n> <done|act
      [템플릿 전문](#템플릿-전문)을 그대로 `.claude/dashboard.html` 로 Write하고
      2번부터 계속 진행한다(템플릿은 `data-current-session="1"`, 탭 바 없음).
 2. `#dz-title` 텍스트를 `<제목>` 인자로 치환한다.
-3. `#dz-subtitle` 텍스트를 `"<단계1> → <단계2> → ... · <작업 유형>"` 형식으로 치환한다.
-   작업 유형(예: "전체 경로")은 호출한 오케스트레이터가 이미 알고 있는 값을 채운다.
-4. `<단계1|단계2|...>` 를 `|` 로 분리해 개수 N을 구한다. 템플릿의
-   `<ol class="steps" id="dz-steps">...</ol>` 내부를 아래 패턴으로 N개 생성한 `<li>` 로 통째로 치환한다
-   (1번은 `active`, 나머지는 `wait`):
-   ```html
-   <li id="dz-step-{n}" class="{active|wait}"><span class="num">{n}</span>{단계명}<span class="chip">{진행중|대기}</span></li>
-   ```
-5. `#dz-progress-bar` 의 `style` 을 `width:0%` 로, `#dz-progress-pct` 텍스트를 `0/N · 0%` 로 치환한다.
-6. `#dz-updated` 를 현재 시각(예: `2026-08-04 17:02`)으로 치환한다.
-7. `#dz-log` 는 템플릿 그대로 빈 목록(`<ul class="log" id="dz-log" data-current-session="1"></ul>`)으로
+
+3. **인자 파싱 — 그룹 목록으로 정규화한다.**
+   두 번째 인자를 `|` 로 나눠 세그먼트 목록을 만든 뒤 [진행 시각화 규격](#진행-시각화-규격--그룹--단계-모델)의
+   「모드 판정 규칙」을 적용한다.
+   - 모든 세그먼트에 `:` 가 없다 → 선형 문법. **이름 없는 그룹 1개**로 본다.
+   - 모든 세그먼트에 `:` 가 있다 → 그룹 문법. 첫 `:` 앞이 그룹명, 뒤를 `,` 로 나눈 것이 단계 목록.
+   - 섞여 있다 → 오타다. 추측해서 한쪽으로 해석하지 말고 그 사실을 보고하고 중단한다.
+
+4. **열 목록과 전체 칸 수를 확정한다.**
+   열 목록 = 모든 그룹의 단계명을 최초 등장 순서로 중복 없이 모은 것.
+   전체 칸 수 N = 각 그룹의 단계 개수의 합(열 수 × 그룹 수가 아니다).
+
+5. `#dz-subtitle` 을 아래 형식으로 치환한다. 작업 유형(예: "전체 경로")은 호출한 오케스트레이터가
+   이미 알고 있는 값을 채운다.
+   - 그룹 1개(이름 없음): `"<단계1> → <단계2> → … · <작업 유형>"`          (기존과 동일)
+   - 그룹 1개(이름 있음): `"<그룹명> · <단계1> → <단계2> → … · <작업 유형>"`
+   - 그룹 2개 이상:       `"<G>개 영역 · <열1> → <열2> → … · <작업 유형>"`
+
+6. **진행 시각화를 렌더링한다 — 분기 기준은 그룹 수 하나뿐이다.**
+   - **그룹이 1개**: 템플릿의 `<ol class="steps" id="dz-steps">` 내부를 아래 `<li>` N개로 채운다
+     (기존과 완전히 동일. 1번이 active, 나머지는 wait).
+     ```html
+     <li id="dz-step-{n}" class="{active|wait}"><span class="num">{n}</span>{단계명}<span class="chip">{진행중|대기}</span></li>
+     ```
+   - **그룹이 2개 이상**: 템플릿의 아래 두 줄(`<ol>` 요소 전체)을 [매트릭스 마크업](#매트릭스-마크업-init-6단계가-생성)의
+     `<table>` 로 통째로 치환한다. 각 그룹의 **첫 단계 칸**이 active, 나머지 칸은 wait, 그룹에 없는 단계는 na 다.
+     ```html
+     <ol class="steps" id="dz-steps">
+     </ol>
+     ```
+
+7. `#dz-progress-bar` 의 `style` 을 `width:0%` 로, `#dz-progress-pct` 텍스트를 `0/N · 0%` 로 치환한다.
+8. `#dz-updated` 를 현재 시각(예: `2026-08-04 17:02`)으로 치환한다.
+9. `#dz-log` 는 템플릿 그대로 빈 목록(`<ul class="log" id="dz-log" data-current-session="1"></ul>`)으로
    둔다 — 아직 로그가 없다.
-8. 사용자에게 `file://<현재 작업 디렉토리 절대경로>/.claude/dashboard.html` 을 출력해
-   브라우저로 열도록 안내한다.
+10. 사용자에게 `file://<현재 작업 디렉토리 절대경로>/.claude/dashboard.html` 을 출력해
+    브라우저로 열도록 안내한다.
 
 #### 세션 탭 갱신 — `init` 1-d 의 하위 절차
 
@@ -182,13 +341,45 @@ argument-hint: "init \"<제목>\" \"<단계1|단계2|...>\" | step <n> <done|act
 `checked` 를 달면 같은 그룹에 `checked` 가 둘이 되어 문서 순서상 뒤엣것이 이기고, 페이지가
 새로고침될 때마다 사용자가 고른 탭이 무시된다.
 
-## `step` — 메인 세션이 수행할 절차 (Edit 2~3회)
+## `step` — 메인 세션이 수행할 절차 (Bash 1회 + Edit 3회, 결정적)
 
-1. `#dz-step-{n}` 의 `class` 속성과 자식 `.chip` 텍스트를 새 상태로 치환한다
-   (`done`/`완료`, `active`/`진행중`, `wait`/`대기`).
-2. 이번 치환으로 `done` 이 된 경우, 완료 단계 수를 세어 `#dz-progress-bar` 의 `style="width:N%"`
-   와 `#dz-progress-pct` 텍스트(`M/N · P%`)를 재계산해 치환한다.
-3. `#dz-updated` 텍스트를 현재 시각으로 치환한다.
+> 기존 절차는 대상 줄의 전문을 LLM 이 "알고 있다"고 가정했다. 세션 2 가 기존 대시보드를 이어받는
+> 경우(단계명을 모른다) 이 가정이 깨진다. 칸이 16개로 늘어나면 훨씬 자주 깨진다. 그래서 `log` 가
+> 이미 검증한 **grep 앵커** 방식으로 두 분기(선형/그룹)를 통일한다.
+
+0. **대상 줄과 진행률 줄을 한 번에 확보한다.** Bash 1회:
+   ```bash
+   grep -n -e 'id="dz-cell-{g}-{p}"' -e 'id="dz-progress-bar"' -e 'id="dz-progress-pct"' .claude/dashboard.html
+   ```
+   (선형 모드면 첫 패턴을 `id="dz-step-{n}"` 로 바꾼다.)
+   각 요소는 한 줄에 하나씩 생성되므로 결과는 항상 3줄이다.
+   - 대상 줄이 안 나온다 → 인덱스가 틀렸거나 모드를 혼동한 것이다. **다른 칸을 추측해서 고치지 말고
+     보고 후 중단한다.** 인덱스를 잊었으면 `grep -n 'dz-group-\|dz-cell-'` 로 표 전체 지도를 한 번에 얻는다.
+   - 대상 칸이 `data-state="na"` 다 → 그 그룹에 없는 단계다. 보고 후 중단한다.
+
+1. **상태 치환** — 0에서 얻은 줄 전문을 `old_string` 으로 Edit 1회.
+   - 선형: `class="{state}"` 와 자식 `.chip` 텍스트   (done/완료, active/진행중, wait/대기)
+   - 그룹: `data-state="{state}"` 와 칸 텍스트       (같은 어휘를 쓴다)
+
+2. **진행률 재계산** — 0에서 읽은 `#dz-progress-pct` 텍스트가 `"M/N · P%"` 이므로 M·N 을 그대로 얻는다.
+   완료 칸 수는 다시 세지 않고 **전이로 계산한다**:
+   - 이전 상태 ≠ done 이고 새 상태 = done  → M+1
+   - 이전 상태 = done 이고 새 상태 ≠ done  → M-1
+   - 그 외                                  → M 그대로
+
+   (이전 상태는 0에서 읽은 줄에 그대로 적혀 있다 — 기억에 의존하지 않는다.)
+   P = round(M/N × 100) 의 정수. `#dz-progress-bar` 의 `style="width:P%"` 와 `#dz-progress-pct`
+   텍스트를 Edit 1회로 함께 치환한다(두 줄이 인접해 있다). M 이 바뀌지 않았으면 이 단계를 건너뛴다.
+
+3. `#dz-updated` 텍스트를 현재 시각으로 치환한다. (Edit 1회)
+
+**감사(audit)용 재계수** — 진행률이 어긋난 것 같으면 아래 한 줄로 다시 센다. `id` 접두어를 함께
+매칭하므로 `<style>` 안의 `.matrix td.cell[data-state="done"]` 규칙 줄에 걸리지 않는다.
+
+```bash
+grep -c 'dz-cell-.*data-state="done"' .claude/dashboard.html   # 그룹 모드
+grep -c 'dz-step-.*class="done"' .claude/dashboard.html        # 선형 모드
+```
 
 ## `log` — 메인 세션이 수행할 절차 (Bash grep 1회 + Read 1~2회 + Edit 2회, 결정적)
 
@@ -400,7 +591,10 @@ DZ:DASHBOARD 갱신 맵 (동적 영역 — 셀렉터 기반 정밀 치환, comma
   #dz-subtitle          : 단계 흐름 요약 · 작업 유형 텍스트
   #dz-progress-bar      : inline style width:N%
   #dz-progress-pct      : 진행률 텍스트 (예: 3/6 · 50%)
-  #dz-step-{n}          : 각 단계 li — class(done|active|wait) + .chip 텍스트(완료|진행중|대기)
+  #dz-step-{n}          : [그룹 1개] 각 단계 li — class(done|active|wait) + .chip 텍스트
+  #dz-cell-{g}-{p}      : [그룹 2+] 매트릭스 칸 td — data-state(done|active|wait|na) + 칸 텍스트
+                          {g}=행(그룹) 번호, {p}=열(단계) 번호. 한 파일에 step/cell 이 공존하지 않는다
+  #dz-group-{g}         : [그룹 2+] 행 머리 th — init 이 그룹명을 넣고 이후 치환하지 않는다
   #dz-log               : 작업 추적 ul — li data-seq 앵커로 prepend / data-current-session 속성(현재 세션 번호)
   #dz-updated           : 갱신 시각 텍스트
 정적(불가침): 골격 · <style> · 제목 · 하단 스크립트
@@ -427,6 +621,15 @@ DZ:DASHBOARD 갱신 맵 (동적 영역 — 셀렉터 기반 정밀 치환, comma
   .chip{margin-left:auto;font-size:12px;font-weight:800;padding:3px 10px;border-radius:999px;background:var(--soft);color:var(--muted);flex:none}
   li.done .chip{background:#E5F3EE;color:var(--green)}
   li.active .chip{background:#EAF2FB;color:var(--blue)}
+  table.matrix{width:100%;border-collapse:collapse;margin:14px 0 0;font-size:14px}
+  .matrix th,.matrix td{border:1px solid var(--line);padding:9px 10px}
+  .matrix thead th{font-size:12px;font-weight:800;background:var(--soft);color:var(--muted);text-align:center}
+  .matrix th.corner{text-align:left}
+  .matrix th.group{text-align:left;font-weight:700;color:var(--navy);width:34%}
+  .matrix td.cell{text-align:center;font-size:12px;font-weight:800;background:var(--soft);color:var(--muted)}
+  .matrix td.cell[data-state="done"]{background:#E5F3EE;color:var(--green)}
+  .matrix td.cell[data-state="active"]{background:#EAF2FB;color:var(--blue)}
+  .matrix td.cell[data-state="na"]{background:#fff;color:var(--line)}
   .badge{display:inline-block;font-size:11px;font-weight:800;padding:2px 8px;border-radius:999px;margin-right:6px}
   .badge.round{background:var(--soft);color:var(--muted)}
   .badge.impl{background:#EAF2FB;color:var(--blue)}

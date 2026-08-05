@@ -996,10 +996,10 @@ test_manifest_fields_complete() {
 }
 
 # T22: dashboard 템플릿 무결성 — LLM 지시문 방식이라 런타임 Edit 결과는 검증 대상이 아니고,
-# 설치·문서 정합성만 자동 검증한다 (하위 검증 T22-1~T22-18).
+# 설치·문서 정합성만 자동 검증한다 (하위 검증 T22-1~T22-28).
 test_dashboard_template_integrity() {
   local test_name="T22"
-  local test_desc="dashboard 템플릿 무결성 (T22-1~T22-18)"
+  local test_desc="dashboard 템플릿 무결성 (T22-1~T22-28)"
   log_test_name "$test_name" "$test_desc"
 
   local sandbox
@@ -1156,6 +1156,75 @@ test_dashboard_template_integrity() {
   fi
   if ! grep -q '#dzs-1:checked ~ #dz-log .entry:not(\[data-session="1"\])' "$dashboard_command_file"; then
     record_failure "$test_name" "T22-18: 세션별 .entry 필터 규칙 미발견"
+    return 1
+  fi
+
+  # T22-19: 그룹 문법이 호출 규약에 문서화됨 (「그룹 × 단계」 통일 모델, 회귀 방지)
+  if ! grep -qF '그룹A:단계1,단계2' "$dashboard_command_file"; then
+    record_failure "$test_name" "T22-19: 그룹 문법 예시(그룹A:단계1,단계2) 미발견"
+    return 1
+  fi
+
+  # T22-20: 하위 호환 정규화 규칙 존재 — 선형 호출을 그룹 모드로 오해석하지 않아야 한다
+  if ! grep -q '이름 없는 그룹 1개' "$dashboard_command_file"; then
+    record_failure "$test_name" "T22-20: '이름 없는 그룹 1개' 정규화 규칙 미발견"
+    return 1
+  fi
+
+  # T22-21: 혼합 문법 시 중단 규칙 존재 — 오타를 추측 해석하는 퇴행 방지
+  if ! grep -q '섞여 있다' "$dashboard_command_file"; then
+    record_failure "$test_name" "T22-21: 혼합 문법 중단 규칙(섞여 있다) 미발견"
+    return 1
+  fi
+
+  # T22-22: 매트릭스 셀렉터 2종 존재 (dz-cell-, dz-group-) — 셀렉터 계약 누락 방지
+  if ! grep -q 'dz-cell-' "$dashboard_command_file"; then
+    record_failure "$test_name" "T22-22: dz-cell- 셀렉터 미발견"
+    return 1
+  fi
+  if ! grep -q 'dz-group-' "$dashboard_command_file"; then
+    record_failure "$test_name" "T22-22: dz-group- 셀렉터 미발견"
+    return 1
+  fi
+
+  # T22-23: 매트릭스 CSS 가 템플릿에 상주 — init 이 CSS 를 주입하는 방식으로 퇴행하지 않아야 한다
+  if ! grep -q 'table\.matrix{' "$dashboard_command_file"; then
+    record_failure "$test_name" "T22-23: table.matrix{ CSS 규칙 미발견"
+    return 1
+  fi
+
+  # T22-24: 선형 자산 비퇴화 — 매트릭스로 통합하며 선형 화면을 없애지 않아야 한다 (확정 방향 1)
+  if ! grep -qF '<ol class="steps" id="dz-steps">' "$dashboard_command_file"; then
+    record_failure "$test_name" "T22-24: 선형 단계 목록 <ol id=\"dz-steps\"> 미발견"
+    return 1
+  fi
+  if ! grep -q 'dz-step-{n}' "$dashboard_command_file"; then
+    record_failure "$test_name" "T22-24: dz-step-{n} 패턴 미발견"
+    return 1
+  fi
+
+  # T22-25: step 그룹 인자 문법 문서화 — 그룹 모드 갱신 방법이 불명확해지는 회귀 방지
+  if ! grep -qF 'step <g>.<p>' "$dashboard_command_file"; then
+    record_failure "$test_name" "T22-25: step <g>.<p> 문법 미발견"
+    return 1
+  fi
+
+  # T22-26: 결정적 완료 계수 명령 존재 — <style> 줄까지 세는 헐거운 패턴으로 퇴행 방지
+  if ! grep -qF 'dz-cell-.*data-state="done"' "$dashboard_command_file"; then
+    record_failure "$test_name" "T22-26: 결정적 완료 계수 명령(dz-cell-.*data-state=\"done\") 미발견"
+    return 1
+  fi
+
+  # T22-27: 색 토큰 불변 — 새 디자인 시스템 도입(요청 위반) 방지, 완전 일치로 확인
+  if ! grep -qF ':root{--ink:#172033;--muted:#5E6B7D;--line:#D9E2EC;--soft:#F4F7FB;--blue:#1E5AA8;--navy:#12335B;--green:#1F8A70;--orange:#F59E0B;--red:#C2410C;}' "$dashboard_command_file"; then
+    record_failure "$test_name" "T22-27: :root 색 토큰 줄이 변경됨"
+    return 1
+  fi
+
+  # T22-28: 게이트 전용 개념 미신설 — 별도 게이트 컴포넌트 부활(확정 방향 5 위반) 방지.
+  # 이 검증은 매칭되면 실패다(역방향 assertion) — dz-gate- 셀렉터가 존재해서는 안 된다.
+  if grep -q 'dz-gate-' "$dashboard_command_file"; then
+    record_failure "$test_name" "T22-28: dz-gate- 전용 셀렉터가 신설됨(게이트는 단계 1개 그룹으로 표현해야 함)"
     return 1
   fi
 

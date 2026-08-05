@@ -117,7 +117,7 @@ cd /path/to/my-project
 | `prp-commit` | 131 | 자연어로 파일 지정해 커밋 (컨벤션: 프로젝트 CLAUDE.md > commitlint 설정 > 기본 형식) |
 | `code-review` | 289 | 로컬 변경 또는 PR 검수 |
 | `env-update` | 184 | coding-env 레포 업데이트 (manifest 기반 자동 갱신) |
-| `dashboard` | 488 | 세션 진행 상황을 프로젝트 로컬 HTML 대시보드로 기록 (init/step/log + on/off 스위치) |
+| `dashboard` | 691 | 세션 진행 상황을 프로젝트 로컬 HTML 대시보드로 기록 (init/step/log + on/off 스위치) |
 
 각 커맨드의 동작:
 
@@ -141,7 +141,9 @@ cd /path/to/my-project
   갱신합니다. 셸 스크립트나 상태 JSON 없이 메인 세션의 Edit만으로 DOM을 직접 갱신하는
   방식이며, `prp-*` 체인과 무관하게 단독으로 동작합니다. `on`/`off` 하위 명령으로 이 프로젝트
   에서만, 나에게만 적용되는 기록 여부를 언제든 전환할 수 있습니다(`dashboard_enabled`,
-  기본값 켜짐).
+  기본값 켜짐). `init`의 두 번째 인자는 선형 문법(`"단계1|단계2|..."`)뿐 아니라 그룹 문법
+  (`"그룹A:단계1,단계2|그룹B:단계1"`)도 지원해, 다중 트랙 세션을 매트릭스(행=그룹, 열=단계)로
+  시각화할 수 있습니다.
 
 **의존 사슬 7종 + 독립 커맨드 1종.** `prp-implement` 가 `/code-review`·`/prp-commit`·`/prp-pr` 을,
 `prp-pr` 이 `/code-review`·`/prp-commit` 을 호출합니다. 일부만 설치하면 사슬이 끊기므로 전부 배포합니다.
