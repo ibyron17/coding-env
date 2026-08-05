@@ -74,10 +74,6 @@ Phase 2 의 폴링도 HTML 을 통째로 받아 DOM 을 치환하면 성립하�
 | `#dz-progress-bar` | inline `style="width:N%"` | 완료 단계 / 전체 단계 |
 | `#dz-progress-pct` | 텍스트 | `3/6 · 50%` |
 | `#dz-step-{n}` | `class` 속성 + 자식 `.chip` 텍스트 | `done`\|`active`\|`wait` / `완료`\|`진행중`\|`대기` |
-| `#dz-current` | 텍스트 | 현재 위치 한 줄 |
-| `#dz-current-meta` | 텍스트 | `implementer · sonnet` |
-| `#dz-current-clock` | `data-started-at` 속성 | 현재 단계 착수 시각(ISO 8601) |
-| `#dz-next` | 텍스트 | 다음 단계 한 줄 |
 | `#dz-log` | 자식 `<li>` **prepend** | 로그 항목 (최신이 위) |
 | `#dz-updated` | 텍스트 | 갱신 시각 |
 
@@ -117,24 +113,30 @@ Phase 2 의 폴링도 HTML 을 통째로 받아 DOM 을 치환하면 성립하�
 
 ```
 /dashboard init "<제목>" "<단계1|단계2|...>"
-/dashboard step <n> <done|active|wait> ["현재 위치"] ["다음 단계"] ["담당 에이전트 · 모델"]
+/dashboard step <n> <done|active|wait>
 /dashboard log <impl|pass|fail|commit> "<한 줄 요약>" ["상세"] [--round N]
 ```
 
 ### `init` — 메인 세션이 수행할 절차
 
-1. `commands/dashboard.md` 의 템플릿을 `.claude/dashboard.html` 로 Write
+1. `.claude/dashboard.html` 존재 여부 확인
+   - **이미 존재하면**: 덮어쓰지 않는다. 기존 파일을 그대로 두고 "기존 대시보드를
+     이어서 사용합니다"라는 취지로 안내한 뒤 기존 `file://` 경로를 출력하고 절차를
+     종료한다(이후 단계 미실행). **한계**: "새 작업"과 "기존 작업 재개"를 구분하지
+     못한다 — 같은 프로젝트에서 진짜 새 전체 경로 작업을 시작했는데 이전 대시보드
+     파일이 남아 있으면 옛 대시보드를 계속 보여준다. 새 작업 시작 시 기존 파일을
+     지우거나 다시 만들지 사용자에게 확인하도록 안내 문구에 명시한다.
+   - **존재하지 않으면**: `commands/dashboard.md` 의 템플릿을 `.claude/dashboard.html`
+     로 Write 하고 계속 진행
 2. `#dz-title`·`#dz-subtitle` 치환, 단계 개수만큼 `#dz-step-{n}` li 생성(1번은 `active`, 나머지 `wait`)
 3. `#dz-progress-bar`·`#dz-progress-pct` 를 `0/N · 0%` 로 설정
 4. 사용자에게 `file://` 절대 경로를 출력해 브라우저로 열도록 안내
 
-### `step` — 절차 (Edit 3~5회)
+### `step` — 절차 (Edit 2~3회)
 
 1. `#dz-step-{n}` 의 `class` 와 `.chip` 텍스트를 새 상태로 치환
 2. `done` 으로 바뀐 경우 진행률 재계산 → `#dz-progress-bar` width 와 `#dz-progress-pct` 치환
-3. 인자가 주어졌으면 `#dz-current`·`#dz-next`·`#dz-current-meta` 치환
-4. `active` 로 바뀐 경우 `#dz-current-clock` 의 `data-started-at` 을 현재 ISO 시각으로 치환
-5. `#dz-updated` 치환
+3. `#dz-updated` 치환
 
 ### `log` — 절차 (Edit 2회, 결정적)
 
@@ -197,26 +199,6 @@ Phase 2 의 폴링도 HTML 을 통째로 받아 DOM 을 치환하면 성립하�
 라디오는 시각적으로 숨기되 포커스는 유지한다(`display:none` 이 아니라 `opacity:0`).
 `:has()` 같은 최신 셀렉터에 의존하지 않으므로 지원 범위가 넓다.
 
-### 현재 task 카드
-
-```html
-<div class="slot">
-  <b>현재 위치</b>
-  <span id="dz-current">…</span>
-  <div class="meta"><span id="dz-current-meta">implementer · sonnet</span>
-       · <span id="dz-current-clock" data-started-at="2026-08-04T17:02:00+09:00"></span></div>
-</div>
-```
-
-경과 시간은 정적 HTML 로 표현할 수 없으므로 기존 하단 스크립트에 아래를 더한다(순수 표시용, 4줄).
-
-```js
-function _dzElapsed(){ var el=document.getElementById('dz-current-clock'); if(!el) return;
-  var m=Math.floor((Date.now()-new Date(el.dataset.startedAt))/60000);
-  el.textContent = m<60 ? m+'분 경과' : Math.floor(m/60)+'시간 '+(m%60)+'분 경과'; }
-_dzElapsed(); setInterval(_dzElapsed, 30000);
-```
-
 원본의 골격·`:root` 색 토큰·범례·단계 리스트는 그대로 유지한다.
 
 ---
@@ -272,12 +254,15 @@ LLM 지시문 방식이므로 자동 검증 가능한 것은 **설치·문서 �
 | TC | 검증 | 방법 |
 |----|------|------|
 | T19-1 | `commands/dashboard.md` 설치됨 | `[[ -f ./.claude/commands/dashboard.md ]]` |
-| T19-2 | 필수 셀렉터 11종이 템플릿에 모두 존재 | `dz-title` 등 id 목록을 순회하며 `grep -q` |
+| T19-2 | 필수 셀렉터 7종이 템플릿에 모두 존재 | `dz-title` 등 id 목록을 순회하며 `grep -q` |
 | T19-3 | 결과 배지 4종 CSS class 정의 존재 | `grep -q '\.badge\.\(impl\|pass\|fail\|commit\)'` |
 | T19-4 | 필터 라디오 3종과 CSS 규칙 존재 | `grep -q 'dzf-review:checked'` |
 | T19-5 | `install.sh` 의 `COMMANDS_FILE_COUNT` 가 실제 파일 수와 일치 | 상수 파싱 후 `ls commands/*.md \| wc -l` 과 비교 |
+| T19-6 | `init` 절차에 기존 파일 덮어쓰기 가드 문구 존재 | `grep -q "덮어쓰지 않는다"` |
 
 T19-5 는 이번 변경의 재발 방지책이다 — 커맨드를 추가하고 상수를 안 고치는 실수를 잡는다.
+T19-6 은 두 번째 세션이 미완료 작업을 재개할 때 `init` 재호출로 기존 진행 상황(로그·단계 상태)이
+통째로 날아가는 것을 막는 재발 방지책이다.
 
 ### 수동 확인 항목 (테스트 스위트 밖)
 

@@ -996,10 +996,10 @@ test_manifest_fields_complete() {
 }
 
 # T22: dashboard 템플릿 무결성 — LLM 지시문 방식이라 런타임 Edit 결과는 검증 대상이 아니고,
-# 설치·문서 정합성만 자동 검증한다 (하위 검증 T22-1~T22-5).
+# 설치·문서 정합성만 자동 검증한다 (하위 검증 T22-1~T22-6).
 test_dashboard_template_integrity() {
   local test_name="T22"
-  local test_desc="dashboard 템플릿 무결성 (T22-1~T22-5)"
+  local test_desc="dashboard 템플릿 무결성 (T22-1~T22-6)"
   log_test_name "$test_name" "$test_desc"
 
   local sandbox
@@ -1017,10 +1017,10 @@ test_dashboard_template_integrity() {
     return 1
   fi
 
-  # T22-2: 필수 셀렉터 11종이 템플릿에 모두 존재
+  # T22-2: 필수 셀렉터 7종이 템플릿에 모두 존재
   local required_selector
   for required_selector in dz-title dz-subtitle dz-progress-bar dz-progress-pct dz-step- \
-    dz-current dz-current-meta dz-current-clock dz-next dz-log dz-updated; do
+    dz-log dz-updated; do
     if ! grep -q "$required_selector" "$dashboard_command_file"; then
       record_failure "$test_name" "T22-2: 셀렉터 미발견: $required_selector"
       return 1
@@ -1056,6 +1056,14 @@ test_dashboard_template_integrity() {
   actual_count=$(ls "$REPO_ROOT/commands"/*.md | wc -l | xargs echo)
   if ! assert_equals "$actual_count" "$declared_count" "COMMANDS_FILE_COUNT 일치"; then
     record_failure "$test_name" "T22-5: COMMANDS_FILE_COUNT=$declared_count, 실제 파일 수=$actual_count"
+    return 1
+  fi
+
+  # T22-6: init 절차에 기존 파일 덮어쓰기 가드 문구 존재 (재발 방지책)
+  # 실행 코드가 없는 LLM 지시문이라 가드 "로직"의 실제 동작은 검증할 수 없고,
+  # 지시문 안에 가드 문구가 남아있는지만 grep 으로 확인한다.
+  if ! grep -q "덮어쓰지 않는다" "$dashboard_command_file"; then
+    record_failure "$test_name" "T22-6: init 기존 파일 가드 문구 미발견"
     return 1
   fi
 

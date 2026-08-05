@@ -1,6 +1,6 @@
 ---
 description: "세션 진행 상황을 프로젝트 로컬 HTML 대시보드로 기록 — init/step/log 세 하위 명령"
-argument-hint: "init \"<제목>\" \"<단계1|단계2|...>\" | step <n> <done|active|wait> [...] | log <impl|pass|fail|commit> \"<요약>\" [...]"
+argument-hint: "init \"<제목>\" \"<단계1|단계2|...>\" | step <n> <done|active|wait> | log <impl|pass|fail|commit> \"<요약>\" [...]"
 ---
 
 # Dashboard
@@ -20,7 +20,7 @@ argument-hint: "init \"<제목>\" \"<단계1|단계2|...>\" | step <n> <done|act
 
 ```
 /dashboard init "<제목>" "<단계1|단계2|...>"
-/dashboard step <n> <done|active|wait> ["현재 위치"] ["다음 단계"] ["담당 에이전트 · 모델"]
+/dashboard step <n> <done|active|wait>
 /dashboard log <impl|pass|fail|commit> "<한 줄 요약>" ["상세"] [--round N]
 ```
 
@@ -45,7 +45,7 @@ argument-hint: "init \"<제목>\" \"<단계1|단계2|...>\" | step <n> <done|act
 
 `<style>` 블록, `:root` 색 토큰, 카드 골격, 로그 카드의 범례(4종 배지 샘플), 하단 스크립트.
 
-### 동적(치환 대상) — 11 셀렉터
+### 동적(치환 대상) — 7 셀렉터
 
 | 셀렉터 | 치환 대상 | 값 |
 |--------|----------|-----|
@@ -54,10 +54,6 @@ argument-hint: "init \"<제목>\" \"<단계1|단계2|...>\" | step <n> <done|act
 | `#dz-progress-bar` | inline `style="width:N%"` | 완료 단계 / 전체 단계 |
 | `#dz-progress-pct` | 텍스트 | `3/6 · 50%` |
 | `#dz-step-{n}` | `class` 속성 + 자식 `.chip` 텍스트 | `done`\|`active`\|`wait` / `완료`\|`진행중`\|`대기` |
-| `#dz-current` | 텍스트 | 현재 위치 한 줄 |
-| `#dz-current-meta` | 텍스트 | `implementer · sonnet` |
-| `#dz-current-clock` | `data-started-at` 속성 | 현재 단계 착수 시각(ISO 8601) |
-| `#dz-next` | 텍스트 | 다음 단계 한 줄 |
 | `#dz-log` | 자식 `<li>` **prepend** | 로그 항목 (최신이 위) |
 | `#dz-updated` | 텍스트 | 갱신 시각 |
 
@@ -94,8 +90,20 @@ argument-hint: "init \"<제목>\" \"<단계1|단계2|...>\" | step <n> <done|act
 
 ## `init` — 메인 세션이 수행할 절차
 
-1. `.claude/` 디렉토리가 없으면 생성한 뒤, 아래 [템플릿 전문](#템플릿-전문)을 그대로
-   `.claude/dashboard.html` 로 Write 한다.
+1. `.claude/dashboard.html` 존재 여부를 확인한다.
+   - **이미 존재하면**: 덮어쓰지 않는다. 기존 파일을 그대로 두고, 사용자에게
+     "기존 대시보드를 이어서 사용합니다"라는 취지로 안내하며
+     `file://<현재 작업 디렉토리 절대경로>/.claude/dashboard.html` 을 출력한 뒤
+     절차를 **여기서 종료**한다(2번 이하 단계를 실행하지 않는다 — 제목·단계 목록
+     등을 다시 채우면 기존 진행 상태와 충돌한다).
+     > **한계**: 이 가드는 "완전히 새 작업"과 "기존 미완료 작업 재개"를 구분하지
+     > 못한다. 같은 프로젝트에서 정말 새로운 전체 경로 작업을 시작했는데 이전
+     > 작업의 대시보드 파일이 남아 있으면, 엉뚱한 옛 대시보드를 계속 보여준다.
+     > 새 작업을 시작할 때는 기존 `.claude/dashboard.html` 을 먼저 지우거나
+     > 다시 만들지 사용자에게 확인하라.
+   - **존재하지 않으면**: `.claude/` 디렉토리가 없으면 생성한 뒤, 아래
+     [템플릿 전문](#템플릿-전문)을 그대로 `.claude/dashboard.html` 로 Write하고
+     2번부터 계속 진행한다.
 2. `#dz-title` 텍스트를 `<제목>` 인자로 치환한다.
 3. `#dz-subtitle` 텍스트를 `"<단계1> → <단계2> → ... · <작업 유형>"` 형식으로 치환한다.
    작업 유형(예: "전체 경로")은 호출한 오케스트레이터가 이미 알고 있는 값을 채운다.
@@ -106,23 +114,18 @@ argument-hint: "init \"<제목>\" \"<단계1|단계2|...>\" | step <n> <done|act
    <li id="dz-step-{n}" class="{active|wait}"><span class="num">{n}</span>{단계명}<span class="chip">{진행중|대기}</span></li>
    ```
 5. `#dz-progress-bar` 의 `style` 을 `width:0%` 로, `#dz-progress-pct` 텍스트를 `0/N · 0%` 로 치환한다.
-6. `#dz-current` 를 첫 단계명으로, `#dz-next` 를 두 번째 단계명(없으면 `-`)으로 치환한다.
-7. `#dz-updated` 를 현재 시각(예: `2026-08-04 17:02`)으로 치환한다.
-8. `#dz-log` 는 템플릿 그대로 빈 목록(`<ul class="log" id="dz-log"></ul>`)으로 둔다 — 아직 로그가 없다.
-9. 사용자에게 `file://<현재 작업 디렉토리 절대경로>/.claude/dashboard.html` 을 출력해
+6. `#dz-updated` 를 현재 시각(예: `2026-08-04 17:02`)으로 치환한다.
+7. `#dz-log` 는 템플릿 그대로 빈 목록(`<ul class="log" id="dz-log"></ul>`)으로 둔다 — 아직 로그가 없다.
+8. 사용자에게 `file://<현재 작업 디렉토리 절대경로>/.claude/dashboard.html` 을 출력해
    브라우저로 열도록 안내한다.
 
-## `step` — 메인 세션이 수행할 절차 (Edit 3~5회)
+## `step` — 메인 세션이 수행할 절차 (Edit 2~3회)
 
 1. `#dz-step-{n}` 의 `class` 속성과 자식 `.chip` 텍스트를 새 상태로 치환한다
    (`done`/`완료`, `active`/`진행중`, `wait`/`대기`).
 2. 이번 치환으로 `done` 이 된 경우, 완료 단계 수를 세어 `#dz-progress-bar` 의 `style="width:N%"`
    와 `#dz-progress-pct` 텍스트(`M/N · P%`)를 재계산해 치환한다.
-3. `["현재 위치"]` · `["다음 단계"]` · `["담당 에이전트 · 모델"]` 인자가 주어졌으면 각각
-   `#dz-current` · `#dz-next` · `#dz-current-meta` 텍스트를 치환한다.
-4. 이번 치환으로 `active` 가 된 경우, `#dz-current-clock` 의 `data-started-at` 속성을
-   현재 ISO 8601 시각으로 치환한다.
-5. `#dz-updated` 텍스트를 현재 시각으로 치환한다.
+3. `#dz-updated` 텍스트를 현재 시각으로 치환한다.
 
 ## `log` — 메인 세션이 수행할 절차 (Edit 2회, 결정적)
 
@@ -181,26 +184,6 @@ argument-hint: "init \"<제목>\" \"<단계1|단계2|...>\" | step <n> <done|act
 라디오는 시각적으로 숨기되 포커스는 유지한다(`display:none` 이 아니라 `opacity:0`).
 `:has()` 같은 최신 셀렉터에 의존하지 않으므로 지원 범위가 넓다.
 
-### 현재 task 카드
-
-```html
-<div class="slot">
-  <b>현재 위치</b>
-  <span id="dz-current">…</span>
-  <div class="meta"><span id="dz-current-meta">implementer · sonnet</span>
-       · <span id="dz-current-clock" data-started-at="2026-08-04T17:02:00+09:00"></span></div>
-</div>
-```
-
-경과 시간은 정적 HTML 로 표현할 수 없으므로 하단 스크립트에 아래 4줄이 포함돼 있다(순수 표시용):
-
-```js
-function _dzElapsed(){ var el=document.getElementById('dz-current-clock'); if(!el) return;
-  var m=Math.floor((Date.now()-new Date(el.dataset.startedAt))/60000);
-  el.textContent = m<60 ? m+'분 경과' : Math.floor(m/60)+'시간 '+(m%60)+'분 경과'; }
-_dzElapsed(); setInterval(_dzElapsed, 30000);
-```
-
 원본(`~/Desktop/dashboard.html`)의 골격·`:root` 색 토큰·단계 리스트 스타일은 그대로 유지한다.
 
 ---
@@ -222,10 +205,6 @@ DZ:DASHBOARD 갱신 맵 (동적 영역 — 셀렉터 기반 정밀 치환, comma
   #dz-progress-bar      : inline style width:N%
   #dz-progress-pct      : 진행률 텍스트 (예: 3/6 · 50%)
   #dz-step-{n}          : 각 단계 li — class(done|active|wait) + .chip 텍스트(완료|진행중|대기)
-  #dz-current           : 현재 위치 텍스트
-  #dz-current-meta      : 담당 에이전트 · 모델 텍스트
-  #dz-current-clock     : data-started-at 속성 (ISO 8601)
-  #dz-next              : 다음 단계 텍스트
   #dz-log               : 작업 추적 ul — li data-seq 앵커로 prepend
   #dz-updated           : 갱신 시각 텍스트
 정적(불가침): 골격 · <style> · 범례 · 제목 · 하단 스크립트
@@ -252,10 +231,6 @@ DZ:DASHBOARD 갱신 맵 (동적 영역 — 셀렉터 기반 정밀 치환, comma
   .chip{margin-left:auto;font-size:12px;font-weight:800;padding:3px 10px;border-radius:999px;background:var(--soft);color:var(--muted);flex:none}
   li.done .chip{background:#E5F3EE;color:var(--green)}
   li.active .chip{background:#EAF2FB;color:var(--blue)}
-  .duo{display:grid;grid-template-columns:1fr 1fr;gap:12px}
-  .slot{background:var(--soft);border-radius:10px;padding:13px 16px;font-size:14px}
-  .slot b{display:block;font-size:12px;color:var(--muted);margin-bottom:4px;font-weight:700}
-  .slot .meta{margin-top:6px;font-size:12px;color:var(--muted)}
   .legend{margin:10px 0 12px}
   .badge{display:inline-block;font-size:11px;font-weight:800;padding:2px 8px;border-radius:999px;margin-right:6px}
   .badge.round{background:var(--soft);color:var(--muted)}
@@ -290,17 +265,6 @@ DZ:DASHBOARD 갱신 맵 (동적 영역 — 셀렉터 기반 정밀 치환, comma
     <ol class="steps" id="dz-steps">
     </ol>
   </div>
-  <div class="card duo">
-    <div class="slot">
-      <b>현재 위치</b>
-      <span id="dz-current">-</span>
-      <div class="meta"><span id="dz-current-meta">-</span> · <span id="dz-current-clock" data-started-at=""></span></div>
-    </div>
-    <div class="slot">
-      <b>다음 단계</b>
-      <span id="dz-next">-</span>
-    </div>
-  </div>
   <div class="card">
     <b style="font-size:13px;color:var(--muted)">작업 추적</b>
     <div class="legend">
@@ -318,12 +282,6 @@ DZ:DASHBOARD 갱신 맵 (동적 영역 — 셀렉터 기반 정밀 치환, comma
   var _dzReloading=false; function _dzReload(){ if(_dzReloading) return; _dzReloading=true; location.reload(); }
   document.addEventListener('visibilitychange', function(){ if(document.visibilityState==='visible') _dzReload(); });
   window.addEventListener('focus', _dzReload);
-
-  // 현재 단계 경과 시간 표시 (순수 표시용, data-started-at 은 메인 세션이 치환)
-  function _dzElapsed(){ var el=document.getElementById('dz-current-clock'); if(!el) return;
-    var m=Math.floor((Date.now()-new Date(el.dataset.startedAt))/60000);
-    el.textContent = m<60 ? m+'분 경과' : Math.floor(m/60)+'시간 '+(m%60)+'분 경과'; }
-  _dzElapsed(); setInterval(_dzElapsed, 30000);
 </script>
 </body>
 </html>
