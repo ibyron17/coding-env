@@ -1,6 +1,6 @@
 ---
-description: "세션 진행 상황을 프로젝트 로컬 HTML 대시보드로 기록 — init/step/log 세 하위 명령"
-argument-hint: "init \"<제목>\" \"<단계1|단계2|...>\" | step <n> <done|active|wait> | log <impl|pass|fail|commit> \"<요약>\" [...]"
+description: "세션 진행 상황을 프로젝트 로컬 HTML 대시보드로 기록 — init/step/log + on/off 스위치"
+argument-hint: "init \"<제목>\" \"<단계1|단계2|...>\" | step <n> <done|active|wait> | log <impl|pass|fail|commit> \"<요약>\" [...] | on | off"
 ---
 
 # Dashboard
@@ -12,7 +12,7 @@ argument-hint: "init \"<제목>\" \"<단계1|단계2|...>\" | step <n> <done|act
 
 **적용 범위**: 전체 경로(설계 → 구현 → 검수) 작업에만 사용한다. 축약 경로는 단계가 둘뿐이라 과하다.
 
-**Input**: `$ARGUMENTS` (첫 토큰이 `init` | `step` | `log`)
+**Input**: `$ARGUMENTS` (첫 토큰이 `init` | `step` | `log` | `on` | `off`)
 
 ---
 
@@ -228,6 +228,54 @@ argument-hint: "init \"<제목>\" \"<단계1|단계2|...>\" | step <n> <done|act
 
 `data-seq` 가 문서 내 유일 문자열이므로 두 치환 모두 앵커가 명확하고, 순번을 세는 판단이
 개입하지 않는다.
+
+---
+
+## `on` / `off`
+
+#### 호출 규약
+
+```
+/dashboard on      # 이 프로젝트에서 대시보드 기록을 켠다 (기본값)
+/dashboard off     # 이 프로젝트에서, 나만, 대시보드 기록을 끈다
+```
+
+**대상 파일은 `.claude/settings.local.json` 뿐이다.** `on`/`off` 는 `.claude/dashboard.html` 을
+만들지도 지우지도 않는다 — 생성은 `init` 의 책임이다. `off` 이후에도 기존 대시보드 파일은
+그대로 남으며, 지울지는 사용자가 정한다(안내만 한다).
+
+#### 절차 (Read 1회 + Edit 또는 Write 1회 + Read-back 1회)
+
+1. **읽기** — `.claude/settings.local.json` 이 있으면 Read 한다.
+   - 파일이 없다 → 요청이 `off` 면 3-a 로, `on` 이면 3-b 로(아무것도 하지 않는다).
+   - **JSON 으로 파싱되지 않는다 → 절차를 중단하고 그 사실만 보고한다.** 깨진 파일을
+     덮어쓰면 사용자의 권한 허용 목록이 사라진다.
+2. **현재 값 판정** — `dashboard_enabled` 필드의 유무와 값을 확인한다. 필드가 없으면 켜짐이다.
+   요청한 상태와 현재 상태가 같으면 **아무것도 하지 않고** 그 사실을 보고한다.
+3. **쓰기**
+   - **a. 파일 없음 + `off`**: `.claude/` 를 만든 뒤 아래를 Write 한다.
+     ```json
+     {
+       "dashboard_enabled": false
+     }
+     ```
+   - **b. 파일 없음 + `on`**: 아무것도 하지 않는다. 기본값이 켜짐이다.
+   - **c. 필드 있음**: 값만 Edit 로 치환한다 (`"dashboard_enabled": false` ↔ `"dashboard_enabled": true`).
+   - **d. 필드 없음 + `off`**: **여는 `{` 바로 뒤 첫 필드 자리**에 삽입한다.
+     ```
+     {
+       "dashboard_enabled": false,
+     ```
+     빈 객체(`{}` 또는 `{ }`)이면 뒤따르는 필드가 없으므로 **쉼표 없이** 넣는다.
+
+     > **왜 첫 자리인가**: 마지막 필드 뒤에 넣으려면 직전 줄에 쉼표를 붙이는 Edit 이 하나 더
+     > 필요하고, 그 줄의 내용은 프로젝트마다 다르다. 첫 자리는 앵커가 항상 `{` 하나로 고정된다.
+   - **기존 필드는 어떤 경우에도 건드리지 않는다.**
+4. **검증** — 쓴 파일을 다시 Read 해 **유효한 JSON 인지 눈으로 확인한다**(파일은 보통 20줄 미만).
+   `python3` 이 있으면 `python3 -m json.tool .claude/settings.local.json > /dev/null` 로 확인해도 된다
+   (없어도 되는 선택지다 — 새 의존성을 만들지 않는다).
+5. **보고** — 최종 상태 한 줄. `off` 인 경우 "이번 프로젝트에서 나에게만 적용되며 커밋되지 않는다"를
+   덧붙인다. `.claude/settings.local.json` 이 대상 프로젝트의 `.gitignore` 에 없으면 그 사실을 알린다.
 
 ---
 

@@ -75,7 +75,7 @@
   서브에이전트는 대시보드 파일에 접근하지 않는다. 축약 경로에는 적용하지 않는다.
   **끄는 방법**: 이 프로젝트 전체에서 끄려면 이 항목 자체를 삭제하거나 주석 처리한다
   (팀 전체에 적용, 커밋 대상). 나만 끄고 싶다면(팀원에게는 강제하지 않음) 커밋되지 않는
-  `.claude/settings.local.json` 에 `"dashboard_enabled": false` 를 추가한다 — 메인 세션은
+  `.claude/settings.local.json` 에 `"dashboard_enabled": false` 를 추가한다(`/dashboard off` 가 대신 해준다) — 메인 세션은
   `/dashboard` 를 호출하기 전에 이 파일이 있으면 그 값을 확인하고, `false` 면 이번 세션의
   전체 경로 작업에서 `/dashboard` 호출을 생략한다(파일이 없거나 필드가 없으면 기본값 사용).
 

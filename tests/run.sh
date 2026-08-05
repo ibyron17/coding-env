@@ -1163,6 +1163,103 @@ test_dashboard_template_integrity() {
   ((passed_tests++))
 }
 
+# T23: 대시보드 옵션의 대화형 설치·사후 전환 절차 문서 정합성 (하위 검증 T23-1~T23-11).
+# 이 기능은 README.md · CLAUDE.md · commands/dashboard.md 세 문서가 같은 설정 키
+# (dashboard_enabled)에 합의해야만 동작하므로, 문자열 정합성 회귀를 grep 으로 막는다.
+test_dashboard_option_docs() {
+  local test_name="T23"
+  local test_desc="대시보드 옵션 설치·전환 절차 문서 정합성 (T23-1~T23-11)"
+  log_test_name "$test_name" "$test_desc"
+
+  local sandbox
+  sandbox=$(mktemp -d)
+  trap "rm -rf '$sandbox'" EXIT
+
+  cd "$sandbox"
+  "$INSTALL_SCRIPT" --scope project > /dev/null 2>&1
+
+  local dashboard_command_file="./.claude/commands/dashboard.md"
+  # README.md 는 install.sh 가 배포하는 파일이 아니므로(레포 자체 문서) 설치된 사본이 아니라
+  # 레포 원본을 검사한다 — T22-5 가 install.sh 를 REPO_ROOT 기준으로 검사하는 것과 동일 방식.
+  local readme_file="$REPO_ROOT/README.md"
+
+  # T23-1: README 에 AI 에이전트 설치 절차 섹션이 존재
+  if ! grep -q "AI 에이전트로 설치" "$readme_file"; then
+    record_failure "$test_name" "T23-1: README 에 AI 에이전트 설치 절차 섹션 미발견"
+    return 1
+  fi
+
+  # T23-2: 절차가 대상 프로젝트 바깥 clone 을 명시
+  if ! grep -q "바깥에 clone" "$readme_file"; then
+    record_failure "$test_name" "T23-2: 바깥에 clone 문구 미발견"
+    return 1
+  fi
+
+  # T23-3: CLAUDE.md 충돌 시 자동 --force 금지 문구가 존재
+  if ! grep -q "자동으로 .*--force.* 를 붙이지 않는다" "$readme_file"; then
+    record_failure "$test_name" "T23-3: 자동 --force 금지 문구 미발견"
+    return 1
+  fi
+
+  # T23-4: 설치 절차가 대시보드 옵션 질문 단계를 포함
+  if ! grep -q "대시보드 옵션 질문" "$readme_file"; then
+    record_failure "$test_name" "T23-4: 대시보드 옵션 질문 단계 미발견"
+    return 1
+  fi
+
+  # T23-5: dashboard.md 에 on/off 절이 존재
+  if ! grep -q '^## `on` / `off`' "$dashboard_command_file"; then
+    record_failure "$test_name" "T23-5: on/off 절 미발견"
+    return 1
+  fi
+
+  # T23-6: frontmatter argument-hint 에 on·off 가 노출
+  if ! head -4 "$dashboard_command_file" | grep -q "| on | off"; then
+    record_failure "$test_name" "T23-6: argument-hint 에 on/off 미노출"
+    return 1
+  fi
+
+  # T23-7: 세 문서(CLAUDE.md·README.md·dashboard.md)가 키 이름을 동일 표기로 참조.
+  # 이 항목이 가장 중요하다 — 한 곳에서 이름이 어긋나면 미지의 설정 키로 조용히 무시된다.
+  local doc_file
+  for doc_file in "$REPO_ROOT/CLAUDE.md" "$readme_file" "$dashboard_command_file"; do
+    if [[ "$(grep -c "dashboard_enabled" "$doc_file")" -lt 1 ]]; then
+      record_failure "$test_name" "T23-7: dashboard_enabled 미참조: $doc_file"
+      return 1
+    fi
+  done
+
+  # T23-8: on/off 절이 기존 필드 보존을 명시
+  if ! grep -q "기존 필드는 어떤 경우에도 건드리지 않는다" "$dashboard_command_file"; then
+    record_failure "$test_name" "T23-8: 기존 필드 보존 문구 미발견"
+    return 1
+  fi
+
+  # T23-9: 파싱 불가 파일을 덮어쓰지 않는다는 문구 존재
+  if ! grep -q "덮어쓰면 사용자의 권한 허용 목록이 사라진다" "$dashboard_command_file"; then
+    record_failure "$test_name" "T23-9: 파싱 불가 파일 보호 문구 미발견"
+    return 1
+  fi
+
+  # T23-10: on/off 가 대시보드 HTML 을 만들지도 지우지도 않음을 명시
+  if ! grep -q "만들지도 지우지도 않는다" "$dashboard_command_file"; then
+    record_failure "$test_name" "T23-10: HTML 비접촉 문구 미발견"
+    return 1
+  fi
+
+  # T23-11: README 가 병합 절차를 복제하지 않고 참조만 함 (DRY 경계 회귀 방지).
+  # README 에 절차 전문을 붙여넣으면 이 문자열이 급증하므로 상한을 둔다.
+  local settings_json_mentions
+  settings_json_mentions=$(grep -c "settings.local.json" "$readme_file")
+  if [[ "$settings_json_mentions" -gt 3 ]]; then
+    record_failure "$test_name" "T23-11: README 가 병합 절차를 복제한 것으로 의심됨 (settings.local.json 언급 ${settings_json_mentions}회)"
+    return 1
+  fi
+
+  log_ok "$test_name 통과"
+  ((passed_tests++))
+}
+
 register_and_run_tests() {
   test_scope_project_new_install || true
   test_scope_user_new_install || true
@@ -1185,6 +1282,7 @@ register_and_run_tests() {
   test_manifest_created_after_install || true
   test_manifest_fields_complete || true
   test_dashboard_template_integrity || true
+  test_dashboard_option_docs || true
 }
 
 # 테스트 결과 요약 출력
@@ -1234,7 +1332,7 @@ main() {
   echo ""
 
   # 전체 테스트 개수
-  total_tests=21  # T1~T22 (T11 결번)
+  total_tests=22  # T1~T23 (T11 결번)
 
   # 각 테스트 실행
   register_and_run_tests
