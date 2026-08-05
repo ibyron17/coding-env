@@ -996,10 +996,10 @@ test_manifest_fields_complete() {
 }
 
 # T22: dashboard 템플릿 무결성 — LLM 지시문 방식이라 런타임 Edit 결과는 검증 대상이 아니고,
-# 설치·문서 정합성만 자동 검증한다 (하위 검증 T22-1~T22-6).
+# 설치·문서 정합성만 자동 검증한다 (하위 검증 T22-1~T22-9).
 test_dashboard_template_integrity() {
   local test_name="T22"
-  local test_desc="dashboard 템플릿 무결성 (T22-1~T22-6)"
+  local test_desc="dashboard 템플릿 무결성 (T22-1~T22-9)"
   log_test_name "$test_name" "$test_desc"
 
   local sandbox
@@ -1064,6 +1064,25 @@ test_dashboard_template_integrity() {
   # 지시문 안에 가드 문구가 남아있는지만 grep 으로 확인한다.
   if ! grep -q "덮어쓰지 않는다" "$dashboard_command_file"; then
     record_failure "$test_name" "T22-6: init 기존 파일 가드 문구 미발견"
+    return 1
+  fi
+
+  # T22-7: div.legend 컴포넌트가 템플릿에서 제거됐는지 확인 (사용자 요청, 회귀 방지)
+  if grep -q 'class="legend"' "$dashboard_command_file"; then
+    record_failure "$test_name" "T22-7: div.legend 가 여전히 템플릿에 남아있음"
+    return 1
+  fi
+
+  # T22-8: 세션 구분 마커(session-head) 가 템플릿/절차에 존재하는지 확인
+  if ! grep -q "session-head" "$dashboard_command_file"; then
+    record_failure "$test_name" "T22-8: session-head 세션 구분 마커 미발견"
+    return 1
+  fi
+
+  # T22-9: log 절차가 파일 전체 Read 대신 grep+windowed Read 방식을 문서화했는지 확인
+  # (가변 비용 회귀 방지 — 다시 "파일 전체를 Read"로 되돌아가지 않았는지 확인)
+  if ! grep -q "파일 전체를 Read하지 않는다" "$dashboard_command_file"; then
+    record_failure "$test_name" "T22-9: log 절차의 windowed-read 최적화 문구 미발견"
     return 1
   fi
 

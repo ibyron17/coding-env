@@ -43,7 +43,7 @@ argument-hint: "init \"<제목>\" \"<단계1|단계2|...>\" | step <n> <done|act
 
 ### 정적(불가침)
 
-`<style>` 블록, `:root` 색 토큰, 카드 골격, 로그 카드의 범례(4종 배지 샘플), 하단 스크립트.
+`<style>` 블록, `:root` 색 토큰, 카드 골격, 하단 스크립트.
 
 ### 동적(치환 대상) — 7 셀렉터
 
@@ -91,11 +91,18 @@ argument-hint: "init \"<제목>\" \"<단계1|단계2|...>\" | step <n> <done|act
 ## `init` — 메인 세션이 수행할 절차
 
 1. `.claude/dashboard.html` 존재 여부를 확인한다.
-   - **이미 존재하면**: 덮어쓰지 않는다. 기존 파일을 그대로 두고, 사용자에게
-     "기존 대시보드를 이어서 사용합니다"라는 취지로 안내하며
+   - **이미 존재하면**: 제목·단계 목록 등은 덮어쓰지 않는다(다시 채우면 기존
+     진행 상태와 충돌한다). 대신 세션 경계를 표시하기 위해 `#dz-log` 여는
+     태그(`<ul class="log" id="dz-log">`) 바로 뒤에 세션 구분 항목을 prepend 한다:
+     ```html
+     <li class="session-head" data-session="{N}">세션 {N} 시작 · {HH:MM}</li>
+     ```
+     `{N}` 은 기존 `.session-head` 항목의 `data-session` 값 중 최댓값 + 1 이다
+     (하나도 없으면 이번이 두 번째 세션이라는 뜻이므로 `{N}=2` — 그 이전 로그
+     항목들은 암묵적으로 세션 1에 속한 것으로 간주한다). `{HH:MM}` 은 현재 시각.
+     이후 사용자에게 "기존 대시보드를 이어서 사용합니다"라는 취지로 안내하며
      `file://<현재 작업 디렉토리 절대경로>/.claude/dashboard.html` 을 출력한 뒤
-     절차를 **여기서 종료**한다(2번 이하 단계를 실행하지 않는다 — 제목·단계 목록
-     등을 다시 채우면 기존 진행 상태와 충돌한다).
+     절차를 **여기서 종료**한다(2번 이하 단계를 실행하지 않는다).
      > **한계**: 이 가드는 "완전히 새 작업"과 "기존 미완료 작업 재개"를 구분하지
      > 못한다. 같은 프로젝트에서 정말 새로운 전체 경로 작업을 시작했는데 이전
      > 작업의 대시보드 파일이 남아 있으면, 엉뚱한 옛 대시보드를 계속 보여준다.
@@ -127,12 +134,24 @@ argument-hint: "init \"<제목>\" \"<단계1|단계2|...>\" | step <n> <done|act
    와 `#dz-progress-pct` 텍스트(`M/N · P%`)를 재계산해 치환한다.
 3. `#dz-updated` 텍스트를 현재 시각으로 치환한다.
 
-## `log` — 메인 세션이 수행할 절차 (Edit 2회, 결정적)
+## `log` — 메인 세션이 수행할 절차 (Bash grep 1회 + Read 1~2회 + Edit 2회, 결정적)
 
-0. `.claude/dashboard.html` 을 Read 해 현재 존재하는 `data-seq` 값 중 최댓값 `S` 를 확인한다
-   (로그가 비어 있으면 `S=0`).
-1. **직전 펼침 회수**: `data-seq="S-2"` 인 `<li>` 가 존재하면, 그 안의 `<details open>` 를
-   `<details>` 로 치환한다(연 상태 해제). 해당 seq 가 없으면(로그 3건 미만) 이 단계를 생략한다.
+0. **최신 항목만 확인한다(파일 전체를 Read하지 않는다)**:
+   a. Bash 로 `grep -n '<ul class="log" id="dz-log">' .claude/dashboard.html` 를 실행해
+      로그 시작 줄 번호 `L` 을 찾는다.
+   b. `Read` 도구로 `offset=L, limit=60` 만 읽어 최신 항목 몇 개(보통 3~4개)의 `data-seq` 를
+      확인한다. 로그는 항상 최신순으로 prepend 되므로, 이 창(window) 안에서 처음 만나는
+      `data-seq` 가 곧 전체 로그의 최댓값 `S` 다(로그가 비어 있으면 `S=0`).
+   c. 이 창 안에서 `data-seq="S-2"` 항목을 찾지 못하면(상세 텍스트가 길어 항목 3개가
+      60줄을 넘긴 경우) `limit` 을 120 으로 늘려 같은 지점부터 한 번 더 Read 한다.
+      그래도 없으면 로그가 3건 미만인 것이므로 1단계(펼침 회수)를 생략한다.
+   > **왜 이렇게 하는가**: `data-seq` 는 항상 증가하는 순서로 로그 맨 앞에 prepend되므로
+   > 최댓값과 `S-2` 항목은 로그 길이와 무관하게 항상 맨 앞부분에 있다. 파일 전체를 Read할
+   > 필요가 없어, 세션이 길어져 로그가 수십~수백 건으로 늘어나도 이 단계의 비용은 늘지 않는다
+   > (기존 설계가 안고 있던 "가변 비용" 문제 해결).
+1. **직전 펼침 회수**: 위 0단계에서 찾은 `data-seq="S-2"` 인 `<li>` 가 존재하면, 그 안의
+   `<details open>` 를 `<details>` 로 치환한다(연 상태 해제). 해당 seq 가 없으면(로그 3건 미만)
+   이 단계를 생략한다.
    → 결과적으로 **항상 최신 3건만 펼쳐진다.**
 2. **prepend**: `<ul class="log" id="dz-log">` 여는 태그 바로 뒤에 `data-seq="S+1"` 인 새
    `<li>` 를 위 [로그 항목 스키마](#로그-항목-스키마)대로 삽입한다.
@@ -186,6 +205,13 @@ argument-hint: "init \"<제목>\" \"<단계1|단계2|...>\" | step <n> <done|act
 
 원본(`~/Desktop/dashboard.html`)의 골격·`:root` 색 토큰·단계 리스트 스타일은 그대로 유지한다.
 
+### 세션 구분
+
+두 번째 이후 세션이 기존 대시보드를 이어서 쓸 때 `init` 절차가 삽입하는
+`<li class="session-head" data-session="N">` 로 세션 경계를 표시한다. `.entry`
+가 아니므로 위 필터 CSS 의 영향을 받지 않아 어떤 필터에서도 항상 보인다.
+개별 로그 항목에는 세션 태그를 달지 않는다 — 구분선만으로 충분하다(YAGNI).
+
 ---
 
 ## 템플릿 전문
@@ -207,7 +233,7 @@ DZ:DASHBOARD 갱신 맵 (동적 영역 — 셀렉터 기반 정밀 치환, comma
   #dz-step-{n}          : 각 단계 li — class(done|active|wait) + .chip 텍스트(완료|진행중|대기)
   #dz-log               : 작업 추적 ul — li data-seq 앵커로 prepend
   #dz-updated           : 갱신 시각 텍스트
-정적(불가침): 골격 · <style> · 범례 · 제목 · 하단 스크립트
+정적(불가침): 골격 · <style> · 제목 · 하단 스크립트
 -->
 <style>
   :root{--ink:#172033;--muted:#5E6B7D;--line:#D9E2EC;--soft:#F4F7FB;--blue:#1E5AA8;--navy:#12335B;--green:#1F8A70;--orange:#F59E0B;--red:#C2410C;}
@@ -231,7 +257,6 @@ DZ:DASHBOARD 갱신 맵 (동적 영역 — 셀렉터 기반 정밀 치환, comma
   .chip{margin-left:auto;font-size:12px;font-weight:800;padding:3px 10px;border-radius:999px;background:var(--soft);color:var(--muted);flex:none}
   li.done .chip{background:#E5F3EE;color:var(--green)}
   li.active .chip{background:#EAF2FB;color:var(--blue)}
-  .legend{margin:10px 0 12px}
   .badge{display:inline-block;font-size:11px;font-weight:800;padding:2px 8px;border-radius:999px;margin-right:6px}
   .badge.round{background:var(--soft);color:var(--muted)}
   .badge.impl{background:#EAF2FB;color:var(--blue)}
@@ -252,6 +277,8 @@ DZ:DASHBOARD 갱신 맵 (동적 영역 — 셀렉터 기반 정밀 치환, comma
   .entry .time{font-size:11px;color:var(--muted);flex:none;width:40px}
   .entry .lead{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-weight:600;color:var(--ink)}
   .entry .detail{margin:6px 0 0 48px;font-size:12.5px;color:var(--muted);white-space:pre-wrap}
+  .session-head{margin:14px 0 6px;padding:0 4px 6px;border-bottom:2px solid var(--line);font-size:11px;font-weight:800;letter-spacing:.3px;color:var(--navy)}
+  .session-head:first-child{margin-top:0}
   .foot{font-size:12px;color:var(--muted);text-align:right}
 </style>
 </head>
@@ -267,9 +294,6 @@ DZ:DASHBOARD 갱신 맵 (동적 영역 — 셀렉터 기반 정밀 치환, comma
   </div>
   <div class="card">
     <b style="font-size:13px;color:var(--muted)">작업 추적</b>
-    <div class="legend">
-      <span class="badge impl">구현</span><span class="badge pass">검수 PASS</span><span class="badge fail">검수 FAIL</span><span class="badge commit">커밋</span>
-    </div>
     <input type="radio" name="dzf" id="dzf-all" class="dzf" checked><label for="dzf-all">전체</label>
     <input type="radio" name="dzf" id="dzf-impl" class="dzf"><label for="dzf-impl">구현</label>
     <input type="radio" name="dzf" id="dzf-review" class="dzf"><label for="dzf-review">검수</label>

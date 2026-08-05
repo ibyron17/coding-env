@@ -28,7 +28,7 @@ Phase 2(계획만, 구현 제외)는 플로팅 윈도우(Document Picture-in-Pic
   "7종이 닫힌 의존 사슬" 문구를 "**의존 사슬 7종 + 독립 커맨드 1종**"으로 조정
 - **`install.sh`** ([install.sh:14](../../install.sh)) — `COMMANDS_FILE_COUNT=7` → `8`
 - **`tests/run.sh`** — 커맨드 개수 기대값 7 → 8(2곳), `test_commands_installed` 목록에 `dashboard` 추가,
-  신규 T19(템플릿 무결성 검증) 추가
+  신규 T22(템플릿 무결성 검증) 추가
 - **`.gitignore`** — `.claude/dashboard.html` 1줄 추가
   (레포에 `.claude/settings.local.json` 만 무시 중이고 `.claude/` 하위 추적 파일이 없음을 확인함.
   `.claude/` 전체를 무시하면 안 된다 — 향후 추적 대상이 생길 수 있다)
@@ -63,7 +63,7 @@ Phase 2 의 폴링도 HTML 을 통째로 받아 DOM 을 치환하면 성립하�
 
 ### 정적(불가침)
 
-`<style>` 블록, `:root` 색 토큰, 카드 골격, 범례, 하단 스크립트.
+`<style>` 블록, `:root` 색 토큰, 카드 골격, 하단 스크립트.
 
 ### 동적(치환 대상)
 
@@ -105,6 +105,15 @@ Phase 2 의 폴링도 HTML 을 통째로 받아 DOM 을 치환하면 성립하�
 | `.badge.fail` | 검수 FAIL | `--red`(신규 토큰 `#C2410C`) |
 | `.badge.commit` | 커밋 | `--navy` |
 
+### 세션 구분 항목
+
+두 번째 이후 세션이 기존 대시보드를 이어서 쓸 때, `init` 절차가 `#dz-log` 맨
+위에 `<li class="session-head" data-session="N">세션 N 시작 · HH:MM</li>` 를
+prepend해 세션 경계를 표시한다. 위 로그 항목 스키마의 `.entry` 가 아니라 별도
+클래스이므로 필터 CSS(`.entry:not([data-kind=...])`)의 영향을 받지 않고 어떤
+필터 상태에서도 항상 보인다. 개별 로그 항목에는 세션 태그를 달지 않는다 —
+구분선만으로 세션 경계를 알 수 있으면 충분하다(YAGNI).
+
 ---
 
 ## 인터페이스
@@ -120,7 +129,10 @@ Phase 2 의 폴링도 HTML 을 통째로 받아 DOM 을 치환하면 성립하�
 ### `init` — 메인 세션이 수행할 절차
 
 1. `.claude/dashboard.html` 존재 여부 확인
-   - **이미 존재하면**: 덮어쓰지 않는다. 기존 파일을 그대로 두고 "기존 대시보드를
+   - **이미 존재하면**: 제목·단계 목록 등은 덮어쓰지 않는다. 대신 세션 경계를
+     표시하기 위해 `#dz-log` 맨 위에 `<li class="session-head" data-session="N">`
+     구분 항목을 prepend 한다. `N` 은 기존 `.session-head` 의 `data-session` 최댓값
+     + 1(없으면 2 — 그 이전 로그는 암묵적으로 세션 1). 이후 "기존 대시보드를
      이어서 사용합니다"라는 취지로 안내한 뒤 기존 `file://` 경로를 출력하고 절차를
      종료한다(이후 단계 미실행). **한계**: "새 작업"과 "기존 작업 재개"를 구분하지
      못한다 — 같은 프로젝트에서 진짜 새 전체 경로 작업을 시작했는데 이전 대시보드
@@ -138,9 +150,12 @@ Phase 2 의 폴링도 HTML 을 통째로 받아 DOM 을 치환하면 성립하�
 2. `done` 으로 바뀐 경우 진행률 재계산 → `#dz-progress-bar` width 와 `#dz-progress-pct` 치환
 3. `#dz-updated` 치환
 
-### `log` — 절차 (Edit 2회, 결정적)
+### `log` — 절차 (Bash grep 1회 + Read 1~2회 + Edit 2회, 결정적)
 
-1. **직전 펼침 회수**: 현재 최대 `data-seq` 를 `S` 라 할 때, `data-seq="S-2"` 항목의
+0. **최신 항목만 확인**: 로그는 항상 맨 앞에 prepend되므로 최댓값 `S` 와 `S-2` 항목은
+   항상 로그 앞부분에 있다. 따라서 파일 전체를 Read하지 않고 `grep`으로 `#dz-log` 시작 줄을
+   찾은 뒤 그 지점부터 제한된 줄만 Read해 확인한다(로그가 길어져도 이 단계의 비용이 늘지 않는다).
+1. **직전 펼침 회수**: 위에서 확인한 최대 `data-seq` 를 `S` 라 할 때, `data-seq="S-2"` 항목의
    `<details open>` 를 `<details>` 로 치환한다. 해당 seq 가 없으면 생략한다.
    → 결과적으로 **항상 최신 3건만 펼쳐진다.**
 2. **prepend**: `<ul class="log" id="dz-log">` 바로 뒤에 `data-seq="S+1"` 인 새 `<li>` 를 삽입한다.
@@ -199,7 +214,7 @@ Phase 2 의 폴링도 HTML 을 통째로 받아 DOM 을 치환하면 성립하�
 라디오는 시각적으로 숨기되 포커스는 유지한다(`display:none` 이 아니라 `opacity:0`).
 `:has()` 같은 최신 셀렉터에 의존하지 않으므로 지원 범위가 넓다.
 
-원본의 골격·`:root` 색 토큰·범례·단계 리스트는 그대로 유지한다.
+원본의 골격·`:root` 색 토큰·단계 리스트는 그대로 유지한다.
 
 ---
 
@@ -249,20 +264,28 @@ LLM 지시문 방식이므로 자동 검증 가능한 것은 **설치·문서 �
 - 기존 커맨드 개수 기대값 `7` → `8` (2곳)
 - `test_commands_installed` 의 커맨드 이름 목록에 `dashboard` 추가
 
-### tests/run.sh 신규 T19 — 템플릿 무결성
+### tests/run.sh 신규 T22 — 템플릿 무결성
 
 | TC | 검증 | 방법 |
 |----|------|------|
-| T19-1 | `commands/dashboard.md` 설치됨 | `[[ -f ./.claude/commands/dashboard.md ]]` |
-| T19-2 | 필수 셀렉터 7종이 템플릿에 모두 존재 | `dz-title` 등 id 목록을 순회하며 `grep -q` |
-| T19-3 | 결과 배지 4종 CSS class 정의 존재 | `grep -q '\.badge\.\(impl\|pass\|fail\|commit\)'` |
-| T19-4 | 필터 라디오 3종과 CSS 규칙 존재 | `grep -q 'dzf-review:checked'` |
-| T19-5 | `install.sh` 의 `COMMANDS_FILE_COUNT` 가 실제 파일 수와 일치 | 상수 파싱 후 `ls commands/*.md \| wc -l` 과 비교 |
-| T19-6 | `init` 절차에 기존 파일 덮어쓰기 가드 문구 존재 | `grep -q "덮어쓰지 않는다"` |
+| T22-1 | `commands/dashboard.md` 설치됨 | `[[ -f ./.claude/commands/dashboard.md ]]` |
+| T22-2 | 필수 셀렉터 7종이 템플릿에 모두 존재 | `dz-title` 등 id 목록을 순회하며 `grep -q` |
+| T22-3 | 결과 배지 4종 CSS class 정의 존재 | `grep -q '\.badge\.\(impl\|pass\|fail\|commit\)'` |
+| T22-4 | 필터 라디오 3종과 CSS 규칙 존재 | `grep -q 'dzf-review:checked'` |
+| T22-5 | `install.sh` 의 `COMMANDS_FILE_COUNT` 가 실제 파일 수와 일치 | 상수 파싱 후 `ls commands/*.md \| wc -l` 과 비교 |
+| T22-6 | `init` 절차에 기존 파일 덮어쓰기 가드 문구 존재 | `grep -q "덮어쓰지 않는다"` |
+| T22-7 | `div.legend` 컴포넌트가 템플릿에서 제거됨 | `! grep -q 'class="legend"'` |
+| T22-8 | 세션 구분 마커(`session-head`) CSS 정의 존재 | `grep -q "session-head"` |
+| T22-9 | `log` 절차의 windowed-read 최적화 문구 존재 | `grep -q "파일 전체를 Read하지 않는다"` |
 
-T19-5 는 이번 변경의 재발 방지책이다 — 커맨드를 추가하고 상수를 안 고치는 실수를 잡는다.
-T19-6 은 두 번째 세션이 미완료 작업을 재개할 때 `init` 재호출로 기존 진행 상황(로그·단계 상태)이
+T22-5 는 이번 변경의 재발 방지책이다 — 커맨드를 추가하고 상수를 안 고치는 실수를 잡는다.
+T22-6 은 두 번째 세션이 미완료 작업을 재개할 때 `init` 재호출로 기존 진행 상황(로그·단계 상태)이
 통째로 날아가는 것을 막는 재발 방지책이다.
+T22-7 은 범례 div 제거가 실수로 되돌려지지 않았는지 확인하는 회귀 방지책이다.
+T22-8 은 세션 카테고리화 기능(세션 구분 마커) 자체가 구현 과정에서 누락되지 않았는지 확인하는
+재발 방지책이다.
+T22-9 는 `log` 절차가 다시 파일 전체 Read 방식으로 퇴행하지 않았는지 확인하는 재발 방지책이다
+— 가변 비용 문제의 재발을 막는다.
 
 ### 수동 확인 항목 (테스트 스위트 밖)
 
@@ -293,6 +316,12 @@ Phase 2 는 로컬 정적 서버를 전제로 한다. Phase 1 에는 영향 없�
 ### 4. Document PiP 자동 전환의 기술적 미확정
 
 Phase 2 의 핵심 요구인 "자동 플로팅 전환"이 성립하는지 미검증이다. 아래 실측 스파이크로 먼저 판정한다.
+
+### 5. `log` 절차의 Read 비용이 로그 길이에 비례해 늘어난다
+
+최댓값·`S-2` 탐색을 파일 전체가 아니라 `#dz-log` 시작 지점부터 제한된 줄 수만 Read하는
+방식으로 완화했다(로그는 항상 최신순으로 prepend되므로 탐색 대상이 항상 맨 앞에 있다).
+극단적으로 상세 텍스트가 길어 창을 벗어나는 경우에만 `limit` 을 늘려 재시도한다.
 
 ---
 
