@@ -158,11 +158,11 @@ Phase 2 의 폴링도 HTML 을 통째로 받아 DOM 을 치환하면 성립하�
 prepend해 세션 경계를 표시한다.
 
 - `.entry` 가 아니므로 **유형 필터**(`.entry:not([data-kind=...])`)의 영향을 받지 않는다 —
-  어떤 유형 필터 상태에서도 항상 보인다.
-- **세션 탭 필터**(`#dz-log > li:not([data-session="N"])`)의 영향은 받는다. 즉 세션 N 탭에서는
-  다른 세션의 구분선이 사라지고 세션 N 자신의 구분선만 남아, 그 탭의 시작 시각 캡션 역할을 한다
-  (로그가 최신순이므로 목록 맨 아래에 위치한다).
-- 세션 1 에는 구분선이 없다(첫 세션의 시작 시각을 알 수 없다). 세션 1 탭은 캡션 없이 항목만 보인다.
+  `모든 세션` 탭 안에서는 어떤 유형 필터 상태에서도 항상 보인다.
+- **세션 탭 필터**(`input[name="dzs"]:checked:not(#dzs-all) ~ #dz-log .session-head`)의
+  영향은 받는다. `dzs-all` 이 아닌 특정 세션 탭이 선택되면 소속 세션과 무관하게 전부 숨는다
+  — 사용자 피드백 반영(2026-08-05): 하나의 세션만 보는 화면에서 "경계"는 무의미하다고
+  판단해, 애초 설계였던 "선택한 세션의 구분선만 시작 시각 캡션으로 남기는" 방식을 폐기했다.
 
 ---
 
@@ -224,11 +224,17 @@ prepend해 세션 경계를 표시한다.
 >    <input type="radio" name="dzs" id="dzs-all" class="dzs" checked><label for="dzs-all">모든 세션</label>
 >    <input type="radio" name="dzs" id="dzs-{N}" class="dzs"><label for="dzs-{N}">세션 {N}</label>
 >    <input type="radio" name="dzs" id="dzs-1" class="dzs"><label for="dzs-1">세션 1</label>
+>    <br>
 >    ```
+>    `<br>` 은 세션 탭 줄과 유형 필터 줄을 물리적으로 분리한다(사용자 피드백 반영 —
+>    카드 폭에 따른 자연 줄바꿈에 기대지 않는다). wrapper `div` 와 달리 빈 요소라
+>    `~` 형제 결합자를 끊지 않는다.
 > 2. `<style>` 안의 `/* DZ:SESSION-RULES */` 마커 줄 **바로 뒤**에 세션 `1`~`{N}` 각각에 대해
->    아래 규칙을 한 줄씩 추가한다.
+>    아래 규칙을 한 줄씩 추가한다. 대상은 `.entry` 다 — 구분선(`.session-head`) 숨김은
+>    별도의 고정 규칙(`input[name="dzs"]:checked:not(#dzs-all) ~ #dz-log .session-head`)이
+>    전담하므로 이 규칙에서는 신경 쓰지 않는다.
 >    ```css
->    #dzs-{n}:checked ~ #dz-log > li:not([data-session="{n}"]){display:none}
+>    #dzs-{n}:checked ~ #dz-log .entry:not([data-session="{n}"]){display:none}
 >    ```
 >
 > **결과가 1 이상 (탭 바 있음)**
@@ -325,6 +331,7 @@ prepend해 세션 경계를 표시한다.
 <input type="radio" name="dzs" id="dzs-all" class="dzs" checked><label for="dzs-all">모든 세션</label>
 <input type="radio" name="dzs" id="dzs-2" class="dzs"><label for="dzs-2">세션 2</label>
 <input type="radio" name="dzs" id="dzs-1" class="dzs"><label for="dzs-1">세션 1</label>
+<br>
 <input type="radio" name="dzf" id="dzf-all" class="dzf" checked><label for="dzf-all">전체</label>
 <input type="radio" name="dzf" id="dzf-impl" class="dzf"><label for="dzf-impl">구현</label>
 <input type="radio" name="dzf" id="dzf-review" class="dzf"><label for="dzf-review">검수</label>
@@ -337,26 +344,31 @@ prepend해 세션 경계를 표시한다.
 #dzf-impl:checked   ~ #dz-log .entry:not([data-kind="impl"]){display:none}
 #dzf-review:checked ~ #dz-log .entry:not([data-kind="review"]){display:none}
 
-/* 세션 탭 — 스타일은 고정, 규칙은 세션마다 1줄씩 추가 */
+/* 세션 탭 — 스타일·구분선 숨김 규칙은 고정, 항목 필터 규칙만 세션마다 1줄씩 추가 */
 .dzs{position:absolute;opacity:0;pointer-events:none}
 label[for^="dzs-"]{display:inline-block;font-size:12px;font-weight:700;padding:5px 13px;margin:0 4px 6px 0;border-radius:8px 8px 0 0;color:var(--muted);cursor:pointer;border-bottom:2px solid transparent}
 .dzs:checked + label{color:var(--navy);background:var(--soft);border-bottom-color:var(--navy)}
+/* 모든 세션 이 아닌 특정 세션 탭에서는 구분선을 아예 숨긴다 (세션 개수와 무관한 고정 규칙) */
+input[name="dzs"]:checked:not(#dzs-all) ~ #dz-log .session-head{display:none}
 /* DZ:SESSION-RULES — 세션 탭 필터 규칙. init 이 세션마다 아래에 1줄씩 추가한다 */
-#dzs-1:checked ~ #dz-log > li:not([data-session="1"]){display:none}
-#dzs-2:checked ~ #dz-log > li:not([data-session="2"]){display:none}
+#dzs-1:checked ~ #dz-log .entry:not([data-session="1"]){display:none}
+#dzs-2:checked ~ #dz-log .entry:not([data-session="2"]){display:none}
 ```
 
 라디오는 시각적으로 숨기되 포커스는 유지한다(`display:none` 이 아니라 `opacity:0`).
 `:has()` 같은 최신 셀렉터에 의존하지 않으므로 지원 범위가 넓다.
-유형 필터는 알약(pill), 세션 탭은 밑줄 탭으로 형태를 달리해 두 줄의 역할을 구분한다.
+유형 필터는 알약(pill), 세션 탭은 밑줄 탭으로 형태를 달리해 두 줄의 역할을 구분하고,
+`<br>` 로 두 그룹을 물리적으로 다른 줄에 고정한다.
 
 원본의 골격·`:root` 색 토큰·단계 리스트는 그대로 유지한다.
 
-#### 이 구조가 성립하는 이유 (검증 결과)
+#### 이 구조가 성립하는 이유 (검증 결과, 2026-08-05 사용자 피드백으로 일부 수정)
 
-- **`.entry` 가 아니라 `> li` 를 대상으로 한다.** 세션 탭 규칙만 `#dz-log > li` 를 쓰는 이유는,
-  세션 탭에서는 *다른 세션의 구분선까지* 사라져야 하기 때문이다. `.session-head` 도 `data-session`
-  을 이미 갖고 있어 같은 규칙 하나로 정확히 처리된다 — 선택된 세션의 구분선만 남는다.
+- **구분선은 특정 세션 탭에서 아예 숨긴다.** `input[name="dzs"]:checked:not(#dzs-all) ~ #dz-log .session-head`
+  는 세션 개수와 무관한 고정 규칙 1개다. 애초 설계는 `#dz-log > li` 로 항목과 구분선을 한
+  규칙으로 처리해 "선택한 세션의 구분선만 시작 시각 캡션으로 남기는" 효과를 노렸으나,
+  사용자가 "하나의 세션만 보는 화면에서 구분선 자체가 불필요하다"고 판단해 폐기했다.
+  대신 항목 필터(`.entry` 대상)와 구분선 숨김(`.session-head` 대상)을 규칙 단위로 분리했다.
 - **모든 규칙은 `display:none` 만 지정한다.** 되돌리는 규칙(`display:block` 등)을 쓰지 않으므로
   두 그룹의 규칙이 서로의 특이도(specificity)를 다투지 않고, "둘 다 통과해야 보인다"는
   **AND 결합이 저절로 성립**한다. 이 불변식을 깨는 규칙을 추가하지 않는다.
@@ -378,7 +390,7 @@ label[for^="dzs-"]{display:inline-block;font-size:12px;font-weight:700;padding:5
 ### 세션 구분
 
 `init` 이 삽입하는 `<li class="session-head" data-session="N">` 로 세션 경계를 표시한다.
-`모든 세션` 탭에서는 세션 경계선 역할을, 특정 세션 탭에서는 그 세션의 시작 시각 캡션 역할을 한다.
+`모든 세션` 탭에서만 경계선으로 보이고, 특정 세션 탭에서는 구분선 자체가 사라진다.
 
 ---
 
@@ -649,5 +661,7 @@ python3 -m http.server --directory .claude 8791
    `log`·`init` 의 grep/Edit 앵커를 부분 일치 방식으로 바꿔야 한다(놓치면 `log` 전체 실패).
 5. **탭 바는 두 번째 세션부터 생성한다** — 단일 세션 대시보드를 깨끗하게 유지하는 대신
    `init` 에 "탭 바 유무" 분기가 하나 생긴다.
-6. **세션 탭 전환 시 다른 세션의 구분선까지 숨긴다(`> li` 규칙 하나로 처리)** — 선택된 세션의
-   구분선은 남겨 시작 시각 캡션으로 쓴다. 세션 탭 도입 이전 로그는 `모든 세션` 탭에서만 보인다.
+6. **세션 탭 전환 시 구분선을 전부 숨긴다**(`input[name="dzs"]:checked:not(#dzs-all) ~ #dz-log .session-head`
+   고정 규칙 1개로 처리, 세션 개수와 무관) — 2026-08-05 사용자 피드백으로 애초 설계
+   ("선택된 세션의 구분선만 시작 시각 캡션으로 남긴다")에서 수정. 세션 탭 도입 이전 로그는
+   `모든 세션` 탭에서만 보인다(이 부분은 변경 없음).

@@ -996,10 +996,10 @@ test_manifest_fields_complete() {
 }
 
 # T22: dashboard 템플릿 무결성 — LLM 지시문 방식이라 런타임 Edit 결과는 검증 대상이 아니고,
-# 설치·문서 정합성만 자동 검증한다 (하위 검증 T22-1~T22-15).
+# 설치·문서 정합성만 자동 검증한다 (하위 검증 T22-1~T22-18).
 test_dashboard_template_integrity() {
   local test_name="T22"
-  local test_desc="dashboard 템플릿 무결성 (T22-1~T22-15)"
+  local test_desc="dashboard 템플릿 무결성 (T22-1~T22-18)"
   log_test_name "$test_name" "$test_desc"
 
   local sandbox
@@ -1131,6 +1131,31 @@ test_dashboard_template_integrity() {
   # (checked 중복으로 사용자의 탭 선택이 매 새로고침마다 리셋되는 버그 방지)
   if ! grep -q '새 탭 라디오에 `checked` 를 넣지 않는다' "$dashboard_command_file"; then
     record_failure "$test_name" "T22-15: 새 탭 checked 금지 문구 미발견"
+    return 1
+  fi
+
+  # T22-16: 세션 탭 줄과 유형 필터 줄을 분리하는 <br> 이 절차/문서에 존재
+  # (두 라디오 그룹이 카드 폭에 따라 같은 줄에 붙어 보이던 레이아웃 문제의 회귀 방지)
+  if ! grep -q '<br>' "$dashboard_command_file"; then
+    record_failure "$test_name" "T22-16: 세션 탭/유형 필터 줄바꿈(<br>) 미발견"
+    return 1
+  fi
+
+  # T22-17: 특정 세션 탭 선택 시 session-head 구분선을 전부 숨기는 고정 규칙 존재
+  # (사용자 요청 — 모든 세션 탭이 아니면 구분선 자체를 안 보여준다)
+  if ! grep -q 'not(#dzs-all) ~ #dz-log .session-head' "$dashboard_command_file"; then
+    record_failure "$test_name" "T22-17: session-head 전체 숨김 규칙 미발견"
+    return 1
+  fi
+
+  # T22-18: 세션별 항목 필터가 .entry 를 대상으로 함 (session-head 는 T22-17 규칙이 전담하므로
+  # 이 규칙이 다시 li 전체(> li)를 대상으로 퇴행하지 않았는지 확인)
+  if grep -q '#dz-log > li:not(\[data-session=' "$dashboard_command_file"; then
+    record_failure "$test_name" "T22-18: 세션 필터가 옛 '> li' 패턴으로 되돌아감"
+    return 1
+  fi
+  if ! grep -q '#dzs-1:checked ~ #dz-log .entry:not(\[data-session="1"\])' "$dashboard_command_file"; then
+    record_failure "$test_name" "T22-18: 세션별 .entry 필터 규칙 미발견"
     return 1
   fi
 
