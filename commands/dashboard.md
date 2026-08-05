@@ -54,13 +54,18 @@ argument-hint: "init \"<제목>\" \"<단계1|단계2|...>\" | step <n> <done|act
 | `#dz-progress-bar` | inline `style="width:N%"` | 완료 단계 / 전체 단계 |
 | `#dz-progress-pct` | 텍스트 | `3/6 · 50%` |
 | `#dz-step-{n}` | `class` 속성 + 자식 `.chip` 텍스트 | `done`\|`active`\|`wait` / `완료`\|`진행중`\|`대기` |
-| `#dz-log` | 자식 `<li>` **prepend** | 로그 항목 (최신이 위) |
+| `#dz-log` | 자식 `<li>` **prepend** + `data-current-session` 속성 | 로그 항목(최신이 위) / 현재 세션 번호 |
 | `#dz-updated` | 텍스트 | 갱신 시각 |
+
+`data-current-session` 은 새 행이 아니라 `#dz-log` 행의 하위 개념이다 — `log` 절차가
+어차피 매번 grep 하는 `#dz-log` 여는 태그에 얹혀 있어 탐색 단계를 늘리지 않는다
+(`<ul class="log" id="dz-log" data-current-session="2">`). `init` 이 세션 시작 때 갱신하고
+`log` 는 읽기만 한다. 속성이 없는 파일(세션 탭 도입 이전에 만들어진 대시보드)은 `1` 로 간주한다.
 
 ### 로그 항목 스키마
 
 ```html
-<li class="entry" data-kind="review" data-seq="12">
+<li class="entry" data-kind="review" data-seq="12" data-session="2">
   <details open>
     <summary>
       <span class="time">17:07</span>
@@ -76,6 +81,8 @@ argument-hint: "init \"<제목>\" \"<단계1|단계2|...>\" | step <n> <done|act
 - `data-seq` — 1부터 증가하는 정수. **필터·펼침 제어의 유일 키**이자 Edit 문자열 매칭의 앵커
 - `data-kind` — `impl` \| `review` \| `commit` \| `note` (필터 대상). `note` 는 `/dashboard log` 가 생성하지
   않는(수동 편집 전용) 예비 값이다.
+- `data-session` — 이 항목이 속한 세션 번호(**세션 탭 필터 대상**). `log` 절차가 `#dz-log` 의
+  `data-current-session` 값을 **그대로 복사**해 넣는다. 세거나 추론하는 판단이 개입하지 않는다.
 - `.badge.round` — 회차(`R1`, `R2`…). `--round` 인자가 없는 항목은 생략한다.
 - `log` 하위 명령의 결과 유형과 `data-kind`·배지의 대응:
 
@@ -92,15 +99,8 @@ argument-hint: "init \"<제목>\" \"<단계1|단계2|...>\" | step <n> <done|act
 
 1. `.claude/dashboard.html` 존재 여부를 확인한다.
    - **이미 존재하면**: 제목·단계 목록 등은 덮어쓰지 않는다(다시 채우면 기존
-     진행 상태와 충돌한다). 대신 세션 경계를 표시하기 위해 `#dz-log` 여는
-     태그(`<ul class="log" id="dz-log">`) 바로 뒤에 세션 구분 항목을 prepend 한다:
-     ```html
-     <li class="session-head" data-session="{N}">세션 {N} 시작 · {HH:MM}</li>
-     ```
-     `{N}` 은 기존 `.session-head` 항목의 `data-session` 값 중 최댓값 + 1 이다
-     (하나도 없으면 이번이 두 번째 세션이라는 뜻이므로 `{N}=2` — 그 이전 로그
-     항목들은 암묵적으로 세션 1에 속한 것으로 간주한다). `{HH:MM}` 은 현재 시각.
-     이후 사용자에게 "기존 대시보드를 이어서 사용합니다"라는 취지로 안내하며
+     진행 상태와 충돌한다). 대신 아래 a~d 를 수행해 세션 경계와 세션 탭만 갱신하고,
+     "기존 대시보드를 이어서 사용합니다"라는 취지로 안내하며
      `file://<현재 작업 디렉토리 절대경로>/.claude/dashboard.html` 을 출력한 뒤
      절차를 **여기서 종료**한다(2번 이하 단계를 실행하지 않는다).
      > **한계**: 이 가드는 "완전히 새 작업"과 "기존 미완료 작업 재개"를 구분하지
@@ -108,9 +108,27 @@ argument-hint: "init \"<제목>\" \"<단계1|단계2|...>\" | step <n> <done|act
      > 작업의 대시보드 파일이 남아 있으면, 엉뚱한 옛 대시보드를 계속 보여준다.
      > 새 작업을 시작할 때는 기존 `.claude/dashboard.html` 을 먼저 지우거나
      > 다시 만들지 사용자에게 확인하라.
+
+     a. **세션 번호 확정**: Bash 로 `grep -n 'id="dz-log"' .claude/dashboard.html` 을 실행해
+        `#dz-log` 여는 태그의 줄 번호와 전문을 얻는다. 그 태그의 `data-current-session="{P}"`
+        값이 직전 세션 번호다. 이번 세션 번호는 `N = P + 1`.
+        속성이 아예 없으면 세션 탭 도입 이전에 만들어진 파일이므로, 그 줄부터 `limit=60` 으로
+        Read 해 보이는 `.session-head` 의 `data-session` 최댓값을 `P` 로 삼는다(하나도 없으면 `P=1`).
+
+     b. **현재 세션 번호 갱신**: `#dz-log` 여는 태그를 `data-current-session="{N}"` 으로 치환한다.
+        속성이 없었다면 `id="dz-log"` 바로 뒤에 새로 넣는다. Edit 의 `old_string` 은 a 에서 읽은
+        태그 전문을 그대로 쓴다(태그 내용이 세션마다 달라지므로 고정 문자열로 매칭하지 않는다).
+
+     c. **세션 구분 항목 prepend**: 그 태그 바로 뒤에 아래를 삽입한다. `{HH:MM}` 은 현재 시각.
+        ```html
+        <li class="session-head" data-session="{N}">세션 {N} 시작 · {HH:MM}</li>
+        ```
+
+     d. **세션 탭 갱신**: 아래 [세션 탭 갱신](#세션-탭-갱신--init-1-d-의-하위-절차) 절차를 수행한다.
+
    - **존재하지 않으면**: `.claude/` 디렉토리가 없으면 생성한 뒤, 아래
      [템플릿 전문](#템플릿-전문)을 그대로 `.claude/dashboard.html` 로 Write하고
-     2번부터 계속 진행한다.
+     2번부터 계속 진행한다(템플릿은 `data-current-session="1"`, 탭 바 없음).
 2. `#dz-title` 텍스트를 `<제목>` 인자로 치환한다.
 3. `#dz-subtitle` 텍스트를 `"<단계1> → <단계2> → ... · <작업 유형>"` 형식으로 치환한다.
    작업 유형(예: "전체 경로")은 호출한 오케스트레이터가 이미 알고 있는 값을 채운다.
@@ -122,9 +140,42 @@ argument-hint: "init \"<제목>\" \"<단계1|단계2|...>\" | step <n> <done|act
    ```
 5. `#dz-progress-bar` 의 `style` 을 `width:0%` 로, `#dz-progress-pct` 텍스트를 `0/N · 0%` 로 치환한다.
 6. `#dz-updated` 를 현재 시각(예: `2026-08-04 17:02`)으로 치환한다.
-7. `#dz-log` 는 템플릿 그대로 빈 목록(`<ul class="log" id="dz-log"></ul>`)으로 둔다 — 아직 로그가 없다.
+7. `#dz-log` 는 템플릿 그대로 빈 목록(`<ul class="log" id="dz-log" data-current-session="1"></ul>`)으로
+   둔다 — 아직 로그가 없다.
 8. 사용자에게 `file://<현재 작업 디렉토리 절대경로>/.claude/dashboard.html` 을 출력해
    브라우저로 열도록 안내한다.
+
+#### 세션 탭 갱신 — `init` 1-d 의 하위 절차
+
+`grep -c 'dzs-all' .claude/dashboard.html` 로 탭 바 존재 여부를 판정한다.
+
+**결과가 0 (탭 바 없음 — 이 대시보드에 세션이 둘이 된 첫 순간)**
+
+1. `<input type="radio" name="dzf" id="dzf-all" class="dzf" checked>` 줄 **앞**에
+   아래를 삽입한다. `모든 세션` 이 기본 선택이고, 세션 탭은 **큰 번호가 왼쪽**이다
+   (`{N}`, `{N-1}`, …, `1` 순으로 나열. 보통 `N=2` 이므로 탭 3개).
+   ```html
+   <input type="radio" name="dzs" id="dzs-all" class="dzs" checked><label for="dzs-all">모든 세션</label>
+   <input type="radio" name="dzs" id="dzs-{N}" class="dzs"><label for="dzs-{N}">세션 {N}</label>
+   <input type="radio" name="dzs" id="dzs-1" class="dzs"><label for="dzs-1">세션 1</label>
+   ```
+2. `<style>` 안의 `/* DZ:SESSION-RULES */` 마커 줄 **바로 뒤**에 세션 `1`~`{N}` 각각에 대해
+   아래 규칙을 한 줄씩 추가한다.
+   ```css
+   #dzs-{n}:checked ~ #dz-log > li:not([data-session="{n}"]){display:none}
+   ```
+
+**결과가 1 이상 (탭 바 있음)**
+
+1. `<label for="dzs-all">모든 세션</label>` **바로 뒤**에 이번 세션 탭 1개를 삽입한다.
+   ```html
+   <input type="radio" name="dzs" id="dzs-{N}" class="dzs"><label for="dzs-{N}">세션 {N}</label>
+   ```
+2. `/* DZ:SESSION-RULES */` 마커 바로 뒤에 이번 세션 규칙 1줄을 추가한다.
+
+**새 탭 라디오에 `checked` 를 넣지 않는다.** 기본 선택은 언제나 `#dzs-all` 이다. 새 탭에도
+`checked` 를 달면 같은 그룹에 `checked` 가 둘이 되어 문서 순서상 뒤엣것이 이기고, 페이지가
+새로고침될 때마다 사용자가 고른 탭이 무시된다.
 
 ## `step` — 메인 세션이 수행할 절차 (Edit 2~3회)
 
@@ -137,8 +188,12 @@ argument-hint: "init \"<제목>\" \"<단계1|단계2|...>\" | step <n> <done|act
 ## `log` — 메인 세션이 수행할 절차 (Bash grep 1회 + Read 1~2회 + Edit 2회, 결정적)
 
 0. **최신 항목만 확인한다(파일 전체를 Read하지 않는다)**:
-   a. Bash 로 `grep -n '<ul class="log" id="dz-log">' .claude/dashboard.html` 를 실행해
-      로그 시작 줄 번호 `L` 을 찾는다.
+   a. Bash 로 `grep -n 'id="dz-log"' .claude/dashboard.html` 를 실행해 로그 시작 줄 번호 `L` 과
+      그 줄의 전문을 얻는다. `id="dz-log"` 는 문서 내 유일 문자열이다(`<style>` 과 헤더 주석의
+      `#dz-log` 는 `id=` 형태가 아니라 매칭되지 않는다). 이 줄의 `data-current-session="{C}"`
+      값이 **이번 항목이 속할 세션 번호**다(속성이 없으면 `C=1`). 태그 전문이 세션마다
+      달라지므로 grep 은 반드시 이 부분일치 패턴을 쓴다 — 완전일치는 속성이 붙는 순간
+      영원히 매칭에 실패한다.
    b. `Read` 도구로 `offset=L, limit=60` 만 읽어 최신 항목 몇 개(보통 3~4개)의 `data-seq` 를
       확인한다. 로그는 항상 최신순으로 prepend 되므로, 이 창(window) 안에서 처음 만나는
       `data-seq` 가 곧 전체 로그의 최댓값 `S` 다(로그가 비어 있으면 `S=0`).
@@ -153,8 +208,10 @@ argument-hint: "init \"<제목>\" \"<단계1|단계2|...>\" | step <n> <done|act
    `<details open>` 를 `<details>` 로 치환한다(연 상태 해제). 해당 seq 가 없으면(로그 3건 미만)
    이 단계를 생략한다.
    → 결과적으로 **항상 최신 3건만 펼쳐진다.**
-2. **prepend**: `<ul class="log" id="dz-log">` 여는 태그 바로 뒤에 `data-seq="S+1"` 인 새
-   `<li>` 를 위 [로그 항목 스키마](#로그-항목-스키마)대로 삽입한다.
+2. **prepend**: 0-a 에서 읽은 `#dz-log` 여는 태그 **전문**을 `old_string` 앵커로 삼아 그 바로
+   뒤에 `data-seq="S+1"`, `data-session="C"` 인 새 `<li>` 를 위
+   [로그 항목 스키마](#로그-항목-스키마)대로 삽입한다(태그 텍스트가 세션마다 다르므로
+   고정 문자열을 앵커로 쓰지 않는다).
    - `data-kind` 는 위 대응표를 따른다.
    - `--round N` 이 주어졌으면 `<span class="badge round">R{N}</span>` 을 결과 배지 앞에 넣는다.
      없으면 이 배지를 생략한다.
@@ -184,33 +241,89 @@ argument-hint: "init \"<제목>\" \"<단계1|단계2|...>\" | step <n> <done|act
 
 ### 필터 — JS 없이 CSS 로
 
-라디오 3개를 `#dz-log` 의 **앞 형제**(같은 부모의 직전 형제들)로 둔다. 래퍼 `div` 로 감싸면
-`~` 결합자가 `#dz-log` 에 닿지 않으므로 감싸지 않는다.
+라디오를 `#dz-log` 의 **앞 형제**(같은 부모의 직전 형제들)로 두고 `~` 결합자로 제어한다.
+래퍼 `div` 로 감싸면 `~` 결합자가 `#dz-log` 에 닿지 않으므로 감싸지 않는다. 두 개의
+독립된 라디오 그룹이 있다:
+
+| 그룹 | `name` | 항목 | 생성 시점 |
+|------|--------|------|----------|
+| 유형 필터 | `dzf` | 전체 / 구현 / 검수 | 템플릿에 고정 (3개) |
+| 세션 탭 | `dzs` | 모든 세션 / 세션 N … 세션 1 | 두 번째 세션부터 `init` 이 동적 생성 |
 
 ```html
+<div class="log-title">작업 추적</div>
+<!-- 세션 탭: init 이 두 번째 세션 시작 시 이 자리에 만든다 (첫 세션에는 없음) -->
+<input type="radio" name="dzs" id="dzs-all" class="dzs" checked><label for="dzs-all">모든 세션</label>
+<input type="radio" name="dzs" id="dzs-2" class="dzs"><label for="dzs-2">세션 2</label>
+<input type="radio" name="dzs" id="dzs-1" class="dzs"><label for="dzs-1">세션 1</label>
 <input type="radio" name="dzf" id="dzf-all" class="dzf" checked><label for="dzf-all">전체</label>
 <input type="radio" name="dzf" id="dzf-impl" class="dzf"><label for="dzf-impl">구현</label>
 <input type="radio" name="dzf" id="dzf-review" class="dzf"><label for="dzf-review">검수</label>
-<ul class="log" id="dz-log">…</ul>
+<ul class="log" id="dz-log" data-current-session="2">…</ul>
 ```
 
 ```css
+/* 유형 필터 — 템플릿 고정 */
 .dzf{position:absolute;opacity:0;pointer-events:none}
 #dzf-impl:checked   ~ #dz-log .entry:not([data-kind="impl"]){display:none}
 #dzf-review:checked ~ #dz-log .entry:not([data-kind="review"]){display:none}
+
+/* 세션 탭 — 스타일은 고정, 규칙은 세션마다 1줄씩 추가 */
+.dzs{position:absolute;opacity:0;pointer-events:none}
+label[for^="dzs-"]{display:inline-block;font-size:12px;font-weight:700;padding:5px 13px;margin:0 4px 6px 0;border-radius:8px 8px 0 0;color:var(--muted);cursor:pointer;border-bottom:2px solid transparent}
+.dzs:checked + label{color:var(--navy);background:var(--soft);border-bottom-color:var(--navy)}
+/* DZ:SESSION-RULES — 세션 탭 필터 규칙. init 이 세션마다 아래에 1줄씩 추가한다 */
+#dzs-1:checked ~ #dz-log > li:not([data-session="1"]){display:none}
+#dzs-2:checked ~ #dz-log > li:not([data-session="2"]){display:none}
 ```
 
 라디오는 시각적으로 숨기되 포커스는 유지한다(`display:none` 이 아니라 `opacity:0`).
 `:has()` 같은 최신 셀렉터에 의존하지 않으므로 지원 범위가 넓다.
+유형 필터는 알약(pill), 세션 탭은 밑줄 탭으로 형태를 달리해 두 줄의 역할을 구분한다.
 
 원본(`~/Desktop/dashboard.html`)의 골격·`:root` 색 토큰·단계 리스트 스타일은 그대로 유지한다.
 
+#### 이 구조가 성립하는 이유
+
+- **`.entry` 가 아니라 `> li` 를 대상으로 한다.** 세션 탭 규칙만 `#dz-log > li` 를 쓰는 이유는,
+  세션 탭에서는 *다른 세션의 구분선까지* 사라져야 하기 때문이다. `.session-head` 도
+  `data-session` 을 이미 갖고 있어 같은 규칙 하나로 정확히 처리된다 — 선택된 세션의
+  구분선만 남는다.
+- **모든 규칙은 `display:none` 만 지정한다.** 되돌리는 규칙(`display:block` 등)을 쓰지
+  않으므로 두 그룹의 규칙이 서로의 특이도(specificity)를 다투지 않고, "둘 다 통과해야
+  보인다"는 **AND 결합이 저절로 성립**한다. 이 불변식을 깨는 규칙을 추가하지 않는다.
+- **래퍼 `div` 금지 제약은 세션 탭에도 그대로 적용된다.** 라디오·라벨·`#dz-log` 는 모두
+  `.card` 의 직계 형제여야 한다. `display:contents` 로도 우회할 수 없다 — 형제 결합자는
+  박스 트리가 아니라 DOM 트리로 판정하기 때문이다.
+- 규칙 증가량은 세션당 정확히 1줄이다(`#dz-step-{n}` 처럼 "개수만큼 생성" 하는 기존
+  패턴과 동일).
+
+#### 탭이 많아지면
+
+`label[for^="dzs-"]` 은 `inline-block` 이라 카드 폭을 넘으면 **자연히 줄바꿈**된다. 이대로 둔다.
+
+- 가로 스크롤 컨테이너는 래퍼 `div` 가 필요한데 그러면 `~` 결합자가 끊겨 필터 전체가 깨진다.
+  즉 **줄바꿈 외의 선택지가 애초에 없다.**
+- 현실적 상한도 낮다. 대시보드는 기능 단위로 만들고 끝나면 지우는 파일이라 세션 수가
+  두 자리로 가는 경우가 드물고, 그 지경이면 대시보드를 새로 만드는 편이 맞다.
+- 그러므로 접기·"더 보기"·상한 같은 장치는 만들지 않는다(YAGNI).
+
 ### 세션 구분
 
-두 번째 이후 세션이 기존 대시보드를 이어서 쓸 때 `init` 절차가 삽입하는
-`<li class="session-head" data-session="N">` 로 세션 경계를 표시한다. `.entry`
-가 아니므로 위 필터 CSS 의 영향을 받지 않아 어떤 필터에서도 항상 보인다.
-개별 로그 항목에는 세션 태그를 달지 않는다 — 구분선만으로 충분하다(YAGNI).
+`init` 이 삽입하는 `<li class="session-head" data-session="N">` 로 세션 경계를 표시한다.
+`모든 세션` 탭에서는 세션 경계선 역할을, 특정 세션 탭에서는 그 세션의 시작 시각 캡션
+역할을 한다.
+
+- `.entry` 가 아니므로 **유형 필터**(`.entry:not([data-kind=...])`)의 영향을 받지 않는다 —
+  어떤 유형 필터 상태에서도 항상 보인다.
+- **세션 탭 필터**(`#dz-log > li:not([data-session="N"])`)의 영향은 받는다. 즉 세션 N 탭
+  에서는 다른 세션의 구분선이 사라지고 세션 N 자신의 구분선만 남아, 그 탭의 시작 시각
+  캡션 역할을 한다(로그가 최신순이므로 목록 맨 아래에 위치한다).
+- 세션 1 에는 구분선이 없다(첫 세션의 시작 시각을 알 수 없다). 세션 1 탭은 캡션 없이
+  항목만 보인다.
+- 세션 탭 도입 이전에 만들어진 대시보드의 옛 로그 항목에는 `data-session` 이 없어
+  **어떤 세션 탭에서도 보이지 않는다**(`모든 세션` 탭에서만 보인다). `.claude/dashboard.html`
+  은 임시 산출물이라 이 정도 열화는 수용한다.
 
 ---
 
@@ -231,7 +344,7 @@ DZ:DASHBOARD 갱신 맵 (동적 영역 — 셀렉터 기반 정밀 치환, comma
   #dz-progress-bar      : inline style width:N%
   #dz-progress-pct      : 진행률 텍스트 (예: 3/6 · 50%)
   #dz-step-{n}          : 각 단계 li — class(done|active|wait) + .chip 텍스트(완료|진행중|대기)
-  #dz-log               : 작업 추적 ul — li data-seq 앵커로 prepend
+  #dz-log               : 작업 추적 ul — li data-seq 앵커로 prepend / data-current-session 속성(현재 세션 번호)
   #dz-updated           : 갱신 시각 텍스트
 정적(불가침): 골격 · <style> · 제목 · 하단 스크립트
 -->
@@ -268,6 +381,10 @@ DZ:DASHBOARD 갱신 맵 (동적 영역 — 셀렉터 기반 정밀 치환, comma
   .dzf:checked + label{background:var(--blue);color:#fff;border-color:var(--blue)}
   #dzf-impl:checked   ~ #dz-log .entry:not([data-kind="impl"]){display:none}
   #dzf-review:checked ~ #dz-log .entry:not([data-kind="review"]){display:none}
+  .dzs{position:absolute;opacity:0;pointer-events:none}
+  label[for^="dzs-"]{display:inline-block;font-size:12px;font-weight:700;padding:5px 13px;margin:0 4px 6px 0;border-radius:8px 8px 0 0;color:var(--muted);cursor:pointer;border-bottom:2px solid transparent}
+  .dzs:checked + label{color:var(--navy);background:var(--soft);border-bottom-color:var(--navy)}
+  /* DZ:SESSION-RULES — 세션 탭 필터 규칙. init 이 세션마다 아래에 1줄씩 추가한다 */
   ul.log{list-style:none;margin:6px 0 0;padding:0;font-size:13px;color:#4B5A6D}
   .entry{border-bottom:1px solid var(--soft);padding:8px 4px}
   .entry:last-child{border-bottom:0}
@@ -279,6 +396,7 @@ DZ:DASHBOARD 갱신 맵 (동적 영역 — 셀렉터 기반 정밀 치환, comma
   .entry .detail{margin:6px 0 0 48px;font-size:12.5px;color:var(--muted);white-space:pre-wrap}
   .session-head{margin:14px 0 6px;padding:0 4px 6px;border-bottom:2px solid var(--line);font-size:11px;font-weight:800;letter-spacing:.3px;color:var(--navy)}
   .session-head:first-child{margin-top:0}
+  .log-title{font-size:13px;font-weight:700;color:var(--muted);margin:0 0 10px}
   .foot{font-size:12px;color:var(--muted);text-align:right}
 </style>
 </head>
@@ -293,11 +411,11 @@ DZ:DASHBOARD 갱신 맵 (동적 영역 — 셀렉터 기반 정밀 치환, comma
     </ol>
   </div>
   <div class="card">
-    <b style="font-size:13px;color:var(--muted)">작업 추적</b>
+    <div class="log-title">작업 추적</div>
     <input type="radio" name="dzf" id="dzf-all" class="dzf" checked><label for="dzf-all">전체</label>
     <input type="radio" name="dzf" id="dzf-impl" class="dzf"><label for="dzf-impl">구현</label>
     <input type="radio" name="dzf" id="dzf-review" class="dzf"><label for="dzf-review">검수</label>
-    <ul class="log" id="dz-log"></ul>
+    <ul class="log" id="dz-log" data-current-session="1"></ul>
   </div>
   <div class="foot" id="dz-updated">갱신: -</div>
 </div>

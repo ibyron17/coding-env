@@ -996,10 +996,10 @@ test_manifest_fields_complete() {
 }
 
 # T22: dashboard 템플릿 무결성 — LLM 지시문 방식이라 런타임 Edit 결과는 검증 대상이 아니고,
-# 설치·문서 정합성만 자동 검증한다 (하위 검증 T22-1~T22-9).
+# 설치·문서 정합성만 자동 검증한다 (하위 검증 T22-1~T22-15).
 test_dashboard_template_integrity() {
   local test_name="T22"
-  local test_desc="dashboard 템플릿 무결성 (T22-1~T22-9)"
+  local test_desc="dashboard 템플릿 무결성 (T22-1~T22-15)"
   log_test_name "$test_name" "$test_desc"
 
   local sandbox
@@ -1083,6 +1083,54 @@ test_dashboard_template_integrity() {
   # (가변 비용 회귀 방지 — 다시 "파일 전체를 Read"로 되돌아가지 않았는지 확인)
   if ! grep -q "파일 전체를 Read하지 않는다" "$dashboard_command_file"; then
     record_failure "$test_name" "T22-9: log 절차의 windowed-read 최적화 문구 미발견"
+    return 1
+  fi
+
+  # T22-10: 작업 추적 타이틀이 인라인 <b> 가 아니라 block 요소로 분리됐는지 확인
+  # (필터 라디오와 같은 줄에 붙어 보이던 레이아웃 버그의 회귀 방지)
+  if ! grep -q 'class="log-title"' "$dashboard_command_file"; then
+    record_failure "$test_name" "T22-10: log-title 블록 요소 미발견"
+    return 1
+  fi
+
+  # T22-11: 템플릿의 #dz-log 여는 태그에 현재 세션 번호가 박혀 있음
+  if ! grep -q 'id="dz-log" data-current-session="1"' "$dashboard_command_file"; then
+    record_failure "$test_name" "T22-11: #dz-log 의 data-current-session=\"1\" 기본값 미발견"
+    return 1
+  fi
+
+  # T22-12: log 절차가 깨진 완전일치 grep 으로 퇴행하지 않았는지 확인 (이번 라운드에서 가장 중요한 테스트).
+  # #dz-log 여는 태그가 data-current-session 을 갖는 순간 완전일치는 영원히 매칭에 실패하므로
+  # 옛 패턴의 부활과 새 패턴의 누락을 양방향으로 막는다.
+  if grep -q "grep -n '<ul class=\"log\" id=\"dz-log\">'" "$dashboard_command_file"; then
+    record_failure "$test_name" "T22-12: 깨진 완전일치 grep 패턴이 여전히 남아있음"
+    return 1
+  fi
+  if ! grep -q "grep -n 'id=\"dz-log\"'" "$dashboard_command_file"; then
+    record_failure "$test_name" "T22-12: 부분일치 grep 패턴 미발견"
+    return 1
+  fi
+
+  # T22-13: 로그 항목 스키마에 data-session 이 포함됨
+  if ! grep -q 'data-seq="12" data-session="2"' "$dashboard_command_file"; then
+    record_failure "$test_name" "T22-13: 로그 항목 스키마의 data-session 미발견"
+    return 1
+  fi
+
+  # T22-14: 세션 탭 CSS 골격과 삽입 마커가 템플릿에 존재
+  if ! grep -q 'label\[for\^="dzs-"\]' "$dashboard_command_file"; then
+    record_failure "$test_name" "T22-14: 세션 탭 라벨 CSS 골격 미발견"
+    return 1
+  fi
+  if ! grep -q 'DZ:SESSION-RULES' "$dashboard_command_file"; then
+    record_failure "$test_name" "T22-14: DZ:SESSION-RULES 삽입 마커 미발견"
+    return 1
+  fi
+
+  # T22-15: 새 탭에 checked 를 넣지 말라는 문구가 절차에 존재
+  # (checked 중복으로 사용자의 탭 선택이 매 새로고침마다 리셋되는 버그 방지)
+  if ! grep -q '새 탭 라디오에 `checked` 를 넣지 않는다' "$dashboard_command_file"; then
+    record_failure "$test_name" "T22-15: 새 탭 checked 금지 문구 미발견"
     return 1
   fi
 
