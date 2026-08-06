@@ -138,6 +138,9 @@ UpdateMode
 - `reload` 모드의 코드 경로는 **현재 스크립트와 의미상 동일**해야 한다. 플로팅 버튼은 비활성이다.
 - 플로팅 가능 조건 = `mode === "poll"` **AND** `'documentPictureInPicture' in window`.
   둘 중 하나라도 아니면 버튼은 `disabled` 이고 `#dz-pip-hint` 가 사유 한 줄을 보여준다.
+- 창 높이는 고정값이 아니다. 압축 뷰는 작업 추적 카드가 빠져 620px 요청 높이보다 콘텐츠가
+  짧으므로, 여는 시점과 매 폴링 동기화(`apply()`) 끝에 `resizePipToFit()` 가 `.wrap` 의 실제
+  높이(+24px 여백)로 `resizeTo()` 한다. `PIP_MIN_HEIGHT`~`PIP_MAX_HEIGHT`(200~720) 로 클램프한다.
 
 ### 정적 요소 추가 (동적 셀렉터 표에 넣지 않는다)
 
@@ -828,6 +831,7 @@ DZ:DASHBOARD 갱신 맵 (동적 영역 — 셀렉터 기반 정밀 치환, comma
   var POLL_INTERVAL_MS = 5000;          // 로컬 파일 폴링 주기
   var FAILURE_LIMIT = 3;                // 연속 실패 이 횟수부터 사용자에게 알린다
   var PIP_WIDTH = 420, PIP_HEIGHT = 620;
+  var PIP_MIN_HEIGHT = 200, PIP_MAX_HEIGHT = 720;
 
   var wrap = document.querySelector('.wrap');
   var pipButton = document.getElementById('dz-pip-btn');
@@ -876,6 +880,14 @@ DZ:DASHBOARD 갱신 맵 (동적 영역 — 셀렉터 기반 정밀 치환, comma
     return fresh.querySelectorAll('input[name="dzs"]').length
         !== wrap.querySelectorAll('input[name="dzs"]').length;
   }
+  // 압축 뷰는 작업 추적 카드가 빠져 실제 콘텐츠가 620px 보다 훨씬 짧다 — 열 때 한 번,
+  // 이후 콘텐츠 높이가 바뀔 때마다(단계 상세 추가 등) 다시 맞춘다.
+  function resizePipToFit(){
+    if(!pipWindow) return;
+    var h = Math.ceil(wrap.getBoundingClientRect().height) + 24;
+    try{ pipWindow.resizeTo(PIP_WIDTH, Math.max(PIP_MIN_HEIGHT, Math.min(PIP_MAX_HEIGHT, h))); }
+    catch(e){ /* 리사이즈 불가 환경이어도 폴링·동기화는 계속돼야 한다 */ }
+  }
   function apply(html){
     if(html === lastHtml) return;
     lastHtml = html;
@@ -893,6 +905,7 @@ DZ:DASHBOARD 갱신 맵 (동적 영역 — 셀렉터 기반 정밀 치환, comma
     syncText(fresh,'dz-title'); syncText(fresh,'dz-subtitle');
     syncText(fresh,'dz-progress-pct'); syncText(fresh,'dz-updated');
     syncProgressBar(fresh); syncVisualization(fresh); syncLog(fresh);
+    resizePipToFit();
   }
   function poll(){
     if(busy) return;
@@ -935,6 +948,8 @@ DZ:DASHBOARD 갱신 맵 (동적 영역 — 셀렉터 기반 정밀 치환, comma
         pipDocument.body.appendChild(wrap);
         // 숨은 탭의 타이머 스로틀링(최대 1분)을 보완한다: 창에 커서를 올리면 즉시 갱신.
         pipDocument.body.addEventListener('pointerenter', poll);
+        // 이동 직후엔 새 문서가 아직 레이아웃을 못 잡았을 수 있어 프레임을 한 번 넘기고 잰다.
+        requestAnimationFrame(function(){ requestAnimationFrame(resizePipToFit); });
         pipButton.textContent = '플로팅 닫기';
         reasonHint = '';
         setHint('플로팅 창에서 보는 중입니다. 창을 닫으면 여기로 돌아옵니다.');

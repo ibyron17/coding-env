@@ -996,10 +996,10 @@ test_manifest_fields_complete() {
 }
 
 # T22: dashboard 템플릿 무결성 — LLM 지시문 방식이라 런타임 Edit 결과는 검증 대상이 아니고,
-# 설치·문서 정합성만 자동 검증한다 (하위 검증 T22-1~T22-46).
+# 설치·문서 정합성만 자동 검증한다 (하위 검증 T22-1~T22-47).
 test_dashboard_template_integrity() {
   local test_name="T22"
-  local test_desc="dashboard 템플릿 무결성 (T22-1~T22-46)"
+  local test_desc="dashboard 템플릿 무결성 (T22-1~T22-47)"
   log_test_name "$test_name" "$test_desc"
 
   local sandbox
@@ -1402,6 +1402,21 @@ test_dashboard_template_integrity() {
   fi
   if ! grep -q '줄바꿈을 넣지 않는다' "$dashboard_command_file"; then
     record_failure "$test_name" "T22-46: '줄바꿈을 넣지 않는다' 문구 미발견"
+    return 1
+  fi
+
+  # T22-47: PiP 창 높이 콘텐츠 맞춤 — 고정 620px 요청 후 리사이즈를 안 하면 압축 뷰에서
+  # 하단에 빈 여백이 남는 회귀(실제 사용자 리포트)가 재발한다.
+  if ! grep -qF 'function resizePipToFit(){' "$dashboard_command_file"; then
+    record_failure "$test_name" "T22-47: function resizePipToFit 미발견"
+    return 1
+  fi
+  if ! grep -qF 'pipWindow.resizeTo(PIP_WIDTH,' "$dashboard_command_file"; then
+    record_failure "$test_name" "T22-47: resizeTo 호출 미발견"
+    return 1
+  fi
+  if ! grep -qF 'resizePipToFit();' "$dashboard_command_file"; then
+    record_failure "$test_name" "T22-47: apply() 안에서 resizePipToFit 호출 미발견"
     return 1
   fi
 
