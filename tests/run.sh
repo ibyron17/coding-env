@@ -996,10 +996,10 @@ test_manifest_fields_complete() {
 }
 
 # T22: dashboard 템플릿 무결성 — LLM 지시문 방식이라 런타임 Edit 결과는 검증 대상이 아니고,
-# 설치·문서 정합성만 자동 검증한다 (하위 검증 T22-1~T22-47).
+# 설치·문서 정합성만 자동 검증한다 (하위 검증 T22-1~T22-58).
 test_dashboard_template_integrity() {
   local test_name="T22"
-  local test_desc="dashboard 템플릿 무결성 (T22-1~T22-47)"
+  local test_desc="dashboard 템플릿 무결성 (T22-1~T22-58)"
   log_test_name "$test_name" "$test_desc"
 
   local sandbox
@@ -1417,6 +1417,106 @@ test_dashboard_template_integrity() {
   fi
   if ! grep -qF 'resizePipToFit();' "$dashboard_command_file"; then
     record_failure "$test_name" "T22-47: apply() 안에서 resizePipToFit 호출 미발견"
+    return 1
+  fi
+
+  # T22-48: 구현 세부 작업 슬롯 셀렉터 4종 존재 — 슬롯 자체의 유실 방지
+  if ! grep -qF 'id="dz-impl-card"' "$dashboard_command_file"; then
+    record_failure "$test_name" "T22-48: id=\"dz-impl-card\" 미발견"
+    return 1
+  fi
+  if ! grep -qF 'id="dz-impl-tasks"' "$dashboard_command_file"; then
+    record_failure "$test_name" "T22-48: id=\"dz-impl-tasks\" 미발견"
+    return 1
+  fi
+  if ! grep -qF 'id="dz-impl-count"' "$dashboard_command_file"; then
+    record_failure "$test_name" "T22-48: id=\"dz-impl-count\" 미발견"
+    return 1
+  fi
+  if ! grep -qF 'id="dz-impl-{k}"' "$dashboard_command_file"; then
+    record_failure "$test_name" "T22-48: id=\"dz-impl-{k}\" 미발견"
+    return 1
+  fi
+
+  # T22-49: 자동 숨김 규칙 존재 — 빈 카드가 모든 세션에 노출되는 회귀 방지(확정 사항 3 위반)
+  if ! grep -qF '#dz-impl-card:not(:has(#dz-impl-tasks li)){display:none}' "$dashboard_command_file"; then
+    record_failure "$test_name" "T22-49: 구현 세부 작업 카드 자동 숨김 규칙 미발견"
+    return 1
+  fi
+
+  # T22-50: 레이아웃 CSS 재사용 — 중복 정의가 생기면 매크로 목록과 세부 목록이 갈라진다(역방향 assertion).
+  if ! grep -qF '<ol class="steps" id="dz-impl-tasks">' "$dashboard_command_file"; then
+    record_failure "$test_name" "T22-50: <ol class=\"steps\" id=\"dz-impl-tasks\"> 미발견"
+    return 1
+  fi
+  if grep -q 'ol\.impl-tasks' "$dashboard_command_file"; then
+    record_failure "$test_name" "T22-50: ol.impl-tasks 레이아웃 규칙이 중복 정의됨"
+    return 1
+  fi
+
+  # T22-51: 폴링 동기화 추가 — 카드가 동기화에서 빠지면 http://·PiP 에서 영구히 stale 된다(설계 결정 5).
+  if ! grep -qF 'function syncImplCard(fresh){' "$dashboard_command_file"; then
+    record_failure "$test_name" "T22-51: function syncImplCard(fresh){ 미발견"
+    return 1
+  fi
+  if ! grep -qF 'syncImplCard(fresh);' "$dashboard_command_file"; then
+    record_failure "$test_name" "T22-51: apply() 안에서 syncImplCard 호출 미발견"
+    return 1
+  fi
+
+  # T22-52: CSS 로만 숨김 — 스크립트가 impl 카드를 DOM 에서 떼어내거나 인라인 스타일로 숨기면
+  # 폴링의 outerHTML 대입 대상이 사라져 카드가 영구히 되살아나지 않는다(역방향 assertion).
+  if grep -n 'dz-impl-card' "$dashboard_command_file" | grep -qE 'remove\(|style\.display'; then
+    record_failure "$test_name" "T22-52: 스크립트가 dz-impl-card 를 DOM/인라인 스타일로 조작함"
+    return 1
+  fi
+
+  # T22-53: 기존 시각화 동기화 비퇴화 — 새 동기화를 넣으며 기존 함수를 개조·파손하지 않았는지 확인
+  if ! grep -qF "querySelector('#dz-steps,#dz-matrix')" "$dashboard_command_file"; then
+    record_failure "$test_name" "T22-53: querySelector('#dz-steps,#dz-matrix') 미발견"
+    return 1
+  fi
+
+  # T22-54: 매크로 진행률 비침해 문구 — 세부 완료가 매크로 분모에 섞여 step 전이 산술이 무너지는 회귀 방지(불변식 6)
+  if ! grep -q '구현 세부 작업의 상태 변화는 매크로 진행률을 바꾸지 않는다' "$dashboard_command_file"; then
+    record_failure "$test_name" "T22-54: 매크로 진행률 비침해 문구 미발견"
+    return 1
+  fi
+
+  # T22-55: 데이터 출처 한계 문구 — 사라지면 실시간 진행률로 오인된다(확정 사항 2)
+  if ! grep -q '서브에이전트 내부의 실시간 진행률이 아니다' "$dashboard_command_file"; then
+    record_failure "$test_name" "T22-55: '서브에이전트 내부의 실시간 진행률이 아니다' 문구 미발견"
+    return 1
+  fi
+  if ! grep -q '디스패치' "$dashboard_command_file"; then
+    record_failure "$test_name" "T22-55: '디스패치' 문구 미발견"
+    return 1
+  fi
+
+  # T22-56: 병렬 active 허용 문구 — 단일 활성 가정이 슬며시 들어오면 이 패널의 존재 이유가 사라진다
+  if ! grep -q '동시에 여러 항목이 active 일 수 있다' "$dashboard_command_file"; then
+    record_failure "$test_name" "T22-56: '동시에 여러 항목이 active 일 수 있다' 문구 미발견"
+    return 1
+  fi
+
+  # T22-57: 규약 노출 — 절차만 있고 규약에 없으면 아무도 못 쓴다
+  if ! head -4 "$dashboard_command_file" | grep -q 'impl set'; then
+    record_failure "$test_name" "T22-57: argument-hint 에 'impl set' 미발견"
+    return 1
+  fi
+  if ! grep -qF '/dashboard impl <k> <done|active|wait> ["상세"]' "$dashboard_command_file"; then
+    record_failure "$test_name" "T22-57: 호출 규약에 /dashboard impl <k> <done|active|wait> [\"상세\"] 미발견"
+    return 1
+  fi
+
+  # T22-58: 가드 문구 + PiP 미숨김 — 재호출이 진행 상태를 날리는 회귀 / 곁눈질 화면에서 가장 값진
+  # 카드를 숨기는 규칙이 몰래 추가되는 회귀를 각각 막는다(뒤쪽은 역방향 assertion, 설계 결정 6).
+  if ! grep -q '이미 목록이 있으면 덮어쓰지 않는다' "$dashboard_command_file"; then
+    record_failure "$test_name" "T22-58: '이미 목록이 있으면 덮어쓰지 않는다' 가드 문구 미발견"
+    return 1
+  fi
+  if grep -qF 'body.dz-pip #dz-impl-card{display:none}' "$dashboard_command_file"; then
+    record_failure "$test_name" "T22-58: PiP 에서 impl 카드를 숨기는 규칙이 추가됨"
     return 1
   fi
 

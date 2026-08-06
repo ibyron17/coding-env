@@ -1,6 +1,6 @@
 ---
 description: "세션 진행 상황을 프로젝트 로컬 HTML 대시보드로 기록 — init/step/log + on/off 스위치"
-argument-hint: "init \"<제목>\" \"<단계1|...> 또는 <그룹A:단계1,단계2|그룹B:...>\" | step <n>|<g>.<p> <done|active|wait> [\"상세\"] | log <impl|pass|fail|commit> \"<요약>\" [...] | serve [포트] | on | off"
+argument-hint: "init \"<제목>\" \"<단계1|...> 또는 <그룹A:단계1,단계2|그룹B:...>\" | step <n>|<g>.<p> <done|active|wait> [\"상세\"] | impl set \"<작업1|...>\"|<k> <done|active|wait> | log <impl|pass|fail|commit> \"<요약>\" [...] | serve [포트] | on | off"
 ---
 
 # Dashboard
@@ -23,12 +23,19 @@ argument-hint: "init \"<제목>\" \"<단계1|...> 또는 <그룹A:단계1,단계
 /dashboard init "<제목>" "<그룹A:단계1,단계2|그룹B:단계1,단계2>"
 /dashboard step <n> <done|active|wait> ["상세"]    # 그룹 1개 — 단계 번호. 상세는 선택
 /dashboard step <g>.<p> <done|active|wait>         # 그룹 2개 이상 — 행.열 (상세 미지원)
+/dashboard impl set "<작업1|작업2|...>"            # 「구현」 단계의 세부 작업 목록을 한 번 정의
+/dashboard impl <k> <done|active|wait> ["상세"]    # 세부 작업 1개 갱신. active 동시 다중 허용
 /dashboard log <impl|pass|fail|commit> "<한 줄 요약>" ["상세"] [--round N]
 /dashboard serve [포트] | serve stop        # 플로팅용 로컬 정적 서버 (opt-in)
 /dashboard on | off
 ```
 
 `step` 의 첫 인자에 `.` 이 있으면 매트릭스 칸, 없으면 선형 단계다. 인덱스는 모두 1부터 시작한다.
+
+`impl` 의 첫 인자가 `set` 이면 목록 정의, 정수면 항목 갱신이다. `step` 이 `.` 유무로 두 형태를
+가르는 것과 같은 **단일 토큰 판정**이다. **`log impl` 과 혼동하지 않는다.** `impl` 은 **첫 번째**
+토큰일 때만 이 기능이고, `log` 다음에 오는 `impl` 은 로그 항목의 종류다. 위치가 다르므로
+판정에 모호함이 없다.
 
 ## CLAUDE.md 트리거 (메인 세션 전용, 참고)
 
@@ -37,9 +44,16 @@ argument-hint: "init \"<제목>\" \"<단계1|...> 또는 <그룹A:단계1,단계
 | 전체 경로 착수 보고 시 | `init` |
 | PRP 작성 완료 | `step 1 done` + `log impl` |
 | 사용자 승인 수령 | `step 2 done` + `step 3 active` |
+| 구현 착수 — 세부 작업 목록이 확정됐을 때(선택) | `impl set "<작업1\|…>"` |
+| 서브에이전트를 디스패치하기 직전 | `impl <k> active ["담당·범위"]` |
+| 서브에이전트 결과 보고를 받은 직후 | `impl <k> done ["결과 요약"]` |
 | 구현 완료 | `step 3 done` + `log impl` |
 | 검수 PASS / FAIL | `step 4 done|wait` + `log pass|fail` |
 | 커밋·푸시 | `log commit` |
+
+> `impl` 은 **선택**이다. 세부 작업이 서넛 이하이거나 병렬이 없으면 부르지 않아도 되며, 부르지
+> 않으면 카드 자체가 화면에 나타나지 않는다. 갱신 시점은 오케스트레이터가 직접 아는 두 순간
+> (디스패치 · 결과 보고)뿐이다 — 서브에이전트는 이 파일에 접근하지 않는다.
 
 > 그룹 모드에서는 `step <n>` 자리에 `step <g>.<p>` 를 쓴다. 한 단계가 여러 그룹에 걸쳐 끝나면
 > 그룹 수만큼 호출한다(칸 단위 갱신이 곧 진행률의 단위다).
@@ -93,6 +107,36 @@ argument-hint: "init \"<제목>\" \"<단계1|...> 또는 <그룹A:단계1,단계
 어차피 매번 grep 하는 `#dz-log` 여는 태그에 얹혀 있어 탐색 단계를 늘리지 않는다
 (`<ul class="log" id="dz-log" data-current-session="2">`). `init` 이 세션 시작 때 갱신하고
 `log` 는 읽기만 한다. 속성이 없는 파일(세션 탭 도입 이전에 만들어진 대시보드)은 `1` 로 간주한다.
+
+### 구현 세부 작업 슬롯 — 동적 2 + 구조 1 (기본 상태: 비어 있음)
+
+**「동적(치환 대상) — 7 셀렉터」 표는 위 그대로 무수정이다.** 「구현」 매크로 단계 전용 고정
+슬롯의 셀렉터는 별도 하위 절로 둔다.
+
+| 셀렉터 | 치환 대상 | 값 | 치환 주체 |
+|--------|----------|-----|----------|
+| `#dz-impl-{k}` | `class` 속성 + 자식 `.chip` 텍스트 + 자식 `.step-detail` 텍스트 | `done`\|`active`\|`wait` / `완료`\|`진행중`\|`대기` / 한 줄 상세(빈 문자열 허용) | `impl <k>` |
+| `#dz-impl-count` | 텍스트 | `3/8 · 38%` (매크로 진행률과 **같은 형식**) | `impl set` · `impl <k>` |
+| `#dz-impl-tasks` | 자식 `<li>` 목록 | `impl set` 이 **한 번만** 채운다. 이후 항목 단위로만 갱신한다 | `impl set` |
+
+**정적 요소 표에 1행 추가** (`init`/`step`/`log` 가 절대 치환하지 않는 요소):
+
+| 요소 | 역할 |
+|------|------|
+| `#dz-impl-card` | 「구현 세부 작업」 카드 `<div>`. 템플릿에 **항상** 존재하며, 목록이 비면 CSS `:has()` 가 통째로 숨긴다. DOM 에서 제거하지 않는다 |
+
+> `#dz-impl-card` 는 정적 요소지만 **폴링 동기화 대상**이다. `#dz-log-card` 와 다른 점이
+> 여기다 — 로그 카드는 안쪽 `#dz-log` 만 동기화되지만, impl 카드는 안쪽에 별도 동기화 대상이 둘
+> (`#dz-impl-tasks`·`#dz-impl-count`)이라 카드째 교체가 더 싸다.
+
+### 불변식 추가 (기존 1~4에 이어)
+
+5. **`<li id="dz-impl-…">` 는 반드시 한 줄에 하나씩 생성한다.** 불변식 2와 같은 이유다 — `impl`
+   절차의 grep 앵커와 감사용 `grep -c 'dz-impl-.*class="done"'` 가 줄 단위 계수에 의존한다.
+   상세에 줄바꿈을 넣지 않는 규칙(불변식 3)도 그대로 적용된다.
+6. **구현 세부 작업의 상태 변화는 매크로 진행률을 바꾸지 않는다.** `impl` 절차는
+   `#dz-progress-bar` 와 `#dz-progress-pct` 를 **읽지도 쓰지도 않는다.** 세부 진행은
+   `#dz-impl-count` 만 쓴다. 두 분모를 섞으면 `step` 2단계의 전이(±1) 산술이 무너진다.
 
 ### 로그 항목 스키마
 
@@ -169,6 +213,7 @@ UpdateMode
 | `#dz-log` | `innerHTML` 대입 | 항목 prepend·`<details open>` 회수까지 파일이 곧 정답이다 |
 | `input[name="dzs"]` · `input[name="dzf"]` · `label[for^="dz…"]` · `<style>` | **치환하지 않는다** | 라디오를 재삽입하면 사용자가 고른 유형 필터·세션 탭이 5초마다 초기화된다. 개수가 달라지면(=새 세션) **전체 리로드**로 처리한다 |
 | `#dz-pip-btn` · `#dz-pip-hint` | **치환하지 않는다** | `.wrap` 바깥 = 동기화 영역 밖 |
+| `#dz-impl-card` | `outerHTML` 대입 | 카드 안에 라디오·`<details>` 같은 **사용자 상태가 하나도 없어** 통째 교체가 안전하다. 항목·카운터를 따로 동기화하면 함수가 둘로 늘고, 목록 길이가 바뀌는 `impl set` 순간을 별도로 처리해야 한다 |
 
 **동기화 단위는 "파일 전체 문자열"이다.** 직전 폴링에서 받은 HTML 과 **문자열이 같으면 아무것도 하지
 않는다.** 라이브 DOM 과 비교하지 않는 이유: 사용자가 `<details>` 를 손으로 펼치면 라이브 DOM 은
@@ -464,6 +509,82 @@ grep -c 'dz-cell-.*data-state="done"' .claude/dashboard.html   # 그룹 모드
 grep -c 'dz-step-.*class="done"' .claude/dashboard.html        # 선형 모드
 ```
 
+## `impl` — 「구현」 단계 전용 세부 작업 패널 (메인 세션이 수행할 절차)
+
+> 이 패널은 **오케스트레이터가 직접 관측한 두 시점만** 기록한다. `active` 로 표시된 항목이 "얼마나
+> 진행됐는지"는 **서브에이전트 내부의 실시간 진행률이 아니다** — 디스패치 이후 아직 결과 보고가
+> 오지 않았다는 뜻일 뿐이다. 서브에이전트가 이 파일에 접근하지 않는다는 원칙
+> (`session-dashboard.md` 설계 결정 4)은 이 기능에서도 예외 없이 유지된다.
+>
+> **동시에 여러 항목이 active 일 수 있다.** 매크로 `step` 과 달리 단일 활성 가정을 두지 않으며,
+> 개수를 검증하거나 강제하지 않는다. **구현 세부 작업의 상태 변화는 매크로 진행률을 바꾸지
+> 않는다** — `impl` 절차는 `#dz-progress-bar`·`#dz-progress-pct` 를 읽지도 쓰지도 않는다.
+
+### `impl set` — 절차 (Bash 1회 + Edit 3회, 결정적)
+
+0. **대상 줄 3종을 한 번에 확보한다.** Bash 1회:
+   ```bash
+   grep -n -e 'id="dz-impl-tasks"' -e 'id="dz-impl-count"' -e 'id="dz-impl-1"' .claude/dashboard.html
+   ```
+   - **결과 3줄** → 이미 목록이 있다. **이미 목록이 있으면 덮어쓰지 않는다** — 진행 중인 상태를
+     날린다. 보고 후 중단하고, 목록을 새로 만들려면 `.claude/dashboard.html` 을 지우고
+     `/dashboard init` 부터 다시 하라고 안내한다.
+   - **결과 2줄** → 정상. 1번으로 진행한다.
+   - **결과 0~1줄** → 이 기능 도입 이전에 만들어진 대시보드다. 마이그레이션하지 않는다.
+     보고 후 중단하고 위와 같은 안내를 한다(`.claude/dashboard.html` 은 임시 산출물이다).
+
+1. **인자 파싱** — 두 번째 인자를 `|` 로 나눈다. 결과가 작업 목록이고 개수를 `K` 라 한다.
+   그룹 문법(`:`)은 **없다** — 세부 작업 목록은 평면이다. 작업명에 `|` 를 쓰지 않는다.
+
+2. **목록 생성** — 0에서 얻은 `id="dz-impl-tasks"` 줄 전문을 `old_string` 으로 Edit 1회.
+   그 줄 **뒤에** 아래 `<li>` 를 K개 삽입한다. **전부 `wait` 이고 상세는 빈 span 이다.**
+   ```html
+      <li id="dz-impl-{k}" class="wait"><span class="num">{k}</span>{작업명}<span class="chip">대기</span><span class="step-detail"></span></li>
+   ```
+   - **한 줄에 하나씩** 쓴다(불변식 5).
+   - `<span class="step-detail"></span>` 안에 **공백조차 넣지 않는다**(`:empty` 매칭이 풀린다).
+   - 작업명은 `&`→`&amp;`, `<`→`&lt;`, `>`→`&gt;` 순서로 이스케이프한다.
+   - **첫 항목을 `active` 로 만들지 않는다.** `init` 이 1번 단계를 active 로 두는 것과 다르다 —
+     목록 정의와 디스패치는 다른 시점이고, 부르지도 않은 서브에이전트를 진행중으로 그리면
+     이 패널의 유일한 신뢰 근거(관측된 두 시점만 기록)가 깨진다.
+
+3. `#dz-impl-count` 텍스트를 `0/K · 0%` 로 Edit 1회.
+4. `#dz-updated` 텍스트를 현재 시각으로 Edit 1회.
+
+### `impl <k>` — 절차 (Bash 1회 + Edit 3회, `step` 과 동일 구조)
+
+0. **대상 줄과 세부 진행률 줄을 한 번에 확보한다.** Bash 1회:
+   ```bash
+   grep -n -e 'id="dz-impl-{k}"' -e 'id="dz-impl-count"' .claude/dashboard.html
+   ```
+   각 요소는 한 줄에 하나씩 생성되므로 결과는 항상 2줄이다.
+   - 대상 줄이 안 나온다 → 인덱스가 틀렸거나 `impl set` 을 부른 적이 없다. **다른 항목을 추측해서
+     고치지 말고 보고 후 중단한다.** 인덱스를 잊었으면 `grep -n 'dz-impl-[0-9]'` 로 목록 전체
+     지도를 한 번에 얻는다.
+
+1. **상태 치환** — 0에서 얻은 줄 전문을 `old_string` 으로 Edit 1회.
+   `class="{state}"` 와 자식 `.chip` 텍스트를 바꾼다. `.step-detail` 갱신 규칙은
+   `step` 절차 1단계의 표(생략=유지 / `"내용"`=치환 / `""`=지움)와 **완전히 동일**하다.
+   이스케이프·줄바꿈 금지 규칙도 그대로 적용된다.
+   - **동시에 여러 항목이 active 일 수 있다.** 다른 항목의 상태를 확인하거나 되돌리지 않는다.
+     이 호출은 지정된 한 항목만 건드린다.
+
+2. **세부 진행률 재계산** — 0에서 읽은 `#dz-impl-count` 텍스트가 `"M/K · P%"` 이므로 M·K 를 그대로
+   얻는다. 완료 항목 수는 다시 세지 않고 **전이로 계산한다**(`step` 2단계와 같은 산술):
+   - 이전 상태 ≠ done 이고 새 상태 = done  → M+1
+   - 이전 상태 = done 이고 새 상태 ≠ done  → M-1
+   - 그 외                                  → M 그대로
+
+   P = round(M/K × 100). M 이 바뀌지 않았으면 이 단계를 건너뛴다.
+   **`#dz-progress-bar`·`#dz-progress-pct` 는 건드리지 않는다**(불변식 6).
+
+3. `#dz-updated` 텍스트를 현재 시각으로 치환한다. (Edit 1회)
+
+**감사(audit)용 재계수** — 세부 진행률이 어긋난 것 같으면 아래로 다시 센다.
+```bash
+grep -c 'dz-impl-[0-9].*class="done"' .claude/dashboard.html
+```
+
 ## `log` — 메인 세션이 수행할 절차 (Bash grep 1회 + Read 1~2회 + Edit 2회, 결정적)
 
 0. **최신 항목만 확인한다(파일 전체를 Read하지 않는다)**:
@@ -723,11 +844,17 @@ DZ:DASHBOARD 갱신 맵 (동적 영역 — 셀렉터 기반 정밀 치환, comma
   #dz-group-{g}         : [그룹 2+] 행 머리 th — init 이 그룹명을 넣고 이후 치환하지 않는다
   #dz-log               : 작업 추적 ul — li data-seq 앵커로 prepend / data-current-session 속성(현재 세션 번호)
   #dz-updated           : 갱신 시각 텍스트
+  #dz-impl-{k}          : [선택] 구현 세부 작업 li — class(done|active|wait) + .chip 텍스트
+                          + .step-detail 텍스트. active 가 동시에 여러 개일 수 있다
+  #dz-impl-count        : [선택] 구현 세부 진행 텍스트 (예: 3/8 · 38%). 매크로 진행률과 별개다
+  #dz-impl-tasks        : [선택] 세부 작업 ol — impl set 이 한 번 채운다
 정적(불가침): 골격 · <style> · 제목 · 하단 스크립트
   #dz-pip-btn / #dz-pip-hint : 플로팅 진입 버튼과 안내 한 줄. .wrap 바깥에 있으며
                                init/step/log 도, 폴링 동기화도 이 둘을 건드리지 않는다
   #dz-log-card               : 작업 추적 카드 div. PiP 압축 뷰가 CSS 로만 숨긴다
                                (DOM 에서 제거하지 않는다 — 복귀 시 로그가 사라진다)
+  #dz-impl-card              : 구현 세부 작업 카드 div. 목록이 비면 CSS :has() 가 통째로 숨긴다
+                               (DOM 에서 제거하지 않는다 — 폴링이 outerHTML 로 동기화한다)
 -->
 <style>
   :root{--ink:#172033;--muted:#5E6B7D;--line:#D9E2EC;--soft:#F4F7FB;--blue:#1E5AA8;--navy:#12335B;--green:#1F8A70;--orange:#F59E0B;--red:#C2410C;}
@@ -753,6 +880,7 @@ DZ:DASHBOARD 갱신 맵 (동적 영역 — 셀렉터 기반 정밀 치환, comma
   li.active .chip{background:#EAF2FB;color:var(--blue)}
   .step-detail{flex-basis:100%;margin-left:38px;font-size:12.5px;font-weight:400;color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
   .step-detail:empty{display:none}
+  #dz-impl-card:not(:has(#dz-impl-tasks li)){display:none}
   table.matrix{width:100%;border-collapse:collapse;margin:14px 0 0;font-size:14px}
   .matrix th,.matrix td{border:1px solid var(--line);padding:9px 10px}
   .matrix thead th{font-size:12px;font-weight:800;background:var(--soft);color:var(--muted);text-align:center}
@@ -789,7 +917,7 @@ DZ:DASHBOARD 갱신 맵 (동적 영역 — 셀렉터 기반 정밀 치환, comma
   .entry .detail{margin:6px 0 0 48px;font-size:12.5px;color:var(--muted);white-space:pre-wrap}
   .session-head{margin:14px 0 6px;padding:0 4px 6px;border-bottom:2px solid var(--line);font-size:11px;font-weight:800;letter-spacing:.3px;color:var(--navy)}
   .session-head:first-child{margin-top:0}
-  .log-title{font-size:13px;font-weight:700;color:var(--muted);margin:0 0 10px}
+  .log-title,.impl-title{font-size:13px;font-weight:700;color:var(--muted);margin:0 0 10px}
   .foot{font-size:12px;color:var(--muted);text-align:right}
   #dz-pip-btn{position:fixed;top:18px;right:18px;z-index:9;font-family:inherit;font-size:12px;font-weight:700;padding:7px 14px;border-radius:999px;border:1px solid var(--line);background:#fff;color:var(--navy);cursor:pointer;box-shadow:0 2px 8px rgba(19,51,91,.10)}
   #dz-pip-btn:disabled{color:var(--muted);cursor:not-allowed;box-shadow:none}
@@ -813,6 +941,12 @@ DZ:DASHBOARD 갱신 맵 (동적 영역 — 셀렉터 기반 정밀 치환, comma
     <div class="bar-outer"><div class="bar-inner" id="dz-progress-bar" style="width:0%"></div></div>
     <div class="pct" id="dz-progress-pct">0/0 · 0%</div>
     <ol class="steps" id="dz-steps">
+    </ol>
+  </div>
+  <div class="card" id="dz-impl-card">
+    <div class="impl-title">구현 세부 작업 · 디스패치와 결과 보고 시점에만 갱신</div>
+    <div class="pct" id="dz-impl-count">0/0 · 0%</div>
+    <ol class="steps" id="dz-impl-tasks">
     </ol>
   </div>
   <div class="card" id="dz-log-card">
@@ -876,6 +1010,11 @@ DZ:DASHBOARD 갱신 맵 (동적 영역 — 셀렉터 기반 정밀 치환, comma
     var live = wrap.querySelector('#dz-log'), next = fresh.getElementById('dz-log');
     if(live && next) live.innerHTML = next.innerHTML;
   }
+  function syncImplCard(fresh){
+    // 이 카드는 .wrap 안이지만 #dz-steps 동기화 대상이 아니다 — 별도 대입이 없으면 영구히 stale 된다.
+    var live = wrap.querySelector('#dz-impl-card'), next = fresh.getElementById('dz-impl-card');
+    if(live && next) live.outerHTML = next.outerHTML;
+  }
   function sessionTabsChanged(fresh){
     return fresh.querySelectorAll('input[name="dzs"]').length
         !== wrap.querySelectorAll('input[name="dzs"]').length;
@@ -904,7 +1043,7 @@ DZ:DASHBOARD 갱신 맵 (동적 영역 — 셀렉터 기반 정밀 치환, comma
     }
     syncText(fresh,'dz-title'); syncText(fresh,'dz-subtitle');
     syncText(fresh,'dz-progress-pct'); syncText(fresh,'dz-updated');
-    syncProgressBar(fresh); syncVisualization(fresh); syncLog(fresh);
+    syncProgressBar(fresh); syncVisualization(fresh); syncImplCard(fresh); syncLog(fresh);
     resizePipToFit();
   }
   function poll(){
