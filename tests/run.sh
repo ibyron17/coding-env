@@ -996,10 +996,10 @@ test_manifest_fields_complete() {
 }
 
 # T22: dashboard 템플릿 무결성 — LLM 지시문 방식이라 런타임 Edit 결과는 검증 대상이 아니고,
-# 설치·문서 정합성만 자동 검증한다 (하위 검증 T22-1~T22-28).
+# 설치·문서 정합성만 자동 검증한다 (하위 검증 T22-1~T22-46).
 test_dashboard_template_integrity() {
   local test_name="T22"
-  local test_desc="dashboard 템플릿 무결성 (T22-1~T22-28)"
+  local test_desc="dashboard 템플릿 무결성 (T22-1~T22-46)"
   log_test_name "$test_name" "$test_desc"
 
   local sandbox
@@ -1225,6 +1225,183 @@ test_dashboard_template_integrity() {
   # 이 검증은 매칭되면 실패다(역방향 assertion) — dz-gate- 셀렉터가 존재해서는 안 된다.
   if grep -q 'dz-gate-' "$dashboard_command_file"; then
     record_failure "$test_name" "T22-28: dz-gate- 전용 셀렉터가 신설됨(게이트는 단계 1개 그룹으로 표현해야 함)"
+    return 1
+  fi
+
+  # T22-29: file:// 리로드 경로 비퇴화 — if(!isServed){...} 분기 자체와 그 판정식이 남아있는지
+  # 확인한다(location.reload()·visibilitychange 만 보면 폴링/PiP 분기의 동일 문자열에도 매칭돼
+  # 분기 전체를 지워도 통과하는 결함이 있었다).
+  if ! grep -qF "if(!isServed){" "$dashboard_command_file"; then
+    record_failure "$test_name" "T22-29: if(!isServed){ 분기 미발견"
+    return 1
+  fi
+  if ! grep -qF "location.protocol === 'http:'" "$dashboard_command_file"; then
+    record_failure "$test_name" "T22-29: isServed 판정식(location.protocol === 'http:') 미발견"
+    return 1
+  fi
+
+  # T22-30: 폴링 경로 존재 — 미구현 / 브라우저 캐시로 갱신이 멈추는 퇴행 방지
+  if ! grep -q 'DOMParser' "$dashboard_command_file"; then
+    record_failure "$test_name" "T22-30: DOMParser 미발견"
+    return 1
+  fi
+  if ! grep -qF "cache:'no-store'" "$dashboard_command_file"; then
+    record_failure "$test_name" "T22-30: cache:'no-store' 미발견"
+    return 1
+  fi
+
+  # T22-31: 기능 감지 존재 — 감지 없이 호출해 미지원 브라우저에서 예외가 나는 퇴행 방지
+  if ! grep -qF "'documentPictureInPicture' in window" "$dashboard_command_file"; then
+    record_failure "$test_name" "T22-31: documentPictureInPicture 기능 감지 미발견"
+    return 1
+  fi
+
+  # T22-32: 자동 진입 금지 — 주석 문구만으로는 실제로 setTimeout/setInterval 로 자동 open 을
+  # 넣어도 통과하는 결함이 있었다. requestWindow 호출이 정확히 1곳(click 리스너 안)뿐이고,
+  # 타이머에서 호출되지 않는지까지 함께 확인한다.
+  if ! grep -q '자동 재시도하지 않는다' "$dashboard_command_file"; then
+    record_failure "$test_name" "T22-32: 자동 재시도 금지 문구 미발견"
+    return 1
+  fi
+  if [[ "$(grep -c 'requestWindow' "$dashboard_command_file")" -ne 1 ]]; then
+    record_failure "$test_name" "T22-32: requestWindow 호출이 정확히 1곳이 아님(click 리스너 밖에서 열릴 가능성)"
+    return 1
+  fi
+  if grep -qE 'setTimeout\(.*requestWindow|setInterval\(.*requestWindow' "$dashboard_command_file"; then
+    record_failure "$test_name" "T22-32: setTimeout/setInterval 에서 requestWindow 를 호출함(자동 진입 회귀)"
+    return 1
+  fi
+
+  # T22-33: 스타일시트 복사 — PiP 창이 무스타일로 뜨는 퇴행 방지(CSS 미상속은 실측된 제약)
+  if ! grep -qF "querySelectorAll('style')" "$dashboard_command_file"; then
+    record_failure "$test_name" "T22-33: querySelectorAll('style') 미발견"
+    return 1
+  fi
+  if ! grep -q 'head.appendChild' "$dashboard_command_file"; then
+    record_failure "$test_name" "T22-33: head.appendChild 미발견"
+    return 1
+  fi
+
+  # T22-34: 이동 방식 + 복귀 경로 — 복제 방식으로 바꾸거나 복귀를 빠뜨려 opener 가 영구히 비는 퇴행 방지
+  if ! grep -qF 'body.appendChild(wrap)' "$dashboard_command_file"; then
+    record_failure "$test_name" "T22-34: body.appendChild(wrap) 미발견"
+    return 1
+  fi
+  if ! grep -q 'pagehide' "$dashboard_command_file"; then
+    record_failure "$test_name" "T22-34: pagehide 미발견"
+    return 1
+  fi
+  if ! grep -qF 'insertBefore(wrap, pipButton)' "$dashboard_command_file"; then
+    record_failure "$test_name" "T22-34: insertBefore(wrap, pipButton) 미발견(PiP 복귀 경로 미검증)"
+    return 1
+  fi
+
+  # T22-35: 서버 바인딩 안전 — .claude 를 모든 인터페이스에 노출하는 회귀 방지(역방향 assertion 포함)
+  if ! grep -qF -- '--bind 127.0.0.1' "$dashboard_command_file"; then
+    record_failure "$test_name" "T22-35: --bind 127.0.0.1 미발견"
+    return 1
+  fi
+  if grep -q '0\.0\.0\.0' "$dashboard_command_file"; then
+    record_failure "$test_name" "T22-35: 0.0.0.0 바인딩 문자열이 발견됨"
+    return 1
+  fi
+
+  # T22-36: serve 가 인터페이스에 노출 — 절차만 있고 규약·힌트에 없어 아무도 못 쓰는 퇴행 방지
+  if ! head -4 "$dashboard_command_file" | grep -q 'serve'; then
+    record_failure "$test_name" "T22-36: argument-hint 에 serve 미발견"
+    return 1
+  fi
+  if ! grep -q '/dashboard serve' "$dashboard_command_file"; then
+    record_failure "$test_name" "T22-36: /dashboard serve 언급 미발견"
+    return 1
+  fi
+
+  # T22-37: 플로팅 UI 가 .wrap 바깥에 있는지 — 템플릿에서의 마지막 등장 위치로 판정한다.
+  # (.wrap 안에 있으면 PiP 창으로 같이 이동해 버튼으로 창을 닫을 수 없게 된다)
+  local pip_button_line wrap_end_line
+  pip_button_line=$(grep -n 'id="dz-pip-btn"' "$dashboard_command_file" | tail -1 | cut -d: -f1)
+  wrap_end_line=$(grep -n 'id="dz-updated"' "$dashboard_command_file" | tail -1 | cut -d: -f1)
+  if [[ -z "$pip_button_line" || -z "$wrap_end_line" || "$pip_button_line" -lt "$wrap_end_line" ]]; then
+    record_failure "$test_name" "T22-37: 플로팅 버튼이 .wrap 바깥(#dz-updated 뒤)에 있지 않음"
+    return 1
+  fi
+
+  # T22-38: grep 유일성 불변식 — 스크립트가 [id="dz-log"] 형태를 쓰면 log·step 의 grep 앵커가
+  # 줄 수를 잘못 세어 절차 전체가 깨진다(역방향 assertion).
+  if grep -q '\[id="dz-' "$dashboard_command_file"; then
+    record_failure "$test_name" "T22-38: [id=\"dz- 형태의 셀렉터 문자열이 발견됨"
+    return 1
+  fi
+
+  # T22-39: 로그 카드 식별자 존재 — id 없이 구조 셀렉터(:nth-of-type)로 되돌아가는 회귀 방지
+  if ! grep -qF 'id="dz-log-card"' "$dashboard_command_file"; then
+    record_failure "$test_name" "T22-39: id=\"dz-log-card\" 미발견"
+    return 1
+  fi
+
+  # T22-40: PiP 압축 규칙 존재 — 압축 뷰 자체의 유실 방지
+  if ! grep -qF 'body.dz-pip #dz-log-card{display:none}' "$dashboard_command_file"; then
+    record_failure "$test_name" "T22-40: body.dz-pip #dz-log-card{display:none} 미발견"
+    return 1
+  fi
+
+  # T22-41: 로그 앵커 비충돌 — log 절차 0-a 의 grep 앵커 `id="dz-log"` 는 닫는 따옴표까지 포함하므로
+  # id="dz-log-card" 에 걸리지 않아야 한다. 걸리면 앵커가 2줄을 매칭해 log 절차 전체가 깨진다.
+  # (전체 카운트 방식은 이 파일이 마크다운 산문 안에서 'id="dz-log"' 를 예시로 여러 번 인용하기 때문에
+  # 쓸 수 없다 — 템플릿 전문 구간만 대상으로 좁혀서 충돌 가능성을 직접 확인한다.)
+  if awk '/^## 템플릿 전문/,/^```$/' "$dashboard_command_file" | grep -n 'id="dz-log"' | grep -q 'dz-log-card'; then
+    record_failure "$test_name" "T22-41: 로그 카드 id 가 log 절차의 grep 앵커와 충돌함"
+    return 1
+  fi
+  if [[ "$(awk '/^## 템플릿 전문/,/^```$/' "$dashboard_command_file" | grep -c 'id="dz-log"')" -ne 1 ]]; then
+    record_failure "$test_name" "T22-41: 템플릿 안 id=\"dz-log\" 매칭 줄 수가 1이 아님(로그 카드 id 충돌 가능성)"
+    return 1
+  fi
+
+  # T22-42: CSS 로만 숨김 — 스크립트가 카드를 DOM 에서 떼어내는 방식으로 퇴행하면 폴링이
+  # 세션 변경으로 오판해 무한 리로드에 빠진다(역방향 assertion).
+  if grep -qE '(getElementById|querySelector)\([^)]*dz-log-card' "$dashboard_command_file"; then
+    record_failure "$test_name" "T22-42: 스크립트가 dz-log-card 를 getElementById/querySelector 로 참조함"
+    return 1
+  fi
+
+  # T22-43: 로그 동기화 비퇴화 — 압축을 넣으며 로그 동기화를 함께 지우지 않았는지 확인
+  if ! grep -qF 'function syncLog' "$dashboard_command_file"; then
+    record_failure "$test_name" "T22-43: function syncLog 미발견"
+    return 1
+  fi
+  if ! grep -qF "live.innerHTML = next.innerHTML" "$dashboard_command_file"; then
+    record_failure "$test_name" "T22-43: live.innerHTML = next.innerHTML 미발견"
+    return 1
+  fi
+
+  # T22-44: 단계 상세 마크업·CSS — 상세 span 또는 빈 값 숨김 규칙 유실(빈 회색 줄 잔존) 방지
+  if ! grep -qF 'class="step-detail"' "$dashboard_command_file"; then
+    record_failure "$test_name" "T22-44: class=\"step-detail\" 미발견"
+    return 1
+  fi
+  if ! grep -qF '.step-detail:empty{display:none}' "$dashboard_command_file"; then
+    record_failure "$test_name" "T22-44: .step-detail:empty{display:none} 미발견"
+    return 1
+  fi
+
+  # T22-45: PiP 는 활성 상세만 — 요청 1·2 를 잇는 규칙의 유실(좁은 창이 상세로 도배) 방지
+  if ! grep -qF 'body.dz-pip ol.steps li:not(.active) .step-detail' "$dashboard_command_file"; then
+    record_failure "$test_name" "T22-45: body.dz-pip ol.steps li:not(.active) .step-detail 미발견"
+    return 1
+  fi
+
+  # T22-46: 상세 규약 문서화 — 절차만 있고 규약에 없어 아무도 못 쓰는 회귀, 불변식 3 문구 유실 방지
+  if ! head -4 "$dashboard_command_file" | grep -q '상세'; then
+    record_failure "$test_name" "T22-46: argument-hint 에 '상세' 미발견"
+    return 1
+  fi
+  if ! grep -qF 'step <n> <done|active|wait> ["상세"]' "$dashboard_command_file"; then
+    record_failure "$test_name" "T22-46: 호출 규약에 step <n> <done|active|wait> [\"상세\"] 미발견"
+    return 1
+  fi
+  if ! grep -q '줄바꿈을 넣지 않는다' "$dashboard_command_file"; then
+    record_failure "$test_name" "T22-46: '줄바꿈을 넣지 않는다' 문구 미발견"
     return 1
   fi
 

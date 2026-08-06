@@ -1,6 +1,6 @@
 ---
 description: "세션 진행 상황을 프로젝트 로컬 HTML 대시보드로 기록 — init/step/log + on/off 스위치"
-argument-hint: "init \"<제목>\" \"<단계1|...> 또는 <그룹A:단계1,단계2|그룹B:...>\" | step <n>|<g>.<p> <done|active|wait> | log <impl|pass|fail|commit> \"<요약>\" [...] | on | off"
+argument-hint: "init \"<제목>\" \"<단계1|...> 또는 <그룹A:단계1,단계2|그룹B:...>\" | step <n>|<g>.<p> <done|active|wait> [\"상세\"] | log <impl|pass|fail|commit> \"<요약>\" [...] | serve [포트] | on | off"
 ---
 
 # Dashboard
@@ -21,9 +21,10 @@ argument-hint: "init \"<제목>\" \"<단계1|...> 또는 <그룹A:단계1,단계
 ```
 /dashboard init "<제목>" "<단계1|단계2|...>"
 /dashboard init "<제목>" "<그룹A:단계1,단계2|그룹B:단계1,단계2>"
-/dashboard step <n> <done|active|wait>            # 그룹 1개 — 단계 번호
-/dashboard step <g>.<p> <done|active|wait>        # 그룹 2개 이상 — 행.열
+/dashboard step <n> <done|active|wait> ["상세"]    # 그룹 1개 — 단계 번호. 상세는 선택
+/dashboard step <g>.<p> <done|active|wait>         # 그룹 2개 이상 — 행.열 (상세 미지원)
 /dashboard log <impl|pass|fail|commit> "<한 줄 요약>" ["상세"] [--round N]
+/dashboard serve [포트] | serve stop        # 플로팅용 로컬 정적 서버 (opt-in)
 /dashboard on | off
 ```
 
@@ -43,6 +44,9 @@ argument-hint: "init \"<제목>\" \"<단계1|...> 또는 <그룹A:단계1,단계
 > 그룹 모드에서는 `step <n>` 자리에 `step <g>.<p>` 를 쓴다. 한 단계가 여러 그룹에 걸쳐 끝나면
 > 그룹 수만큼 호출한다(칸 단위 갱신이 곧 진행률의 단위다).
 
+> `step` 의 네 번째 인자로 한 줄 상세를 붙이면(예: `step 3 active "폴링 스크립트 작성 중"`) 그 단계가
+> 지금 무엇을 하고 있는지가 대시보드에 바로 보인다. 생략해도 되며, 생략하면 기존 상세가 유지된다.
+
 ---
 
 ## 데이터 모델 — DOM 상 표현 규격
@@ -61,7 +65,7 @@ argument-hint: "init \"<제목>\" \"<단계1|...> 또는 <그룹A:단계1,단계
 | `#dz-subtitle` | 텍스트 | 단계 흐름 요약 · 작업 유형 |
 | `#dz-progress-bar` | inline `style="width:N%"` | 완료 단계 / 전체 단계 |
 | `#dz-progress-pct` | 텍스트 | `3/6 · 50%` |
-| `#dz-step-{n}` **(그룹 1개)** | `class` 속성 + 자식 `.chip` 텍스트 | `done`\|`active`\|`wait` / `완료`\|`진행중`\|`대기` |
+| `#dz-step-{n}` **(그룹 1개)** | `class` 속성 + 자식 `.chip` 텍스트 + 자식 `.step-detail` 텍스트 | `done`\|`active`\|`wait` / `완료`\|`진행중`\|`대기` / 한 줄 상세(빈 문자열 허용) |
 | `#dz-cell-{g}-{p}` **(그룹 2개 이상)** | `data-state` 속성 + 칸 텍스트 | `done`\|`active`\|`wait`\|`na` / `완료`\|`진행중`\|`대기`\|`–` |
 | `#dz-log` | 자식 `<li>` **prepend** + `data-current-session` 속성 | 로그 항목(최신이 위) / 현재 세션 번호 |
 | `#dz-updated` | 텍스트 | 갱신 시각 |
@@ -80,6 +84,10 @@ argument-hint: "init \"<제목>\" \"<단계1|...> 또는 <그룹A:단계1,단계
 1. **한 파일에 `#dz-step-*` 과 `#dz-cell-*` 이 동시에 존재하지 않는다.** `init` 이 둘 중 하나만 만든다.
 2. **`<li id="dz-step-…">` 와 `<td id="dz-cell-…">` 는 반드시 한 줄에 하나씩 생성한다.**
    `step` 의 완료 칸 카운트가 `grep -c`(줄 단위 계수)에 의존하기 때문이다.
+3. **`.step-detail` 의 내용에 줄바꿈이 들어가지 않는다.** `<li>` 가 여러 줄로 쪼개지면 불변식 2가
+   깨지고, `step` 0단계의 grep 앵커와 감사용 `grep -c 'dz-step-.*class="done"'` 가 동시에 어긋난다.
+4. **`#dz-log-card` 는 CSS 로만 감춘다.** 스크립트가 이 id 를 `getElementById`/`querySelector` 로
+   참조하지 않는다.
 
 `data-current-session` 은 새 행이 아니라 `#dz-log` 행의 하위 개념이다 — `log` 절차가
 어차피 매번 grep 하는 `#dz-log` 여는 태그에 얹혀 있어 탐색 단계를 늘리지 않는다
@@ -116,6 +124,60 @@ argument-hint: "init \"<제목>\" \"<단계1|...> 또는 <그룹A:단계1,단계
 | `pass` | `review` | `.badge.pass` | 검수 PASS | `--green` |
 | `fail` | `review` | `.badge.fail` | 검수 FAIL | `--red`(신규 토큰 `#C2410C`) |
 | `commit` | `commit` | `.badge.commit` | 커밋 | `--navy` |
+
+### 갱신 모드 — 런타임에 결정되는 두 갈래
+
+```
+UpdateMode
+  "reload"  : location.protocol 이 http(s) 가 아님 (file://, 기타)
+  "poll"    : location.protocol 이 http: 또는 https:
+```
+
+- 판정 기준은 **프로토콜 한 가지뿐**이다. `fetch` 성공 여부로 추론하거나, 실패 후 폴백하는 구조를
+  만들지 않는다(판정이 비결정적이 되고 실패 경로가 둘로 늘어난다).
+- `reload` 모드의 코드 경로는 **현재 스크립트와 의미상 동일**해야 한다. 플로팅 버튼은 비활성이다.
+- 플로팅 가능 조건 = `mode === "poll"` **AND** `'documentPictureInPicture' in window`.
+  둘 중 하나라도 아니면 버튼은 `disabled` 이고 `#dz-pip-hint` 가 사유 한 줄을 보여준다.
+
+### 정적 요소 추가 (동적 셀렉터 표에 넣지 않는다)
+
+`init`/`step`/`log` 가 절대 치환하지 않고, **폴링도 동기화하지 않는** 요소다.
+
+| 요소 | 역할 |
+|------|------|
+| `#dz-pip-btn` | 플로팅 진입/종료 버튼. `.wrap` **바깥**(`<body>` 직계)에 둔다 |
+| `#dz-pip-hint` | 상태·사유 한 줄. 기본 `hidden`, 스크립트가 텍스트를 넣을 때만 노출 |
+| `body.dz-pip` | PiP 창 문서의 `<body>` 에만 붙는 클래스. 좁은 창용 여백 축소 규칙의 스코프 |
+| `#dz-log-card` | 「작업 추적」 카드 `<div>`. `init`/`step`/`log` 도, 폴링도 이 요소 자체를 치환하지 않는다. PiP 압축 뷰가 CSS 로 숨기기 위한 유일한 용도이며, DOM 에서 제거하지 않는다 |
+
+> **왜 `.wrap` 바깥인가**: 플로팅은 `.wrap` 서브트리를 **통째로 PiP 창으로 옮기는** 방식이다.
+> 버튼이 `.wrap` 안에 있으면 버튼도 같이 옮겨가 (a) 좁은 창을 차지하고 (b) opener 에는 창을 닫을
+> 수단이 남지 않는다. 이 배치는 **T22-37 이 줄 번호 비교로 강제**한다.
+
+### 폴링 동기화 계약 — 무엇을 치환하고 무엇을 보존하는가
+
+이 표가 스크립트와 DOM 사이의 계약이다. 위 「동적(치환 대상) — 7 셀렉터」 표의 **소비자 측 대응표**다.
+
+| 대상 | 동기화 연산 | 근거 |
+|------|------------|------|
+| `#dz-title` · `#dz-subtitle` · `#dz-progress-pct` · `#dz-updated` | `textContent` 대입 | 순수 텍스트 노드 |
+| `#dz-progress-bar` | `style` 속성 대입 | 인라인 `width:N%` 만 바뀐다. 속성 대입이라 CSS transition 이 살아 있다 |
+| `#dz-steps, #dz-matrix` (둘 중 존재하는 것) | `outerHTML` 대입 | **선형/매트릭스 분기를 하나의 연산으로 흡수**한다. 한 파일에 하나만 존재한다는 불변식 1 덕분에 셀렉터 하나로 족하다 |
+| `#dz-log` | `innerHTML` 대입 | 항목 prepend·`<details open>` 회수까지 파일이 곧 정답이다 |
+| `input[name="dzs"]` · `input[name="dzf"]` · `label[for^="dz…"]` · `<style>` | **치환하지 않는다** | 라디오를 재삽입하면 사용자가 고른 유형 필터·세션 탭이 5초마다 초기화된다. 개수가 달라지면(=새 세션) **전체 리로드**로 처리한다 |
+| `#dz-pip-btn` · `#dz-pip-hint` | **치환하지 않는다** | `.wrap` 바깥 = 동기화 영역 밖 |
+
+**동기화 단위는 "파일 전체 문자열"이다.** 직전 폴링에서 받은 HTML 과 **문자열이 같으면 아무것도 하지
+않는다.** 라이브 DOM 과 비교하지 않는 이유: 사용자가 `<details>` 를 손으로 펼치면 라이브 DOM 은
+파일과 달라지고, 라이브 비교 방식은 그 펼침을 5초마다 되접는다.
+
+**grep 유일성 불변식 (신규, 매우 중요)**
+스크립트는 생성물 `.claude/dashboard.html` 안에서 `id="dz-log"` · `id="dz-progress-bar"` ·
+`id="dz-progress-pct"` · `id="dz-cell-` 같은 **`id="…"` 형태의 문자열을 만들면 안 된다.**
+`log` 0-a 단계와 `step` 0단계가 이 문자열들의 **줄 단위 유일성**에 의존하기 때문이다
+(`step` 은 "결과는 항상 3줄"을 전제한다). 따라서 스크립트에서는 `getElementById('dz-log')` 나
+`querySelector('#dz-log')` 만 쓰고, `id` 완전일치 대괄호 속성 셀렉터(`querySelector` 인자에
+`id=` 값 전체를 대괄호로 감싸 넣는 형태)는 **금지**한다.
 
 ---
 
@@ -288,7 +350,7 @@ Cell
    - **그룹이 1개**: 템플릿의 `<ol class="steps" id="dz-steps">` 내부를 아래 `<li>` N개로 채운다
      (기존과 완전히 동일. 1번이 active, 나머지는 wait).
      ```html
-     <li id="dz-step-{n}" class="{active|wait}"><span class="num">{n}</span>{단계명}<span class="chip">{진행중|대기}</span></li>
+     <li id="dz-step-{n}" class="{active|wait}"><span class="num">{n}</span>{단계명}<span class="chip">{진행중|대기}</span><span class="step-detail"></span></li>
      ```
    - **그룹이 2개 이상**: 템플릿의 아래 두 줄(`<ol>` 요소 전체)을 [매트릭스 마크업](#매트릭스-마크업-init-6단계가-생성)의
      `<table>` 로 통째로 치환한다. 각 그룹의 **첫 단계 칸**이 active, 나머지 칸은 wait, 그룹에 없는 단계는 na 다.
@@ -358,8 +420,26 @@ Cell
    - 대상 칸이 `data-state="na"` 다 → 그 그룹에 없는 단계다. 보고 후 중단한다.
 
 1. **상태 치환** — 0에서 얻은 줄 전문을 `old_string` 으로 Edit 1회.
-   - 선형: `class="{state}"` 와 자식 `.chip` 텍스트   (done/완료, active/진행중, wait/대기)
+   - 선형: `class="{state}"` 와 자식 `.chip` 텍스트, 그리고 아래 표에 따른 `.step-detail` 텍스트
    - 그룹: `data-state="{state}"` 와 칸 텍스트       (같은 어휘를 쓴다)
+
+   **`.step-detail` 갱신 규칙 (선형 모드 전용)**
+
+   | 네 번째 인자 | 동작 |
+   |-------------|------|
+   | 주어지지 않음 | `.step-detail` 을 **건드리지 않는다**(기존 값 유지). 상세 없이 부르던 기존 호출과 결과가 완전히 같다 |
+   | `"내용"` | 이스케이프한 내용으로 `<span class="step-detail">내용</span>` 를 치환한다 |
+   | `""`(빈 문자열) | 내용을 비운다. `.step-detail:empty` 규칙이 그 줄을 통째로 숨긴다 |
+
+   - **이스케이프**: `log` 와 동일하게 `&`→`&amp;`, `<`→`&lt;`, `>`→`&gt;` 순서로 치환한다.
+     코드 조각(`Foo<T>`, `a && b`)이 그대로 들어가면 태그가 깨진다.
+   - **줄바꿈을 넣지 않는다.** `<li>` 가 여러 줄로 쪼개지면 불변식 2가 깨져 이후 `step` 의 grep 앵커와
+     감사용 `grep -c` 가 전부 어긋난다. 길이는 40자 내외를 권장하며, 넘치면 CSS 가 말줄임 처리한다.
+   - 대상 `<li>` 에 `.step-detail` span 이 **없으면**(이 기능 도입 이전에 만들어진 대시보드)
+     `</li>` 바로 앞에 새로 삽입한다. 같은 Edit 1회 안에서 처리되므로 비용이 늘지 않는다.
+   - **매트릭스 모드(`<g>.<p>`)에서 상세 인자가 주어지면**, 상태 갱신은 정상 수행하고 **상세는
+     무시했음을 한 줄 보고한다.** 중단하지 않는다 — 상태 갱신까지 막으면 부가 정보 손실이
+     진행률 정지라는 더 큰 손실로 번진다.
 
 2. **진행률 재계산** — 0에서 읽은 `#dz-progress-pct` 텍스트가 `"M/N · P%"` 이므로 M·N 을 그대로 얻는다.
    완료 칸 수는 다시 세지 않고 **전이로 계산한다**:
@@ -419,6 +499,48 @@ grep -c 'dz-step-.*class="done"' .claude/dashboard.html        # 선형 모드
 
 `data-seq` 가 문서 내 유일 문자열이므로 두 치환 모두 앵커가 명확하고, 순번을 세는 판단이
 개입하지 않는다.
+
+---
+
+## `serve` — 메인 세션이 수행할 절차
+
+> **이 하위 명령은 워크플로우에 강제되지 않는다.** 플로팅을 쓰려는 사용자가 명시적으로 부를 때만
+> 실행한다. `init`/`step`/`log` 는 서버 유무와 무관하게 동작한다.
+
+```
+0. 인자 해석:
+   - 첫 인자가 `stop` 이면 4번으로 간다. 두 번째 인자가 있으면 그것이 중지 대상 포트,
+     없으면 기본 포트 8791 을 쓴다. 중지 대상 포트에도 아래와 같은 1024~65535 순수 숫자
+     검증을 똑같이 적용한다 — 통과하지 못하면 중단하고 보고하며 셸 명령에 치환하지 않는다.
+   - 첫 인자가 1024~65535 범위의 순수 숫자면 포트로 쓴다. 인자가 없으면 8791.
+   - 그 밖의 값이면 중단하고 "포트는 1024~65535 숫자여야 한다"를 보고한다.
+     받은 값을 셸 명령에 치환하지 않는다.
+
+1. `.claude/dashboard.html` 이 없으면 **중단**하고 `/dashboard init` 을 먼저 부르라고 안내한다.
+   (서버만 띄우면 404 가 나올 뿐이다.)
+
+2. `python3 --version` 이 실패하면 **중단**하고 그 사실을 보고한다. 다른 서버를 대신 설치하지 않는다.
+   사용자가 원하면 임의의 정적 서버로 같은 URL 을 열 수 있음을 한 줄로 안내한다.
+
+3. 아래를 **백그라운드**로 실행한다(Bash 도구의 background 옵션).
+   문서 루트는 프로젝트 밖 임시 디렉토리이며, 그 안에는 대시보드 심볼릭 링크 하나만 둔다.
+
+       DZ_DIR=$(mktemp -d) && ln -s "$PWD/.claude/dashboard.html" "$DZ_DIR/dashboard.html" \
+         && python3 -m http.server {포트} --bind 127.0.0.1 --directory "$DZ_DIR"
+
+   - `--bind 127.0.0.1` 은 **생략 금지**다. `http.server` 의 기본값은 루프백이 아니라 모든 네트워크
+     인터페이스에 열리는 값이다.
+   - "Address already in use" 로 죽으면 포트 충돌이다. 다른 포트를 **추측해서 재시도하지 말고**
+     보고하고 `/dashboard serve 8792` 를 제안한다.
+
+4. `stop`: `pkill -f "http.server {포트} --bind 127.0.0.1"` 를 실행하고 결과를 보고한다.
+   (0단계에서 정한 대상 포트를 쓴다. 패턴에 `--bind 127.0.0.1` 까지 포함해 다른 프로세스의
+   부분 일치를 죽이지 않는다. 임시 디렉토리는 OS 가 정리하므로 따로 지우지 않는다.)
+
+5. 보고: `http://localhost:{포트}/dashboard.html` 을 출력하고
+   "이 URL 로 열어야 우상단 「플로팅」 버튼이 활성화된다"를 한 줄 덧붙인다.
+   작업이 끝나면 `/dashboard serve stop` 으로 서버를 끄도록 안내한다.
+```
 
 ---
 
@@ -592,12 +714,17 @@ DZ:DASHBOARD 갱신 맵 (동적 영역 — 셀렉터 기반 정밀 치환, comma
   #dz-progress-bar      : inline style width:N%
   #dz-progress-pct      : 진행률 텍스트 (예: 3/6 · 50%)
   #dz-step-{n}          : [그룹 1개] 각 단계 li — class(done|active|wait) + .chip 텍스트
+                          + .step-detail 텍스트(그 단계의 한 줄 상세. 비어 있으면 CSS 가 숨긴다)
   #dz-cell-{g}-{p}      : [그룹 2+] 매트릭스 칸 td — data-state(done|active|wait|na) + 칸 텍스트
                           {g}=행(그룹) 번호, {p}=열(단계) 번호. 한 파일에 step/cell 이 공존하지 않는다
   #dz-group-{g}         : [그룹 2+] 행 머리 th — init 이 그룹명을 넣고 이후 치환하지 않는다
   #dz-log               : 작업 추적 ul — li data-seq 앵커로 prepend / data-current-session 속성(현재 세션 번호)
   #dz-updated           : 갱신 시각 텍스트
 정적(불가침): 골격 · <style> · 제목 · 하단 스크립트
+  #dz-pip-btn / #dz-pip-hint : 플로팅 진입 버튼과 안내 한 줄. .wrap 바깥에 있으며
+                               init/step/log 도, 폴링 동기화도 이 둘을 건드리지 않는다
+  #dz-log-card               : 작업 추적 카드 div. PiP 압축 뷰가 CSS 로만 숨긴다
+                               (DOM 에서 제거하지 않는다 — 복귀 시 로그가 사라진다)
 -->
 <style>
   :root{--ink:#172033;--muted:#5E6B7D;--line:#D9E2EC;--soft:#F4F7FB;--blue:#1E5AA8;--navy:#12335B;--green:#1F8A70;--orange:#F59E0B;--red:#C2410C;}
@@ -611,7 +738,7 @@ DZ:DASHBOARD 갱신 맵 (동적 영역 — 셀렉터 기반 정밀 치환, comma
   .bar-inner{height:100%;background:linear-gradient(90deg,var(--blue),#2D78C8);border-radius:999px;transition:width .4s}
   .pct{font-size:13px;font-weight:700;color:var(--blue);margin-top:6px}
   ol.steps{list-style:none;margin:14px 0 0;padding:0}
-  ol.steps li{display:flex;align-items:center;gap:12px;padding:11px 4px;border-bottom:1px solid var(--soft);font-size:15px}
+  ol.steps li{display:flex;align-items:center;gap:12px;padding:11px 4px;border-bottom:1px solid var(--soft);font-size:15px;flex-wrap:wrap;row-gap:3px}
   ol.steps li:last-child{border-bottom:0}
   .num{width:26px;height:26px;border-radius:8px;display:grid;place-items:center;font-size:13px;font-weight:800;background:var(--soft);color:var(--muted);flex:none}
   li.done .num{background:var(--green);color:#fff}
@@ -621,6 +748,8 @@ DZ:DASHBOARD 갱신 맵 (동적 영역 — 셀렉터 기반 정밀 치환, comma
   .chip{margin-left:auto;font-size:12px;font-weight:800;padding:3px 10px;border-radius:999px;background:var(--soft);color:var(--muted);flex:none}
   li.done .chip{background:#E5F3EE;color:var(--green)}
   li.active .chip{background:#EAF2FB;color:var(--blue)}
+  .step-detail{flex-basis:100%;margin-left:38px;font-size:12.5px;font-weight:400;color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .step-detail:empty{display:none}
   table.matrix{width:100%;border-collapse:collapse;margin:14px 0 0;font-size:14px}
   .matrix th,.matrix td{border:1px solid var(--line);padding:9px 10px}
   .matrix thead th{font-size:12px;font-weight:800;background:var(--soft);color:var(--muted);text-align:center}
@@ -659,6 +788,18 @@ DZ:DASHBOARD 갱신 맵 (동적 영역 — 셀렉터 기반 정밀 치환, comma
   .session-head:first-child{margin-top:0}
   .log-title{font-size:13px;font-weight:700;color:var(--muted);margin:0 0 10px}
   .foot{font-size:12px;color:var(--muted);text-align:right}
+  #dz-pip-btn{position:fixed;top:18px;right:18px;z-index:9;font-family:inherit;font-size:12px;font-weight:700;padding:7px 14px;border-radius:999px;border:1px solid var(--line);background:#fff;color:var(--navy);cursor:pointer;box-shadow:0 2px 8px rgba(19,51,91,.10)}
+  #dz-pip-btn:disabled{color:var(--muted);cursor:not-allowed;box-shadow:none}
+  #dz-pip-hint{position:fixed;top:54px;right:18px;z-index:9;max-width:300px;font-size:11px;line-height:1.5;color:var(--muted);background:#fff;border:1px solid var(--line);border-radius:8px;padding:8px 10px;box-shadow:0 2px 8px rgba(19,51,91,.10)}
+  #dz-pip-hint[hidden]{display:none}
+  body.dz-pip .wrap{margin:10px auto;padding:0 10px}
+  body.dz-pip .card{padding:14px 16px;border-radius:10px;margin-bottom:10px}
+  body.dz-pip h1{font-size:16px}
+  body.dz-pip .sub{margin-bottom:12px}
+  body.dz-pip #dz-log-card{display:none}
+  body.dz-pip ol.steps li{padding:9px 4px}
+  body.dz-pip ol.steps li.active{background:#EAF2FB;border-radius:8px;padding-left:8px;padding-right:8px}
+  body.dz-pip ol.steps li:not(.active) .step-detail{display:none}
 </style>
 </head>
 <body>
@@ -671,7 +812,7 @@ DZ:DASHBOARD 갱신 맵 (동적 영역 — 셀렉터 기반 정밀 치환, comma
     <ol class="steps" id="dz-steps">
     </ol>
   </div>
-  <div class="card">
+  <div class="card" id="dz-log-card">
     <div class="log-title">작업 추적</div>
     <input type="radio" name="dzf" id="dzf-all" class="dzf" checked><label for="dzf-all">전체</label>
     <input type="radio" name="dzf" id="dzf-impl" class="dzf"><label for="dzf-impl">구현</label>
@@ -680,11 +821,138 @@ DZ:DASHBOARD 갱신 맵 (동적 영역 — 셀렉터 기반 정밀 치환, comma
   </div>
   <div class="foot" id="dz-updated">갱신: -</div>
 </div>
+<button id="dz-pip-btn" type="button">플로팅</button>
+<div id="dz-pip-hint" hidden></div>
 <script>
-  // 탭으로 돌아오거나 창에 포커스가 오면 최신 파일로 자동 새로고침 (새 탭 안 띄움)
-  var _dzReloading=false; function _dzReload(){ if(_dzReloading) return; _dzReloading=true; location.reload(); }
-  document.addEventListener('visibilitychange', function(){ if(document.visibilityState==='visible') _dzReload(); });
-  window.addEventListener('focus', _dzReload);
+(function(){
+  var POLL_INTERVAL_MS = 5000;          // 로컬 파일 폴링 주기
+  var FAILURE_LIMIT = 3;                // 연속 실패 이 횟수부터 사용자에게 알린다
+  var PIP_WIDTH = 420, PIP_HEIGHT = 620;
+
+  var wrap = document.querySelector('.wrap');
+  var pipButton = document.getElementById('dz-pip-btn');
+  var pipHint = document.getElementById('dz-pip-hint');
+  var isServed = location.protocol === 'http:' || location.protocol === 'https:';
+  var hasPipSupport = 'documentPictureInPicture' in window;
+  var pipWindow = null;
+  var lastHtml = '';
+  var busy = false;
+  var failureCount = 0;
+  var reloadPending = false;
+  var reasonHint = '';            // 버튼이 비활성인 영구 사유. 해소되기 전까지 유지된다
+
+  function setHint(text){ pipHint.textContent = text || ''; pipHint.hidden = !text; }
+
+  // ── 갱신 경로 A: file:// — Phase 1 방식 그대로. 이 분기는 회귀 금지 대상이다 ──
+  if(!isServed){
+    var reloading = false;
+    var reloadOnce = function(){ if(reloading) return; reloading = true; location.reload(); };
+    document.addEventListener('visibilitychange', function(){ if(document.visibilityState==='visible') reloadOnce(); });
+    window.addEventListener('focus', reloadOnce);
+    pipButton.disabled = true;
+    setHint('플로팅 창은 로컬 서버에서만 동작합니다. /dashboard serve 를 실행하고 http://localhost:8791/dashboard.html 로 여세요.');
+    return;
+  }
+
+  // ── 갱신 경로 B: http(s):// — 폴링 + 부분 치환 ──
+  function syncText(fresh, id){
+    var live = wrap.querySelector('#'+id), next = fresh.getElementById(id);
+    if(live && next) live.textContent = next.textContent;
+  }
+  function syncProgressBar(fresh){
+    var live = wrap.querySelector('#dz-progress-bar'), next = fresh.getElementById('dz-progress-bar');
+    if(live && next) live.setAttribute('style', next.getAttribute('style') || '');
+  }
+  function syncVisualization(fresh){
+    // 선형(#dz-steps)과 매트릭스(#dz-matrix)는 한 파일에 하나만 존재한다(불변식 1).
+    var live = wrap.querySelector('#dz-steps,#dz-matrix'), next = fresh.querySelector('#dz-steps,#dz-matrix');
+    if(live && next) live.outerHTML = next.outerHTML;
+  }
+  function syncLog(fresh){
+    var live = wrap.querySelector('#dz-log'), next = fresh.getElementById('dz-log');
+    if(live && next) live.innerHTML = next.innerHTML;
+  }
+  function sessionTabsChanged(fresh){
+    return fresh.querySelectorAll('input[name="dzs"]').length
+        !== wrap.querySelectorAll('input[name="dzs"]').length;
+  }
+  function apply(html){
+    if(html === lastHtml) return;
+    lastHtml = html;
+    var fresh = new DOMParser().parseFromString(html, 'text/html');
+    // 라디오와 <style> 은 치환 대상이 아니다(사용자가 고른 필터·탭이 날아간다).
+    // 세션 탭 개수가 달라지면 전체 리로드가 유일하게 안전한 경로다. 플로팅 중에는
+    // 리로드가 PiP 참조를 죽이므로, 창을 먼저 강제로 닫는다 — opener 쪽에서
+    // pipWindow.close() 를 호출하는 것은 Document PiP 스펙이 지원하는 정상 동작이다
+    // (사용자 제스처 요건은 '여는' 쪽에만 적용되고 닫는 쪽에는 없다).
+    if(sessionTabsChanged(fresh)){
+      if(!pipWindow){ location.reload(); return; }
+      reloadPending = true;
+      pipWindow.close();   // pagehide 핸들러가 reloadPending 을 보고 즉시 리로드한다
+    }
+    syncText(fresh,'dz-title'); syncText(fresh,'dz-subtitle');
+    syncText(fresh,'dz-progress-pct'); syncText(fresh,'dz-updated');
+    syncProgressBar(fresh); syncVisualization(fresh); syncLog(fresh);
+  }
+  function poll(){
+    if(busy) return;
+    busy = true;
+    fetch(location.pathname, {cache:'no-store'})
+      .then(function(res){ if(!res.ok) throw new Error(res.status); return res.text(); })
+      .then(function(html){ failureCount = 0; if(!pipWindow) setHint(reasonHint); apply(html); })
+      .catch(function(){
+        if(++failureCount >= FAILURE_LIMIT)
+          setHint('대시보드를 읽지 못했습니다. /dashboard serve 로 로컬 서버가 켜져 있는지 확인하세요.');
+      })
+      .then(function(){ busy = false; });
+  }
+  setInterval(poll, POLL_INTERVAL_MS);
+  document.addEventListener('visibilitychange', function(){ if(document.visibilityState==='visible') poll(); });
+  window.addEventListener('focus', poll);
+
+  // ── 플로팅(Document PiP) — 반드시 사용자 제스처로만 진입한다 ──
+  if(!hasPipSupport){
+    pipButton.disabled = true;
+    reasonHint = '이 브라우저는 Document Picture-in-Picture 를 지원하지 않습니다 (Chrome·Edge 에서 동작).';
+    setHint(reasonHint);
+    return;
+  }
+  pipButton.addEventListener('click', function(){
+    if(pipWindow){ pipWindow.close(); return; }
+    window.documentPictureInPicture.requestWindow({width:PIP_WIDTH, height:PIP_HEIGHT})
+      .then(function(win){
+        pipWindow = win;
+        var pipDocument = win.document;
+        pipDocument.title = document.title;
+        // PiP 창은 opener 의 CSS 를 상속하지 않는다(실측) — <style> 전문을 복사한다.
+        Array.prototype.forEach.call(document.querySelectorAll('style'), function(source){
+          var copy = pipDocument.createElement('style');
+          copy.textContent = source.textContent;
+          pipDocument.head.appendChild(copy);
+        });
+        pipDocument.body.className = 'dz-pip';
+        // 복제가 아니라 '이동'이다 — 폴링이 계속 같은 노드를 갱신하므로 동기화 코드가 하나로 유지된다.
+        pipDocument.body.appendChild(wrap);
+        // 숨은 탭의 타이머 스로틀링(최대 1분)을 보완한다: 창에 커서를 올리면 즉시 갱신.
+        pipDocument.body.addEventListener('pointerenter', poll);
+        pipButton.textContent = '플로팅 닫기';
+        reasonHint = '';
+        setHint('플로팅 창에서 보는 중입니다. 창을 닫으면 여기로 돌아옵니다.');
+        win.addEventListener('pagehide', function(){
+          pipWindow = null;
+          document.body.insertBefore(wrap, pipButton);
+          pipButton.textContent = '플로팅';
+          setHint(reasonHint);
+          if(reloadPending) location.reload(); else poll();
+        });
+      })
+      .catch(function(err){
+        // 자동 재시도하지 않는다 — 창 열기는 사용자 제스처가 있어야만 허용된다.
+        reasonHint = '플로팅 창을 열 수 없습니다 (' + ((err && err.name) || 'error') + '). Claude 내장 브라우저 대신 Chrome 에서 열어 보세요.';
+        setHint(reasonHint);
+      });
+  });
+})();
 </script>
 </body>
 </html>

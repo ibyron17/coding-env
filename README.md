@@ -117,7 +117,7 @@ cd /path/to/my-project
 | `prp-commit` | 131 | 자연어로 파일 지정해 커밋 (컨벤션: 프로젝트 CLAUDE.md > commitlint 설정 > 기본 형식) |
 | `code-review` | 289 | 로컬 변경 또는 PR 검수 |
 | `env-update` | 184 | coding-env 레포 업데이트 (manifest 기반 자동 갱신) |
-| `dashboard` | 691 | 세션 진행 상황을 프로젝트 로컬 HTML 대시보드로 기록 (init/step/log + on/off 스위치) |
+| `dashboard` | 959 | 세션 진행 상황을 프로젝트 로컬 HTML 대시보드로 기록 (init/step/log + on/off 스위치, `serve`로 플로팅) |
 
 각 커맨드의 동작:
 
@@ -143,7 +143,14 @@ cd /path/to/my-project
   에서만, 나에게만 적용되는 기록 여부를 언제든 전환할 수 있습니다(`dashboard_enabled`,
   기본값 켜짐). `init`의 두 번째 인자는 선형 문법(`"단계1|단계2|..."`)뿐 아니라 그룹 문법
   (`"그룹A:단계1,단계2|그룹B:단계1"`)도 지원해, 다중 트랙 세션을 매트릭스(행=그룹, 열=단계)로
-  시각화할 수 있습니다.
+  시각화할 수 있습니다. `serve` 하위 명령(opt-in)으로 로컬 정적 서버(루프백 바인딩)를 띄우면
+  `http://localhost:8791/dashboard.html` 로 열었을 때 우상단 「플로팅」 버튼이 활성화되어,
+  Document Picture-in-Picture 창으로 대시보드를 화면 위에 항상 띄워둔 채 5초 간격 폴링으로
+  갱신할 수 있습니다(`file://` 로 열면 기존과 동일하게 포커스 시 리로드만 동작). 이 플로팅
+  창에서는 압축 뷰가 적용되어 작업 추적 로그 카드는 숨고 세션 제목·전체 단계·진행중인 단계만
+  보입니다. `step`의 네 번째 인자로 한 줄 상세(예: `step 3 active "폴링 스크립트 작성 중"`)를
+  주면 그 단계가 지금 무엇을 하는지가 단계 목록에 함께 표시되며(생략하면 기존 상세 유지, `""`
+  로 지움), 플로팅 압축 뷰에서는 진행중인 단계의 상세만 노출됩니다.
 
 **의존 사슬 7종 + 독립 커맨드 1종.** `prp-implement` 가 `/code-review`·`/prp-commit`·`/prp-pr` 을,
 `prp-pr` 이 `/code-review`·`/prp-commit` 을 호출합니다. 일부만 설치하면 사슬이 끊기므로 전부 배포합니다.

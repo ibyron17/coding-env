@@ -607,6 +607,9 @@ Phase 2 의 핵심 요구인 "자동 플로팅 전환"이 성립하는지 미검
 
 ## Phase 2 계획 (구현 제외 — 별도 승인 대상)
 
+> **실행 계획은 [`dashboard-pip-floating.md`](./dashboard-pip-floating.md) 로 이관됐다.**
+> 아래는 그 실행 계획의 출발점이 된 실측 스파이크 결과와 방향 판단만 남긴 참고 자료다.
+
 ### 실측 완료된 사실 (사용자 Chrome 149 에서 측정)
 
 - `documentPictureInPicture` 존재, `isSecureContext` true(localhost), 실제 380×464 플로팅 창 생성 확인
