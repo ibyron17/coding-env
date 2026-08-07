@@ -996,10 +996,10 @@ test_manifest_fields_complete() {
 }
 
 # T22: dashboard 템플릿 무결성 — LLM 지시문 방식이라 런타임 Edit 결과는 검증 대상이 아니고,
-# 설치·문서 정합성만 자동 검증한다 (하위 검증 T22-1~T22-58).
+# 설치·문서 정합성만 자동 검증한다 (하위 검증 T22-1~T22-79).
 test_dashboard_template_integrity() {
   local test_name="T22"
-  local test_desc="dashboard 템플릿 무결성 (T22-1~T22-58)"
+  local test_desc="dashboard 템플릿 무결성 (T22-1~T22-79)"
   log_test_name "$test_name" "$test_desc"
 
   local sandbox
@@ -1517,6 +1517,193 @@ test_dashboard_template_integrity() {
   fi
   if grep -qF 'body.dz-pip #dz-impl-card{display:none}' "$dashboard_command_file"; then
     record_failure "$test_name" "T22-58: PiP 에서 impl 카드를 숨기는 규칙이 추가됨"
+    return 1
+  fi
+
+  # T22-59: 「지금」 카드 셀렉터 4종 존재 — 카드 자체의 유실을 막는다
+  if ! grep -qF 'id="dz-now-card"' "$dashboard_command_file"; then
+    record_failure "$test_name" "T22-59: id=\"dz-now-card\" 미발견"
+    return 1
+  fi
+  if ! grep -qF 'id="dz-now-phase"' "$dashboard_command_file"; then
+    record_failure "$test_name" "T22-59: id=\"dz-now-phase\" 미발견"
+    return 1
+  fi
+  if ! grep -qF 'id="dz-now-elapsed"' "$dashboard_command_file"; then
+    record_failure "$test_name" "T22-59: id=\"dz-now-elapsed\" 미발견"
+    return 1
+  fi
+  if ! grep -qF 'id="dz-now-next"' "$dashboard_command_file"; then
+    record_failure "$test_name" "T22-59: id=\"dz-now-next\" 미발견"
+    return 1
+  fi
+
+  # T22-60: 자동 숨김 규칙 존재 — 매트릭스 세션·진행중 없음 상태에서 빈 카드가 노출되는 회귀를
+  # 막는다(설계 결정 3·8).
+  if ! grep -qF '.wrap:not(:has(#dz-steps li.active)) #dz-now-card{display:none}' "$dashboard_command_file"; then
+    record_failure "$test_name" "T22-60: 「지금」 카드 자동 숨김 규칙 미발견"
+    return 1
+  fi
+
+  # T22-61: 호출 규약 비대화 방지 (최우선, 역방향) — 커밋 a6966aa 는 "현재 위치/다음 단계" 카드를
+  # 위해 step 에 선택 인자 3개를 요구했다가 그 무게 때문에 기능째 제거됐다. 「지금」 카드는 순수
+  # 파생 뷰이므로 dz-current 계열 셀렉터나 규약상의 위치/다음단계 인자가 다시 나타나면 같은
+  # 실패의 재발이다.
+  if grep -qE 'dz-current|"현재 위치"' "$dashboard_command_file"; then
+    record_failure "$test_name" "T22-61: 제거된 dz-current 계열 셀렉터·인자가 부활함"
+    return 1
+  fi
+  if ! grep -qF 'step <n> <done|active|wait> ["상세"]' "$dashboard_command_file"; then
+    record_failure "$test_name" "T22-61: step 호출 규약 원형 미발견"
+    return 1
+  fi
+
+  # T22-62: 자동 각인 규칙 문서화 — 각인 시점이 흐려지면 매 호출마다 시각이 리셋되는 회귀로 이어진다.
+  if ! grep -qF 'data-started-at' "$dashboard_command_file"; then
+    record_failure "$test_name" "T22-62: data-started-at 미발견"
+    return 1
+  fi
+  if ! grep -q '이전 상태 ≠ `active` \*\*이고\*\* 새 상태 = `active`' "$dashboard_command_file"; then
+    record_failure "$test_name" "T22-62: data-started-at 각인 전이 조건 문구 미발견"
+    return 1
+  fi
+
+  # T22-63: 파생 뷰 불변식 문구 — 유실되면 카드에 직접 쓰는 경로가 생기고 인자가 따라 붙는다.
+  if ! grep -q '「지금」 카드는 파생 뷰다' "$dashboard_command_file"; then
+    record_failure "$test_name" "T22-63: '「지금」 카드는 파생 뷰다' 불변식 문구 미발견"
+    return 1
+  fi
+
+  # T22-64: 렌더러 배치(줄 번호 비교) — file:// 조기 반환보다 앞에 있어야 한다. 뒤에 있으면
+  # file:// 로 연 대시보드에서 경과 시간이 영원히 갱신되지 않는데, http:// 테스트로는 정상으로
+  # 보여 발견이 가장 어렵다(설계 결정 6).
+  if ! grep -qF 'function renderNowCard(){' "$dashboard_command_file"; then
+    record_failure "$test_name" "T22-64: function renderNowCard(){ 미발견"
+    return 1
+  fi
+  local render_tick_line early_return_line
+  render_tick_line=$(grep -n 'setInterval(renderNowCard' "$dashboard_command_file" | tail -1 | cut -d: -f1)
+  early_return_line=$(grep -n 'if(!isServed){' "$dashboard_command_file" | tail -1 | cut -d: -f1)
+  if [[ -z "$render_tick_line" || -z "$early_return_line" || "$render_tick_line" -gt "$early_return_line" ]]; then
+    record_failure "$test_name" "T22-64: renderNowCard 틱이 file:// 조기 반환 뒤에 있음"
+    return 1
+  fi
+
+  # T22-65: 폴링이 카드를 치환하지 않음(역방향) — 파생 뷰를 파일 문자열로도 동기화하면 값 출처가
+  # 둘로 갈라진다(불변식 7). 검사 범위를 <script> 블록으로 한정한다 — 데이터 모델 절의 폴링 계약
+  # 표는 대조를 위해 #dz-impl-card 의 outerHTML 치환을 같은 줄에서 설명하므로, 파일 전체를 훑으면
+  # 그 문서 프로즈에서 오탐이 발생한다.
+  if sed -n '/^<script>/,/<\/script>/p' "$dashboard_command_file" | grep -n 'dz-now-card' | grep -qE 'outerHTML|innerHTML'; then
+    record_failure "$test_name" "T22-65: dz-now-card 가 outerHTML/innerHTML 로 치환됨"
+    return 1
+  fi
+  if ! grep -qF 'renderNowCard();' "$dashboard_command_file"; then
+    record_failure "$test_name" "T22-65: apply() 안 renderNowCard() 호출 미발견"
+    return 1
+  fi
+
+  # T22-66: 매트릭스 방침 문구 — 매트릭스에서 <td> 에 각인하는 범용화 유혹을 막는다.
+  if ! grep -q '매트릭스 모드(`<g>.<p>`)에서는 각인하지 않는다' "$dashboard_command_file"; then
+    record_failure "$test_name" "T22-66: 매트릭스 모드 각인 배제 문구 미발견"
+    return 1
+  fi
+
+  # T22-67: PiP 미숨김(역방향) — 곁눈질 화면에서 가장 값진 카드를 숨기는 규칙의 몰래 추가를
+  # 막는다(설계 결정 7).
+  if grep -qF 'body.dz-pip #dz-now-card{display:none}' "$dashboard_command_file"; then
+    record_failure "$test_name" "T22-67: PiP 에서 「지금」 카드를 숨기는 규칙이 추가됨"
+    return 1
+  fi
+
+  # T22-68: 자동 발행 절 제목 존재 — 절차 자체가 유실되면 init 의 두 분기가 참조할 대상이 없다.
+  if ! grep -qF '## 자동 발행 — `init` 의 공통 하위 절차' "$dashboard_command_file"; then
+    record_failure "$test_name" "T22-68: 자동 발행 절 제목 미발견"
+    return 1
+  fi
+
+  # T22-69: file:// 폴백 생존(최우선) — 서버 실패 시 URL 을 아무것도 못 주는 순수 퇴행을 막는다
+  # (설계 결정 4).
+  if ! grep -qF 'file://' "$dashboard_command_file"; then
+    record_failure "$test_name" "T22-69: file:// 문자열이 문서에서 사라짐"
+    return 1
+  fi
+  if ! sed -n '/^## 자동 발행/,/^## `serve`/p' "$dashboard_command_file" | grep -q '폴백'; then
+    record_failure "$test_name" "T22-69: 자동 발행 절 안에 폴백 표기 미발견"
+    return 1
+  fi
+
+  # T22-70: init 의 두 분기 모두 자동 발행을 참조 — 한 분기만 발행하면 세션 2 가 방치된다
+  # (설계 결정 3). 범위를 init 절로 좁히는 이유는 자동 발행 절 자신의 산문에서 오탐이 나기 때문이다.
+  local init_section_autopublish_count
+  init_section_autopublish_count=$(sed -n '/^## `init`/,/^## `step`/p' "$dashboard_command_file" | grep -c '자동 발행')
+  if [[ "$init_section_autopublish_count" -lt 2 ]]; then
+    record_failure "$test_name" "T22-70: init 절 범위에서 '자동 발행' 참조가 2회 미만"
+    return 1
+  fi
+
+  # T22-71: 포트 스캔 계약 3토큰 — 유실되면 메인 세션이 스캔 출력을 임의 해석하게 된다.
+  local scan_token
+  for scan_token in REUSE FREE NONE; do
+    if ! grep -qF "$scan_token" "$dashboard_command_file"; then
+      record_failure "$test_name" "T22-71: 포트 스캔 토큰 미발견: $scan_token"
+      return 1
+    fi
+  done
+
+  # T22-72: REUSE 가 FREE 보다 우선 — 없으면 같은 프로젝트에 서버가 계속 쌓인다(설계 결정 2).
+  if ! grep -qF '`REUSE` 가 `FREE` 보다 우선한다' "$dashboard_command_file"; then
+    record_failure "$test_name" "T22-72: REUSE 우선순위 문구 미발견"
+    return 1
+  fi
+
+  # T22-73: 바인딩 안전(T22-35 의 확장, 역방향+정방향) — 자동 경로가 --bind 127.0.0.1 을 빼먹고
+  # .claude 를 LAN 에 노출하는 회귀를 막는다.
+  local bind_occurrence_count
+  bind_occurrence_count=$(grep -c -- '--bind 127.0.0.1' "$dashboard_command_file")
+  if [[ "$bind_occurrence_count" -lt 2 ]]; then
+    record_failure "$test_name" "T22-73: --bind 127.0.0.1 등장 횟수가 2 미만"
+    return 1
+  fi
+  if grep -q '0\.0\.0\.0' "$dashboard_command_file"; then
+    record_failure "$test_name" "T22-73: 0.0.0.0 바인딩 문자열이 발견됨"
+    return 1
+  fi
+
+  # T22-74: 실패가 init 을 중단시키지 않음 — 발행 실패가 착수 자체를 막으면 안 된다(설계 결정 7).
+  if ! grep -qF '이 절차의 어떤 실패도 `init` 을 중단시키지 않는다' "$dashboard_command_file"; then
+    record_failure "$test_name" "T22-74: 실패 비차단 문구 미발견"
+    return 1
+  fi
+
+  # T22-75: SSH 가드 — 원격 세션에서 엉뚱한 머신의 브라우저를 여는 사고를 막는다(설계 결정 6).
+  if ! grep -qF 'SSH_CONNECTION' "$dashboard_command_file"; then
+    record_failure "$test_name" "T22-75: SSH_CONNECTION 가드 미발견"
+    return 1
+  fi
+
+  # T22-76: 브라우저 열기 무재시도 — 열기 실패 시 무한 재시도로 이어지는 회귀를 막는다.
+  if ! grep -qF '재시도하지 않고' "$dashboard_command_file"; then
+    record_failure "$test_name" "T22-76: 재시도 금지 문구 미발견"
+    return 1
+  fi
+
+  # T22-77: step/log/impl 비발행 — 갱신 명령마다 탭이 열리는 최악의 회귀를 막는다(확정 사항 3).
+  if ! grep -qF '서버를 띄우지도, 브라우저를 열지도 않는다' "$dashboard_command_file"; then
+    record_failure "$test_name" "T22-77: step·log·impl 비발행 문구 미발견"
+    return 1
+  fi
+
+  # T22-78: serve 의 명시 포트 무추측 규칙 생존(역방향) — 자동 스캔을 넣으며 명시 포트의
+  # 무추측 규칙까지 지워 버리는 회귀를 막는다.
+  if ! grep -qF '다른 포트를 **추측해서 재시도하지 말고**' "$dashboard_command_file"; then
+    record_failure "$test_name" "T22-78: serve 의 명시 포트 무추측 규칙 미발견"
+    return 1
+  fi
+
+  # T22-79: stop 안내에 포트 포함 — 자동 경로가 8792 를 썼는데 안내가 8791 을 죽이라고 하면
+  # 엉뚱한 서버를 끈다.
+  if ! grep -qF '/dashboard serve stop {포트}' "$dashboard_command_file"; then
+    record_failure "$test_name" "T22-79: /dashboard serve stop {포트} 미발견"
     return 1
   fi
 

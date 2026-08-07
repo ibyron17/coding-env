@@ -79,7 +79,7 @@ argument-hint: "init \"<제목>\" \"<단계1|...> 또는 <그룹A:단계1,단계
 | `#dz-subtitle` | 텍스트 | 단계 흐름 요약 · 작업 유형 |
 | `#dz-progress-bar` | inline `style="width:N%"` | 완료 단계 / 전체 단계 |
 | `#dz-progress-pct` | 텍스트 | `3/6 · 50%` |
-| `#dz-step-{n}` **(그룹 1개)** | `class` 속성 + 자식 `.chip` 텍스트 + 자식 `.step-detail` 텍스트 | `done`\|`active`\|`wait` / `완료`\|`진행중`\|`대기` / 한 줄 상세(빈 문자열 허용) |
+| `#dz-step-{n}` **(그룹 1개)** | `class` 속성 + **`data-started-at` 속성** + 자식 `.chip` 텍스트 + 자식 `.step-detail` 텍스트 | `done`\|`active`\|`wait` / **`YYYY-MM-DD HH:MM`(active 전이 시에만 각인)** / `완료`\|`진행중`\|`대기` / 한 줄 상세(빈 문자열 허용) |
 | `#dz-cell-{g}-{p}` **(그룹 2개 이상)** | `data-state` 속성 + 칸 텍스트 | `done`\|`active`\|`wait`\|`na` / `완료`\|`진행중`\|`대기`\|`–` |
 | `#dz-log` | 자식 `<li>` **prepend** + `data-current-session` 속성 | 로그 항목(최신이 위) / 현재 세션 번호 |
 | `#dz-updated` | 텍스트 | 갱신 시각 |
@@ -196,10 +196,22 @@ UpdateMode
 | `#dz-pip-hint` | 상태·사유 한 줄. 기본 `hidden`, 스크립트가 텍스트를 넣을 때만 노출 |
 | `body.dz-pip` | PiP 창 문서의 `<body>` 에만 붙는 클래스. 좁은 창용 여백 축소 규칙의 스코프 |
 | `#dz-log-card` | 「작업 추적」 카드 `<div>`. `init`/`step`/`log` 도, 폴링도 이 요소 자체를 치환하지 않는다. PiP 압축 뷰가 CSS 로 숨기기 위한 유일한 용도이며, DOM 에서 제거하지 않는다 |
+| `#dz-now-card` | 「지금」 카드 `<div>`. 템플릿에 **항상** 존재하며, 진행중 단계가 없으면 CSS 가 통째로 숨긴다. DOM 에서 제거하지 않는다 |
+| `#dz-now-phase` | 현재 단계 `번호. 이름`. **스크립트만** 쓴다 |
+| `#dz-now-elapsed` | `42분 경과 · 마지막 기록 6분 전`. **스크립트만** 쓴다 |
+| `#dz-now-next` | `다음 → 4. 검수`. **스크립트만** 쓴다. 비면 `:empty` 가 그 줄을 숨긴다 |
 
 > **왜 `.wrap` 바깥인가**: 플로팅은 `.wrap` 서브트리를 **통째로 PiP 창으로 옮기는** 방식이다.
 > 버튼이 `.wrap` 안에 있으면 버튼도 같이 옮겨가 (a) 좁은 창을 차지하고 (b) opener 에는 창을 닫을
 > 수단이 남지 않는다. 이 배치는 **T22-37 이 줄 번호 비교로 강제**한다.
+
+### 불변식 추가 (기존 1~6에 이어)
+
+7. **「지금」 카드는 파생 뷰다 — `init`/`step`/`log`/`impl` 은 카드 안의 어떤 요소도 치환하지 않고,
+   폴링도 카드를 치환하지 않는다.** 카드의 입력은 `#dz-steps` 의 `li.active`(와 그
+   `data-started-at`) 및 `#dz-updated` 텍스트뿐이며, 그리는 주체는 `renderNowCard()` 하나다.
+   **카드에 직접 값을 쓰는 경로를 만드는 순간 `step` 호출 규약에 인자가 붙고**(커밋 `a6966aa` 가
+   제거한 바로 그 구조), 같은 정보의 출처가 둘로 갈라져 어느 쪽이 정답인지 알 수 없게 된다.
 
 ### 폴링 동기화 계약 — 무엇을 치환하고 무엇을 보존하는가
 
@@ -214,6 +226,7 @@ UpdateMode
 | `input[name="dzs"]` · `input[name="dzf"]` · `label[for^="dz…"]` · `<style>` | **치환하지 않는다** | 라디오를 재삽입하면 사용자가 고른 유형 필터·세션 탭이 5초마다 초기화된다. 개수가 달라지면(=새 세션) **전체 리로드**로 처리한다 |
 | `#dz-pip-btn` · `#dz-pip-hint` | **치환하지 않는다** | `.wrap` 바깥 = 동기화 영역 밖 |
 | `#dz-impl-card` | `outerHTML` 대입 | 카드 안에 라디오·`<details>` 같은 **사용자 상태가 하나도 없어** 통째 교체가 안전하다. 항목·카운터를 따로 동기화하면 함수가 둘로 늘고, 목록 길이가 바뀌는 `impl set` 순간을 별도로 처리해야 한다 |
+| `#dz-now-card` (와 그 자식 전부) | **치환하지 않는다.** 대신 `apply()` 말미(`resizePipToFit()` **직전**)에 `renderNowCard()` 를 호출한다 | 카드 내용은 `#dz-steps`·`#dz-updated` **파생**이다. 파일에서 카드 HTML 을 가져와 대입하면 (a) 파일이 쓰인 시점의 낡은 경과 시간이 잠깐 들어왔다가 30초 틱이 덮어써 값이 깜빡이고, (b) 같은 값을 만드는 경로가 둘이 된다(불변식 7). `#dz-impl-card` 를 `outerHTML` 로 통째 교체하는 것과 **정반대 판단이며 그 이유는 파생 여부 하나**다 |
 
 **동기화 단위는 "파일 전체 문자열"이다.** 직전 폴링에서 받은 HTML 과 **문자열이 같으면 아무것도 하지
 않는다.** 라이브 DOM 과 비교하지 않는 이유: 사용자가 `<details>` 를 손으로 펼치면 라이브 DOM 은
@@ -346,8 +359,8 @@ Cell
 1. `.claude/dashboard.html` 존재 여부를 확인한다.
    - **이미 존재하면**: 제목·단계 목록 등은 덮어쓰지 않는다(다시 채우면 기존
      진행 상태와 충돌한다). 대신 아래 a~d 를 수행해 세션 경계와 세션 탭만 갱신하고,
-     "기존 대시보드를 이어서 사용합니다"라는 취지로 안내하며
-     `file://<현재 작업 디렉토리 절대경로>/.claude/dashboard.html` 을 출력한 뒤
+     "기존 대시보드를 이어서 사용합니다"라는 취지로 안내한 뒤
+     아래 [자동 발행](#자동-발행--init-의-공통-하위-절차) 절차를 수행하고
      절차를 **여기서 종료**한다(2번 이하 단계를 실행하지 않는다).
      > **한계**: 이 가드는 "완전히 새 작업"과 "기존 미완료 작업 재개"를 구분하지
      > 못한다. 같은 프로젝트에서 정말 새로운 전체 경로 작업을 시작했는데 이전
@@ -398,8 +411,12 @@ Cell
    - **그룹이 1개**: 템플릿의 `<ol class="steps" id="dz-steps">` 내부를 아래 `<li>` N개로 채운다
      (기존과 완전히 동일. 1번이 active, 나머지는 wait).
      ```html
-     <li id="dz-step-{n}" class="{active|wait}"><span class="num">{n}</span>{단계명}<span class="chip">{진행중|대기}</span><span class="step-detail"></span></li>
+     <li id="dz-step-1" class="active" data-started-at="{YYYY-MM-DD HH:MM}"><span class="num">1</span>{단계명}<span class="chip">진행중</span><span class="step-detail"></span></li>
+     <li id="dz-step-{n}" class="wait"><span class="num">{n}</span>{단계명}<span class="chip">대기</span><span class="step-detail"></span></li>
      ```
+     `{YYYY-MM-DD HH:MM}` 은 8단계에서 `#dz-updated` 에 쓰는 것과 **같은 문자열**이다(새로 구할 값이
+     아니다). 그룹 2개 이상(매트릭스) 분기는 한 글자도 바뀌지 않는다 — `data-state` 에 시각을
+     붙이지 않는다.
    - **그룹이 2개 이상**: 템플릿의 아래 두 줄(`<ol>` 요소 전체)을 [매트릭스 마크업](#매트릭스-마크업-init-6단계가-생성)의
      `<table>` 로 통째로 치환한다. 각 그룹의 **첫 단계 칸**이 active, 나머지 칸은 wait, 그룹에 없는 단계는 na 다.
      ```html
@@ -411,8 +428,8 @@ Cell
 8. `#dz-updated` 를 현재 시각(예: `2026-08-04 17:02`)으로 치환한다.
 9. `#dz-log` 는 템플릿 그대로 빈 목록(`<ul class="log" id="dz-log" data-current-session="1"></ul>`)으로
    둔다 — 아직 로그가 없다.
-10. 사용자에게 `file://<현재 작업 디렉토리 절대경로>/.claude/dashboard.html` 을 출력해
-    브라우저로 열도록 안내한다.
+10. 아래 [자동 발행](#자동-발행--init-의-공통-하위-절차) 절차를 수행한다.
+    (기존의 `file://` 안내는 자동 발행이 서버를 띄우지 못했을 때의 **폴백 티어**로 그 안에 살아 있다.)
 
 #### 세션 탭 갱신 — `init` 1-d 의 하위 절차
 
@@ -488,6 +505,22 @@ Cell
    - **매트릭스 모드(`<g>.<p>`)에서 상세 인자가 주어지면**, 상태 갱신은 정상 수행하고 **상세는
      무시했음을 한 줄 보고한다.** 중단하지 않는다 — 상태 갱신까지 막으면 부가 정보 손실이
      진행률 정지라는 더 큰 손실로 번진다.
+
+   **`data-started-at` 각인 규칙 (선형 모드 전용, 인자 없음)**
+
+   | 전이 | 동작 |
+   |------|------|
+   | 이전 상태 ≠ `active` **이고** 새 상태 = `active` | 같은 Edit 안에서 `class` 뒤에 `data-started-at="{YYYY-MM-DD HH:MM}"` 를 현재 시각으로 넣는다(이미 있으면 값만 바꾼다) |
+   | 그 외 모든 전이 | **건드리지 않는다.** 있으면 그대로 두고, 없으면 없는 대로 둔다 |
+
+   - **이전 상태는 0단계 grep 결과 줄에 그대로 적혀 있다** — 진행률 전이(±1) 산술과 **완전히 같은
+     출처**를 한 번 더 읽을 뿐이다. 새 Bash 호출도, 새 Edit 도, 새 인자도 없다.
+   - 형식은 `#dz-updated` 와 **글자 하나까지 동일**하다(`2026-08-07 09:20`). 3단계에서 어차피 만드는
+     문자열이라 오케스트레이터가 새로 배울 것이 없다.
+   - **이미 `active` 인 단계를 다시 `active` 로 부를 때(상세만 갱신하는 경우) 시각을 새로 찍지
+     않는다.** 찍으면 경과 시간이 0으로 되돌아가 이 기능의 유일한 새 정보가 파괴된다.
+   - **매트릭스 모드(`<g>.<p>`)에서는 각인하지 않는다.** `.step-detail` 미지원과 같은 경계다
+     (설계 결정 3). 보고도 하지 않는다 — 애초에 사용자가 요청한 동작이 아니기 때문이다.
 
 2. **진행률 재계산** — 0에서 읽은 `#dz-progress-pct` 텍스트가 `"M/N · P%"` 이므로 M·N 을 그대로 얻는다.
    완료 칸 수는 다시 세지 않고 **전이로 계산한다**:
@@ -626,6 +659,125 @@ grep -c 'dz-impl-[0-9].*class="done"' .claude/dashboard.html
 
 ---
 
+## 자동 발행 — `init` 의 공통 하위 절차
+
+> `init` 의 **두 분기 모두**(신규 생성 후 10단계 / 기존 파일 조기 종료)가 이 절차를 부른다.
+> **`step`·`log`·`impl` 은 이 절차를 부르지 않는다** — 서버를 띄우지도, 브라우저를 열지도 않는다.
+> 세션 중 수십 번 불리는 명령이 프로세스를 만들거나 창을 띄우면 안 된다.
+>
+> **이 절차의 어떤 실패도 `init` 을 중단시키지 않는다.** 대시보드 파일은 이미 만들어졌고
+> 그것이 본체다. 서버·브라우저는 편의이며, 실패는 에러가 아니라 **한 티어 낮은 안내**로 처리한다.
+
+### 발행 티어 — 위에서부터 시도하고, 안 되면 조용히 내려앉는다
+
+| 티어 | URL | 조건 | 얻는 것 |
+|------|-----|------|--------|
+| 1 | `http://localhost:{포트}/dashboard.html` | 서버 재사용 또는 기동 성공 | 5초 폴링 자동 갱신 + 플로팅 버튼 활성 |
+| 2 | `file://{절대경로}/.claude/dashboard.html` | 서버 불가(python3 없음 · 후보 포트 전부 점유 · 기동 실패) | 포커스 시 갱신 |
+
+**브라우저 열기는 티어와 직교한다.** 티어 1·2 어느 쪽이든 확정된 URL 에 대해 아래 「브라우저 열기」를
+시도하고, 그마저 불가능하면 URL 을 출력해 사용자가 직접 열게 한다. 즉 최악의 결과가 **현재 동작과
+정확히 같다** — 이 기능은 어떤 환경에서도 기존 경험을 나쁘게 만들지 않는다.
+
+### 1. 서버 가용성 확인
+
+`python3 --version` 이 실패하면 **티어 2로 내려간다**(3번으로). 다른 서버를 설치하지 않는다.
+
+### 2. 포트 스캔 — Bash 1회, 결과는 3형태 중 하나
+
+후보 포트는 **8791 · 8792 · 8793** 이다(`serve` 의 기본 포트에서 시작해 3개).
+아래를 그대로 실행한다. 셸이 변수 확장을 하지 않도록 `$` 를 쓰지 않는다.
+
+```bash
+python3 -c "
+import socket, urllib.request, pathlib
+mine = pathlib.Path('.claude/dashboard.html').read_bytes()
+free = None
+for port in (8791, 8792, 8793):
+    if socket.socket().connect_ex(('127.0.0.1', port)) != 0:
+        if free is None: free = port
+        continue
+    try:
+        got = urllib.request.urlopen('http://127.0.0.1:%d/dashboard.html' % port, timeout=1).read()
+    except Exception:
+        continue
+    if got == mine:
+        print(port, 'REUSE'); raise SystemExit
+print(free, 'FREE') if free else print('NONE')
+"
+```
+
+출력은 반드시 아래 셋 중 하나다. **다른 해석을 만들지 않는다.**
+
+| 출력 | 의미 | 다음 행동 |
+|------|------|----------|
+| `{포트} REUSE` | 그 포트에서 **이 프로젝트의 대시보드**가 이미 서빙 중이다 | 기동하지 않는다. 3번으로 (`started=false`) |
+| `{포트} FREE` | 그 포트가 비어 있다 | 아래 2-a 로 기동한 뒤 3번으로 (`started=true`) |
+| `NONE` | 후보 3개가 전부 **다른 프로젝트**의 서버다 | **티어 2로 내려간다.** 3번으로. 보고에 "포트 8791~8793 이 다른 대시보드에 쓰이고 있습니다. `/dashboard serve stop <포트>` 로 정리할 수 있습니다"를 덧붙인다 |
+
+- **`REUSE` 가 `FREE` 보다 우선한다.** 위 명령이 이미 그 순서를 보장한다 — 재사용 대상을 찾으면
+  즉시 끝내고, 못 찾았을 때만 가장 낮은 빈 포트를 낸다. **이 우선순위가 없으면 같은 프로젝트에
+  서버가 계속 쌓인다.**
+- 명령 자체가 실패하거나(파일 없음 등) 위 셋이 아닌 출력이 나오면 **추측하지 말고 티어 2로 내려간다.**
+
+**2-a. 기동** — `serve` 절차 3단계의 명령을 **그대로** 쓴다(복제해 변형하지 않는다).
+`{포트}` 만 스캔이 확정한 값으로 채운다.
+
+    DZ_DIR=$(mktemp -d) && ln -s "$PWD/.claude/dashboard.html" "$DZ_DIR/dashboard.html" \
+      && python3 -m http.server {포트} --bind 127.0.0.1 --directory "$DZ_DIR"
+
+- Bash 도구의 **백그라운드** 옵션으로 실행한다.
+- `--bind 127.0.0.1` 은 **생략 금지**다(`serve` 와 같은 이유 — 기본값은 모든 인터페이스다).
+- 기동 직후 그 백그라운드 태스크의 출력을 **한 번** 확인한다. `Address already in use` 가 보이면
+  스캔과 기동 사이에 다른 세션이 그 포트를 채간 것이다. **다른 포트를 추측하지 말고 티어 2로
+  내려간다**(3번으로). 이 경합은 드물고, 폴백이 이미 준비돼 있다.
+- **`nohup`·`setsid` 로 프로세스를 분리하지 않는다.** 세션에 매인 수명이 의도된 기본값이다.
+
+### 3. URL 확정
+
+- 티어 1: `http://localhost:{포트}/dashboard.html`
+- 티어 2: `file://<현재 작업 디렉토리 절대경로>/.claude/dashboard.html`
+
+> 스캔은 `127.0.0.1` 로 확인하고 안내는 `localhost` 로 한다. 스캔은 **바인딩한 그 주소**를 정확히
+> 찔러야 하고, 사용자 대면 URL 은 `serve` 5단계가 이미 쓰던 표기와 같아야 하기 때문이다.
+> 브라우저에서 `localhost` 가 안 열리면 `http://127.0.0.1:{포트}/dashboard.html` 을 안내한다.
+
+### 4. 브라우저 열기 — 되면 하고, 안 되면 **조용히** 넘어간다
+
+아래 순서로 **한 번씩만** 시도한다. **재시도하지 않고, 루프를 돌지 않고, 실패를 에러로 보고하지
+않는다.** 성공하면 즉시 5번으로 간다.
+
+1. **이 세션에 URL 을 여는 도구가 이미 있으면 그것을 쓴다.** 브라우저 pane, 브라우저 MCP 서버 등
+   **지금 사용 가능한 도구 목록에 실제로 존재하는** 것만 해당한다. **없다고 새로 설치하거나
+   설정하지 않는다.**
+2. **없으면 OS 기본 열기 명령을 시도한다.** 아래를 모두 만족할 때만 실행한다.
+   - `$SSH_CONNECTION` 이 설정돼 **있지 않다.** 설정돼 있으면 원격 세션이므로 **시도하지 않는다** —
+     명령이 열어 봐야 사용자가 보는 화면이 아니고, 애초에 그 포트는 원격 머신 것이다.
+   - `uname -s` 결과가 `Darwin` → `open "<URL>"`
+   - `uname -s` 결과가 `Linux` **이고** `$DISPLAY` 또는 `$WAYLAND_DISPLAY` 중 하나가 설정돼 있다
+     → `xdg-open "<URL>"`
+   - 그 밖의 경우(판정 불가, 헤드리스, 컨테이너) → **시도하지 않는다.**
+3. **둘 다 못 하면 아무것도 하지 않는다.** 5번의 보고에 URL 이 이미 들어 있으므로 사용자가 직접 연다.
+
+> 명령이 실패했는지 성공했는지 **깊이 판정하지 않는다.** 종료 코드가 0 이 아니면 열지 못한 것으로
+> 보고 그대로 5번으로 간다. 브라우저가 실제로 떴는지를 확인할 방법은 없고, 확인하려 들면
+> 절차가 비결정적이 된다.
+
+### 5. 보고 — 한 덩어리로 한 번만
+
+| 상황 | 보고에 반드시 포함 |
+|------|------------------|
+| 티어 1 · 기동함 | URL · "5초마다 자동 갱신됩니다" · `/dashboard serve stop {포트}` (끝나면 서버를 끄라는 안내) · 최초 1회라면 `Bash(python3 -m http.server:*)`·`Bash(open:*)` 등을 허용 목록에 추가하면 다음부터 권한 프롬프트가 사라진다는 안내 한 줄 |
+| 티어 1 · 재사용 | URL · "이미 떠 있는 서버를 재사용했습니다" · `/dashboard serve stop {포트}` |
+| 티어 2 | `file://` URL · "자동 갱신이 아니라 창에 포커스를 줄 때 갱신됩니다" · 내려앉은 사유 한 줄 |
+| 브라우저를 못 연 경우 | 위에 더해 "브라우저에서 직접 열어 주세요" 한 줄 |
+
+**서버가 세션 종료 후에도 남을 수 있다**는 사실을 티어 1 보고에 **매번** 적는다. 정리 명령은
+포트를 포함한 완전한 형태(`/dashboard serve stop 8792`)로 쓴다 — 자동 경로는 8791 이 아닐 수 있고,
+포트를 빼면 `stop` 이 기본값 8791 을 죽이러 가서 엉뚱한 서버를 끈다.
+
+---
+
 ## `serve` — 메인 세션이 수행할 절차
 
 > **이 하위 명령은 워크플로우에 강제되지 않는다.** 플로팅을 쓰려는 사용자가 명시적으로 부를 때만
@@ -661,9 +813,10 @@ grep -c 'dz-impl-[0-9].*class="done"' .claude/dashboard.html
    (0단계에서 정한 대상 포트를 쓴다. 패턴에 `--bind 127.0.0.1` 까지 포함해 다른 프로세스의
    부분 일치를 죽이지 않는다. 임시 디렉토리는 OS 가 정리하므로 따로 지우지 않는다.)
 
-5. 보고: `http://localhost:{포트}/dashboard.html` 을 출력하고
+5. 위 [자동 발행](#자동-발행--init-의-공통-하위-절차) 4번 「브라우저 열기」를 수행한 뒤 보고한다:
+   `http://localhost:{포트}/dashboard.html` 을 출력하고
    "이 URL 로 열어야 우상단 「플로팅」 버튼이 활성화된다"를 한 줄 덧붙인다.
-   작업이 끝나면 `/dashboard serve stop` 으로 서버를 끄도록 안내한다.
+   작업이 끝나면 `/dashboard serve stop {포트}` 로 서버를 끄도록 안내한다.
 ```
 
 ---
@@ -839,6 +992,7 @@ DZ:DASHBOARD 갱신 맵 (동적 영역 — 셀렉터 기반 정밀 치환, comma
   #dz-progress-pct      : 진행률 텍스트 (예: 3/6 · 50%)
   #dz-step-{n}          : [그룹 1개] 각 단계 li — class(done|active|wait) + .chip 텍스트
                           + .step-detail 텍스트(그 단계의 한 줄 상세. 비어 있으면 CSS 가 숨긴다)
+                          + data-started-at 속성(그 단계가 active 로 전이한 시각. 선형 모드 전용)
   #dz-cell-{g}-{p}      : [그룹 2+] 매트릭스 칸 td — data-state(done|active|wait|na) + 칸 텍스트
                           {g}=행(그룹) 번호, {p}=열(단계) 번호. 한 파일에 step/cell 이 공존하지 않는다
   #dz-group-{g}         : [그룹 2+] 행 머리 th — init 이 그룹명을 넣고 이후 치환하지 않는다
@@ -855,6 +1009,9 @@ DZ:DASHBOARD 갱신 맵 (동적 영역 — 셀렉터 기반 정밀 치환, comma
                                (DOM 에서 제거하지 않는다 — 복귀 시 로그가 사라진다)
   #dz-impl-card              : 구현 세부 작업 카드 div. 목록이 비면 CSS :has() 가 통째로 숨긴다
                                (DOM 에서 제거하지 않는다 — 폴링이 outerHTML 로 동기화한다)
+  #dz-now-card               : 「지금」 카드 div. 안의 세 요소는 전부 스크립트가 그린다 —
+                               init/step/log 도, 폴링도 이 카드를 치환하지 않는다(불변식 7).
+                               진행중 단계가 없거나 매트릭스 세션이면 CSS 가 통째로 숨긴다
 -->
 <style>
   :root{--ink:#172033;--muted:#5E6B7D;--line:#D9E2EC;--soft:#F4F7FB;--blue:#1E5AA8;--navy:#12335B;--green:#1F8A70;--orange:#F59E0B;--red:#C2410C;}
@@ -880,6 +1037,12 @@ DZ:DASHBOARD 갱신 맵 (동적 영역 — 셀렉터 기반 정밀 치환, comma
   li.active .chip{background:#EAF2FB;color:var(--blue)}
   .step-detail{flex-basis:100%;margin-left:38px;font-size:12.5px;font-weight:400;color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
   .step-detail:empty{display:none}
+  .now-line{display:flex;align-items:baseline;gap:10px;flex-wrap:wrap;row-gap:3px}
+  .now-label{font-size:11px;font-weight:800;letter-spacing:.3px;color:var(--muted);flex:none}
+  #dz-now-phase{font-size:16px;font-weight:700;color:var(--navy)}
+  #dz-now-elapsed{margin-left:auto;font-size:12px;font-weight:700;color:var(--blue);flex:none}
+  #dz-now-elapsed:empty{display:none}
+  .wrap:not(:has(#dz-steps li.active)) #dz-now-card{display:none}
   #dz-impl-card:not(:has(#dz-impl-tasks li)){display:none}
   table.matrix{width:100%;border-collapse:collapse;margin:14px 0 0;font-size:14px}
   .matrix th,.matrix td{border:1px solid var(--line);padding:9px 10px}
@@ -943,6 +1106,10 @@ DZ:DASHBOARD 갱신 맵 (동적 영역 — 셀렉터 기반 정밀 치환, comma
     <ol class="steps" id="dz-steps">
     </ol>
   </div>
+  <div class="card" id="dz-now-card">
+    <div class="now-line"><span class="now-label">지금</span><span id="dz-now-phase"></span><span id="dz-now-elapsed"></span></div>
+    <div class="step-detail" id="dz-now-next"></div>
+  </div>
   <div class="card" id="dz-impl-card">
     <div class="impl-title">구현 세부 작업 · 디스패치와 결과 보고 시점에만 갱신</div>
     <div class="pct" id="dz-impl-count">0/0 · 0%</div>
@@ -966,6 +1133,9 @@ DZ:DASHBOARD 갱신 맵 (동적 영역 — 셀렉터 기반 정밀 치환, comma
   var FAILURE_LIMIT = 3;                // 연속 실패 이 횟수부터 사용자에게 알린다
   var PIP_WIDTH = 420, PIP_HEIGHT = 620;
   var PIP_MIN_HEIGHT = 200, PIP_MAX_HEIGHT = 720;
+  var NOW_TICK_MS = 30000;              // 「지금」 카드 경과 시간 갱신 주기
+  var MINUTES_PER_HOUR = 60;
+  var MS_PER_MINUTE = 60000;
 
   var wrap = document.querySelector('.wrap');
   var pipButton = document.getElementById('dz-pip-btn');
@@ -980,6 +1150,56 @@ DZ:DASHBOARD 갱신 맵 (동적 영역 — 셀렉터 기반 정밀 치환, comma
   var reasonHint = '';            // 버튼이 비활성인 영구 사유. 해소되기 전까지 유지된다
 
   function setHint(text){ pipHint.textContent = text || ''; pipHint.hidden = !text; }
+
+  // ── 「지금」 카드: #dz-steps 와 #dz-updated 에서 파생되는 표시 전용 뷰 (불변식 7) ──
+  var nowPhase = document.getElementById('dz-now-phase');
+  var nowElapsed = document.getElementById('dz-now-elapsed');
+  var nowNext = document.getElementById('dz-now-next');
+
+  // new Date(문자열) 은 ISO 8601 이 아닌 형식에서 파싱 결과가 구현 정의다 — 필드를 직접 뽑는다.
+  function parseStamp(text){
+    var f = /(\d{4})-(\d{2})-(\d{2})[ T](\d{2}):(\d{2})/.exec(text || '');
+    return f ? new Date(+f[1], +f[2]-1, +f[3], +f[4], +f[5]) : null;
+  }
+  function formatDuration(from, now){
+    var minutes = Math.floor((now - from) / MS_PER_MINUTE);
+    if(!isFinite(minutes) || minutes < 0) return '';
+    return minutes < MINUTES_PER_HOUR ? minutes + '분'
+      : Math.floor(minutes / MINUTES_PER_HOUR) + '시간 ' + (minutes % MINUTES_PER_HOUR) + '분';
+  }
+  function phaseLabel(item){
+    if(!item) return '';
+    var number = item.querySelector('.num'), name = '';
+    // 자식 span(.num/.chip/.step-detail)을 제외한 직계 텍스트만이 단계명이다.
+    Array.prototype.forEach.call(item.childNodes, function(node){
+      if(node.nodeType === 3) name += node.textContent;
+    });
+    return (number ? number.textContent + '. ' : '') + name.trim();
+  }
+  function elapsedLabel(active, now){
+    var parts = [];
+    var startedAt = parseStamp(active.getAttribute('data-started-at'));
+    var updatedAt = parseStamp(wrap.querySelector('#dz-updated').textContent);
+    // formatDuration 은 손상/미래 타임스탬프(시계 되감김 등)에 빈 문자열을 반환한다 —
+    // 그 경우 숫자 없는 라벨(" 경과")만 남지 않도록 조각 자체를 넣지 않는다.
+    var elapsed = startedAt ? formatDuration(startedAt, now) : '';
+    if(elapsed) parts.push(elapsed + ' 경과');
+    var sinceUpdate = updatedAt ? formatDuration(updatedAt, now) : '';
+    if(sinceUpdate) parts.push('마지막 기록 ' + sinceUpdate + ' 전');
+    return parts.join(' · ');
+  }
+  function renderNowCard(){
+    // 매트릭스 세션이거나 진행중 단계가 없으면 그릴 것이 없다 — 카드는 CSS 가 숨긴다.
+    var active = wrap.querySelector('#dz-steps li.active');
+    if(!active) return;
+    var now = Date.now();
+    nowPhase.textContent = phaseLabel(active);
+    nowElapsed.textContent = elapsedLabel(active, now);
+    nowNext.textContent = active.nextElementSibling
+      ? '다음 → ' + phaseLabel(active.nextElementSibling) : '';
+  }
+  renderNowCard();
+  setInterval(renderNowCard, NOW_TICK_MS);
 
   // ── 갱신 경로 A: file:// — Phase 1 방식 그대로. 이 분기는 회귀 금지 대상이다 ──
   if(!isServed){
@@ -1044,6 +1264,7 @@ DZ:DASHBOARD 갱신 맵 (동적 영역 — 셀렉터 기반 정밀 치환, comma
     syncText(fresh,'dz-title'); syncText(fresh,'dz-subtitle');
     syncText(fresh,'dz-progress-pct'); syncText(fresh,'dz-updated');
     syncProgressBar(fresh); syncVisualization(fresh); syncImplCard(fresh); syncLog(fresh);
+    renderNowCard();
     resizePipToFit();
   }
   function poll(){

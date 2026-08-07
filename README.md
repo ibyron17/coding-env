@@ -117,7 +117,7 @@ cd /path/to/my-project
 | `prp-commit` | 131 | 자연어로 파일 지정해 커밋 (컨벤션: 프로젝트 CLAUDE.md > commitlint 설정 > 기본 형식) |
 | `code-review` | 289 | 로컬 변경 또는 PR 검수 |
 | `env-update` | 184 | coding-env 레포 업데이트 (manifest 기반 자동 갱신) |
-| `dashboard` | 1113 | 세션 진행 상황을 프로젝트 로컬 HTML 대시보드로 기록 (init/step/impl/log + on/off 스위치, `serve`로 플로팅) |
+| `dashboard` | 1334 | 세션 진행 상황을 프로젝트 로컬 HTML 대시보드로 기록 (init/step/impl/log + on/off 스위치, `serve`로 플로팅) |
 
 각 커맨드의 동작:
 
@@ -137,12 +137,15 @@ cd /path/to/my-project
   manifest 파일에서 레포 경로·scope를 읽어 자동으로 pull 후 재설치합니다.
   변경이 있으면 사용자 확인을 받고, 로컬 수정 충돌 시 `--force` 여부를 묻습니다.
 - **`/dashboard`** — 전체 경로 작업의 진행 상황을 프로젝트 로컬 `.claude/dashboard.html`
-  하나로 기록합니다. `init`으로 생성하고 `step`(단계 상태)·`impl`(「구현」 단계 전용 세부
-  작업 패널)·`log`(작업 추적)로 갱신하며, 상태는 메인 세션이 서브에이전트를 디스패치·완료
-  확인하는 시점에만 반영됩니다(실시간 진행률은 아님). `on`/`off`(`dashboard_enabled`,
-  기본 켜짐)로 이 프로젝트·나에게만 기록 여부를 전환할 수 있고, `serve` 로 로컬 서버를 켜면
-  Document Picture-in-Picture 플로팅 창에서 5초 간격 폴링 갱신됩니다. `prp-*` 체인과
-  무관한 독립 커맨드입니다.
+  하나로 기록합니다. `init`은 파일을 만든 뒤 로컬 서버를 자동으로 띄우고 브라우저를 엽니다
+  (불가능한 환경에서는 조용히 `file://` 안내로 폴백합니다). `init`으로 생성하고 `step`(단계
+  상태)·`impl`(「구현」 단계 전용 세부 작업 패널)·`log`(작업 추적)로 갱신하며, 상태는 메인
+  세션이 서브에이전트를 디스패치·완료 확인하는 시점에만 반영됩니다(실시간 진행률은 아님).
+  현재 단계·경과 시간·다음 단계는 「지금」 카드가 새 인자 없이 자동으로 보여줍니다.
+  `on`/`off`(`dashboard_enabled`, 기본 켜짐)로 이 프로젝트·나에게만 기록 여부를 전환할 수
+  있고, 자동으로 뜬 서버에서 Document Picture-in-Picture 플로팅 창을 열면 5초 간격 폴링
+  갱신됩니다(`serve`는 서버가 없을 때 수동으로 다시 띄우는 용도로 남아 있습니다). `prp-*`
+  체인과 무관한 독립 커맨드입니다.
 
   ![대시보드 예시 — 매크로 단계, 구현 세부 작업 패널, 작업 추적 로그](docs/images/dashboard-sample.png)
 
