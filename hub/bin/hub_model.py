@@ -1,0 +1,457 @@
+"""hub_model.py — 이벤트 → 세션 사실 → 표시 상태로 접는 순수 로직.
+
+이 모듈은 파일시스템·시각·환경변수에 닿지 않는다(★순수, tests/hub/test_hub_model.py 대상).
+`now_ms` 는 항상 인자로 받는다 — 테스트가 시계에 의존하지 않게 하기 위해서다.
+상태 판정 규칙의 근거는 docs/prps/hub-dashboard.md 「상태 판정 규칙」 절이 정본이다.
+"""
+
+import fnmatch
+import json
+from dataclasses import asdict, dataclass
+from typing import Literal, Sequence
+
+from hub_parse import Tier1Snapshot
+
+SessionState = Literal["working", "idle", "stale", "done"]
+Phase = Literal["설계", "구현", "검수"]
+
+SHORT_ID_LENGTH = 8
+
+PHASE_BY_AGENT_TYPE: dict[str, Phase] = {
+    "design-architect": "설계",
+    "implementer": "구현",
+    "code-reviewer": "검수",
+}
+
+# 앞이 이긴다 — 하나라도 working 이면 프로젝트는 working.
+PROJECT_STATE_PRIORITY: tuple[SessionState, ...] = ("working", "idle", "stale", "done")
+
+_DATA_MARKER_OPEN = '<script type="application/json" id="dzh-data">'
+_DATA_MARKER_CLOSE = "</script>"
+
+
+# ---- 입력 ----
+@dataclass(frozen=True)
+class HookEvent:
+    """이벤트 로그 한 줄이 나타내는 훅 이벤트 하나."""
+
+    received_at_ms: int
+    hook_event_name: str
+    session_id: str
+    cwd: str
+    source: str | None
+    reason: str | None
+    agent_id: str | None
+    agent_type: str | None
+    prompt_excerpt: str | None
+
+
+@dataclass(frozen=True)
+class HubConfig:
+    """~/.claude/hub/config.json 이 없으면 전부 이 기본값을 쓴다."""
+
+    roots: tuple[str, ...] = ()
+    ignore_globs: tuple[str, ...] = (
+        "**/.claude/worktrees/**",
+        "/tmp/**",
+        "/private/tmp/**",
+    )
+    scan_depth: int = 3
+    stale_after_minutes: int = 30
+    event_retention_days: int = 7
+    record_prompt_excerpt: bool = True
+    serve_port_candidates: tuple[int, ...] = (8794, 8795, 8796)
+
+
+# ---- 사실(fact) ----
+@dataclass(frozen=True)
+class SubagentFact:
+    """서브에이전트 실행 1건."""
+
+    agent_id: str
+    agent_type: str
+    started_at_ms: int
+    ended_at_ms: int | None
+
+
+@dataclass(frozen=True)
+class SessionFacts:
+    """한 세션의 이벤트를 접어 만든 사실. 표시 판정의 입력이다."""
+
+    session_id: str
+    cwd: str
+    started_at_ms: int
+    last_event_at_ms: int
+    last_event_name: str
+    turn_state: Literal["running", "ended"]
+    ended_at_ms: int | None
+    task_excerpt: str | None
+    subagents: tuple[SubagentFact, ...]
+
+
+# ---- 표시(view) ----
+@dataclass(frozen=True)
+class SessionView:
+    """세션 사실로부터 판정한 화면 표시 상태."""
+
+    session_id: str
+    short_id: str
+    state: SessionState
+    base_state: Literal["working", "idle", "done"]
+    last_event_at_ms: int
+    task_excerpt: str | None
+    inferred_phase: Phase | None
+    inferred_phase_running: bool
+    active_agent_types: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class ProjectView:
+    """프로젝트 하나의 화면 표시 상태 — 소속 세션과 티어 1 스냅샷을 합성한 것."""
+
+    display_name: str
+    path: str | None
+    tier: Literal[1, 2, 3]
+    state: SessionState
+    last_activity_at_ms: int
+    sessions: tuple[SessionView, ...]
+    tier1: Tier1Snapshot | None
+    note: str | None
+
+
+@dataclass(frozen=True)
+class HubSnapshot:
+    """허브 페이지 하나에 인라인되는 전체 데이터."""
+
+    collected_at_ms: int
+    projects: tuple[ProjectView, ...]
+    unresolved_dir_names: tuple[str, ...]
+    warnings: tuple[str, ...]
+
+
+# ---- 1. 내부 이벤트 필터 ----
+def is_internal_session_start(event: HookEvent) -> bool:
+    """compact 등 CLI 내부 사유로 발생한 SessionStart 인가."""
+    return event.hook_event_name == "SessionStart" and event.source == "compact"
+
+
+def is_untracked_internal_subagent_stop(
+    event: HookEvent, known_agent_ids: frozenset[str]
+) -> bool:
+    """agent_type 이 비어 있고 대응하는 SubagentStart 를 본 적 없는 SubagentStop 인가."""
+    return (
+        event.hook_event_name == "SubagentStop"
+        and not (event.agent_type or "")
+        and (event.agent_id or "") not in known_agent_ids
+    )
+
+
+# ---- 이벤트 파싱 ----
+def parse_event_line(line: str) -> HookEvent | None:
+    """이벤트 로그 한 줄을 파싱한다. 깨진 줄은 None (호출자가 건너뛴다)."""
+    try:
+        payload = json.loads(line)
+    except (json.JSONDecodeError, TypeError):
+        return None
+    if not isinstance(payload, dict):
+        return None
+    try:
+        received_at_ms = int(payload["t"])
+        hook_event_name = str(payload["e"])
+        session_id = str(payload["s"])
+        cwd = str(payload["c"])
+    except (KeyError, TypeError, ValueError):
+        return None
+    return HookEvent(
+        received_at_ms=received_at_ms,
+        hook_event_name=hook_event_name,
+        session_id=session_id,
+        cwd=cwd,
+        source=payload.get("so"),
+        reason=payload.get("r"),
+        agent_id=payload.get("ai"),
+        agent_type=payload.get("at"),
+        prompt_excerpt=payload.get("p"),
+    )
+
+
+# ---- 2. 세션 사실 접기 ----
+@dataclass
+class _MutableSubagent:
+    agent_type: str
+    started_at_ms: int
+    ended_at_ms: int | None
+
+
+@dataclass
+class _MutableSession:
+    cwd: str
+    started_at_ms: int
+    last_event_at_ms: int
+    last_event_name: str
+    turn_state: Literal["running", "ended"]
+    ended_at_ms: int | None
+    task_excerpt: str | None
+    subagents: dict[str, _MutableSubagent]
+    known_agent_ids: set[str]
+
+
+def _handle_subagent_start(session: _MutableSession, event: HookEvent) -> None:
+    agent_id = event.agent_id or ""
+    session.known_agent_ids.add(agent_id)
+    session.subagents[agent_id] = _MutableSubagent(
+        agent_type=event.agent_type or "",
+        started_at_ms=event.received_at_ms,
+        ended_at_ms=None,
+    )
+
+
+def _handle_subagent_stop(session: _MutableSession, event: HookEvent) -> None:
+    agent_id = event.agent_id or ""
+    existing = session.subagents.get(agent_id)
+    if existing is not None:
+        existing.ended_at_ms = event.received_at_ms
+        return
+    session.subagents[agent_id] = _MutableSubagent(
+        agent_type=event.agent_type or "",
+        started_at_ms=event.received_at_ms,
+        ended_at_ms=event.received_at_ms,
+    )
+
+
+def _apply_tracked_event(session: _MutableSession, event: HookEvent) -> None:
+    """필터를 통과한(내부 이벤트가 아닌) 이벤트를 세션 사실에 반영한다."""
+    if event.hook_event_name == "UserPromptSubmit":
+        session.turn_state = "running"
+        session.task_excerpt = event.prompt_excerpt
+    elif event.hook_event_name == "Stop":
+        session.turn_state = "ended"
+    elif event.hook_event_name == "SessionEnd":
+        session.ended_at_ms = event.received_at_ms
+    elif event.hook_event_name == "SubagentStart":
+        _handle_subagent_start(session, event)
+    elif event.hook_event_name == "SubagentStop":
+        _handle_subagent_stop(session, event)
+
+
+def _new_session_builder(event: HookEvent) -> _MutableSession:
+    return _MutableSession(
+        cwd=event.cwd,
+        started_at_ms=event.received_at_ms,
+        last_event_at_ms=event.received_at_ms,
+        last_event_name=event.hook_event_name,
+        turn_state="ended",
+        ended_at_ms=None,
+        task_excerpt=None,
+        subagents={},
+        known_agent_ids=set(),
+    )
+
+
+def _freeze_session(session_id: str, session: _MutableSession) -> SessionFacts:
+    subagents = tuple(
+        SubagentFact(
+            agent_id=agent_id,
+            agent_type=sub.agent_type,
+            started_at_ms=sub.started_at_ms,
+            ended_at_ms=sub.ended_at_ms,
+        )
+        for agent_id, sub in session.subagents.items()
+    )
+    return SessionFacts(
+        session_id=session_id,
+        cwd=session.cwd,
+        started_at_ms=session.started_at_ms,
+        last_event_at_ms=session.last_event_at_ms,
+        last_event_name=session.last_event_name,
+        turn_state=session.turn_state,
+        ended_at_ms=session.ended_at_ms,
+        task_excerpt=session.task_excerpt,
+        subagents=subagents,
+    )
+
+
+def build_session_facts(events: Sequence[HookEvent]) -> dict[str, SessionFacts]:
+    """시간순 이벤트 목록을 세션별 사실로 접는다. 내부 이벤트 필터를 여기서 적용한다."""
+    builders: dict[str, _MutableSession] = {}
+    for event in events:
+        session = builders.get(event.session_id)
+        if session is None:
+            session = _new_session_builder(event)
+            builders[event.session_id] = session
+        session.last_event_at_ms = event.received_at_ms
+        session.last_event_name = event.hook_event_name
+
+        is_filtered = is_internal_session_start(event) or is_untracked_internal_subagent_stop(
+            event, frozenset(session.known_agent_ids)
+        )
+        if is_filtered:
+            continue
+        _apply_tracked_event(session, event)
+    return {
+        session_id: _freeze_session(session_id, session)
+        for session_id, session in builders.items()
+    }
+
+
+# ---- 3. 세션 표시 상태 ----
+def _compute_base_state(facts: SessionFacts) -> Literal["working", "idle", "done"]:
+    if facts.ended_at_ms is not None:
+        return "done"
+    has_running_subagent = any(sub.ended_at_ms is None for sub in facts.subagents)
+    if facts.turn_state == "running" or has_running_subagent:
+        return "working"
+    return "idle"
+
+
+def compute_session_view(facts: SessionFacts, now_ms: int, stale_after_ms: int) -> SessionView:
+    """우선순위 사다리(done > working > idle) + stale 오버레이로 표시 상태를 정한다."""
+    base_state = _compute_base_state(facts)
+    is_stale = base_state != "done" and (now_ms - facts.last_event_at_ms) >= stale_after_ms
+    inferred_phase, inferred_phase_running = infer_phase(facts)
+    active_agent_types = tuple(
+        sub.agent_type for sub in facts.subagents if sub.ended_at_ms is None
+    )
+    return SessionView(
+        session_id=facts.session_id,
+        short_id=facts.session_id[:SHORT_ID_LENGTH],
+        state="stale" if is_stale else base_state,
+        base_state=base_state,
+        last_event_at_ms=facts.last_event_at_ms,
+        task_excerpt=facts.task_excerpt,
+        inferred_phase=inferred_phase,
+        inferred_phase_running=inferred_phase_running,
+        active_agent_types=active_agent_types,
+    )
+
+
+# ---- 4. 단계 추정 ----
+def infer_phase(facts: SessionFacts) -> tuple[Phase | None, bool]:
+    """가장 최근에 시작된 '매핑된' 서브에이전트의 단계와 그 실행 여부를 돌려준다."""
+    candidates = [sub for sub in facts.subagents if sub.agent_type in PHASE_BY_AGENT_TYPE]
+    if not candidates:
+        return None, False
+    latest = max(candidates, key=lambda sub: sub.started_at_ms)
+    return PHASE_BY_AGENT_TYPE[latest.agent_type], latest.ended_at_ms is None
+
+
+# ---- 5. 프로젝트 발견 — 정방향 인코딩 전용 ----
+def encode_project_dir_name(absolute_path: str) -> str:
+    """절대경로를 ~/.claude/projects 의 디렉토리명으로 인코딩한다(정방향 전용)."""
+    encoded_characters = []
+    for character in absolute_path:
+        encoded_characters.append("-" if character in "/." else character)
+    return "".join(encoded_characters)
+
+
+def resolve_project_dirs(
+    encoded_names: Sequence[str], candidate_paths: Sequence[str]
+) -> tuple[dict[str, str], tuple[str, ...]]:
+    """인코딩 디렉토리명 → 절대경로 매칭 결과와, 매칭되지 않은 이름들을 돌려준다."""
+    encoded_to_path = {encode_project_dir_name(path): path for path in candidate_paths}
+    resolved: dict[str, str] = {}
+    unresolved: list[str] = []
+    for name in encoded_names:
+        if name in encoded_to_path:
+            resolved[name] = encoded_to_path[name]
+        else:
+            unresolved.append(name)
+    return resolved, tuple(unresolved)
+
+
+def should_ignore_cwd(cwd: str, ignore_globs: Sequence[str]) -> bool:
+    """cwd 가 무시 패턴(worktree·scratchpad 등)에 해당하는지 판정한다."""
+    return any(fnmatch.fnmatch(cwd, pattern) for pattern in ignore_globs)
+
+
+# ---- 6. 프로젝트 합성 ----
+def _display_name(path: str) -> str:
+    trimmed = path.rstrip("/")
+    return trimmed.rsplit("/", 1)[-1] if trimmed else path
+
+
+def _project_tier(tier1: Tier1Snapshot | None, sessions: tuple[SessionFacts, ...]) -> int:
+    if tier1 is not None:
+        return 1
+    return 2 if sessions else 3
+
+
+def _project_state_without_sessions(last_activity_at_ms: int, now_ms: int, stale_after_ms: int) -> SessionState:
+    """세션이 하나도 없는 프로젝트(티어 1/3 전용)의 상태.
+
+    `done` 은 `SessionEnd` 를 실제로 관측했을 때만 성립하는 상태다 — 세션이 없으면 그 근거가
+    없으므로 마지막 활동 시각만으로 idle/stale 을 가른다(검수 M3, docs/prps/hub-dashboard.md
+    「상태 판정 규칙 4」 참조).
+    """
+    if now_ms - last_activity_at_ms >= stale_after_ms:
+        return "stale"
+    return "idle"
+
+
+def _project_state(
+    session_views: tuple[SessionView, ...], last_activity_at_ms: int, now_ms: int, stale_after_ms: int
+) -> SessionState:
+    if not session_views:
+        return _project_state_without_sessions(last_activity_at_ms, now_ms, stale_after_ms)
+    ranked = sorted(session_views, key=lambda view: PROJECT_STATE_PRIORITY.index(view.state))
+    return ranked[0].state
+
+
+def _last_activity_at_ms(
+    tier1: Tier1Snapshot | None, session_views: tuple[SessionView, ...], tier3_mtime: int
+) -> int:
+    candidates = [tier3_mtime]
+    if tier1 is not None:
+        candidates.append(tier1.file_mtime_ms)
+    candidates.extend(view.last_event_at_ms for view in session_views)
+    return max(candidates)
+
+
+def compose_project_views(
+    tier1_by_path: dict[str, Tier1Snapshot],
+    sessions_by_path: dict[str, tuple[SessionFacts, ...]],
+    tier3_last_activity_by_path: dict[str, int],
+    now_ms: int,
+    stale_after_ms: int,
+) -> tuple[ProjectView, ...]:
+    """세 티어의 사실을 프로젝트별로 합성해 화면 표시 뷰를 만든다. 정렬은 마지막 활동 내림차순."""
+    all_paths = set(tier1_by_path) | set(sessions_by_path) | set(tier3_last_activity_by_path)
+    views = []
+    for path in all_paths:
+        tier1 = tier1_by_path.get(path)
+        sessions = sessions_by_path.get(path, ())
+        session_views = tuple(
+            compute_session_view(facts, now_ms, stale_after_ms) for facts in sessions
+        )
+        last_activity_at_ms = _last_activity_at_ms(
+            tier1, session_views, tier3_last_activity_by_path.get(path, 0)
+        )
+        views.append(
+            ProjectView(
+                display_name=_display_name(path),
+                path=path,
+                tier=_project_tier(tier1, sessions),
+                state=_project_state(session_views, last_activity_at_ms, now_ms, stale_after_ms),
+                last_activity_at_ms=last_activity_at_ms,
+                sessions=session_views,
+                tier1=tier1,
+                note=None,
+            )
+        )
+    return tuple(sorted(views, key=lambda view: view.last_activity_at_ms, reverse=True))
+
+
+# ---- 7. 렌더링 ----
+def render_hub_html(template: str, snapshot: HubSnapshot) -> str:
+    """템플릿의 데이터 마커를 스냅샷 JSON 으로 치환한다. 순수 — 파일을 쓰지 않는다."""
+    payload = json.dumps(asdict(snapshot), ensure_ascii=False)
+    # <script type="application/json"> 내부는 raw text 다 — HTML 실체 참조(엔티티)는 브라우저가
+    # 복원해 주지 않아 JSON.parse 가 그 리터럴 문자열을 그대로 반환하는 버그가 된다(검수 M1).
+    # </script> 주입을 막으면서 JSON.parse 에서 원문 그대로 복원되게 하려면 JSON 자체가 정의하는
+    # 유니코드 이스케이프(\uXXXX)를 써야 한다.
+    escaped_payload = (
+        payload.replace("&", "\\u0026").replace("<", "\\u003c").replace(">", "\\u003e")
+    )
+    start = template.index(_DATA_MARKER_OPEN) + len(_DATA_MARKER_OPEN)
+    end = template.index(_DATA_MARKER_CLOSE, start)
+    return template[:start] + escaped_payload + template[end:]

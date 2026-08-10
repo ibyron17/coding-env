@@ -206,11 +206,11 @@ test_scope_project_new_install() {
     return 1
   fi
 
-  # commands 8개 확인
+  # commands 9개 확인
   local commands_count
   commands_count=$(count_files_recursive "./.claude/commands")
-  if ! assert_equals 8 "$commands_count" "commands 파일 개수"; then
-    record_failure "$test_name" "commands 파일 개수: 기대=8, 실제=$commands_count"
+  if ! assert_equals 9 "$commands_count" "commands 파일 개수"; then
+    record_failure "$test_name" "commands 파일 개수: 기대=9, 실제=$commands_count"
     return 1
   fi
 
@@ -799,10 +799,10 @@ test_unmanaged_files_preserved() {
   ((passed_tests++))
 }
 
-# T17: 커맨드 8종(의존 사슬 7종 + 독립 커맨드 1종)이 설치되고 의존 사슬이 닫히는지 확인
+# T17: 커맨드 9종(의존 사슬 7종 + 독립 커맨드 2종)이 설치되고 의존 사슬이 닫히는지 확인
 test_commands_installed() {
   local test_name="T17"
-  local test_desc="커맨드 8종 설치 및 의존 사슬 완결"
+  local test_desc="커맨드 9종 설치 및 의존 사슬 완결"
   log_test_name "$test_name" "$test_desc"
 
   local sandbox
@@ -813,7 +813,7 @@ test_commands_installed() {
   "$INSTALL_SCRIPT" --scope project > /dev/null 2>&1
 
   local command_name
-  for command_name in prp-prd prp-plan prp-implement prp-pr prp-commit code-review env-update dashboard; do
+  for command_name in prp-prd prp-plan prp-implement prp-pr prp-commit code-review env-update dashboard hub; do
     if [[ ! -f "./.claude/commands/$command_name.md" ]]; then
       record_failure "$test_name" "$command_name.md 미설치"
       return 1
@@ -862,8 +862,8 @@ test_global_command_overlap_report() {
     record_failure "$test_name" "우선순위 안내가 없거나 방향이 틀림 (전역>프로젝트여야 함)"
     return 1
   fi
-  if ! echo "$output" | grep -q "전역에 동일한 커맨드 7개"; then
-    record_failure "$test_name" "동일 7개 안내가 없음"
+  if ! echo "$output" | grep -q "전역에 동일한 커맨드 8개"; then
+    record_failure "$test_name" "동일 8개 안내가 없음"
     return 1
   fi
 
@@ -1872,6 +1872,173 @@ test_dashboard_option_docs() {
   ((passed_tests++))
 }
 
+# T24: 허브 순수 로직 단위 테스트 (stdlib unittest). 종료 코드만 검사하고,
+# 실패 시 출력을 그대로 흘려보내 원인을 바로 알 수 있게 한다.
+test_hub_unit_tests() {
+  local test_name="T24"
+  local test_desc="hub_parse·hub_model 단위 테스트 (python3 -m unittest discover)"
+  log_test_name "$test_name" "$test_desc"
+
+  local output
+  local exit_code=0
+  output=$(cd "$REPO_ROOT" && python3 -m unittest discover -s tests/hub -t "$REPO_ROOT" 2>&1) || exit_code=$?
+
+  if [[ "$exit_code" -ne 0 ]]; then
+    echo "$output"
+    record_failure "$test_name" "python3 -m unittest discover 실패 (exit $exit_code)"
+    return 1
+  fi
+
+  log_ok "$test_name 통과"
+  ((passed_tests++))
+}
+
+# T25: 허브 문서·상수 정합성 (하위 검증 T25-1~T25-13)
+test_hub_docs_and_constants() {
+  local test_name="T25"
+  local test_desc="허브 문서·상수 정합성 (T25-1~T25-13)"
+  log_test_name "$test_name" "$test_desc"
+
+  local hub_settings_file="$REPO_ROOT/hub/bin/hub_settings.py"
+  local hub_hook_file="$REPO_ROOT/hub/bin/hub_hook.py"
+  local hub_py_file="$REPO_ROOT/hub/bin/hub.py"
+  local hub_command_file="$REPO_ROOT/commands/hub.md"
+  local dashboard_command_file="$REPO_ROOT/commands/dashboard.md"
+  local readme_file="$REPO_ROOT/README.md"
+
+  # T25-1: HUB_FILE_COUNT == 실제 hub/bin/* 파일 수
+  local declared_count actual_count
+  declared_count=$(grep -oE '^readonly HUB_FILE_COUNT=[0-9]+' "$INSTALL_SCRIPT" | grep -oE '[0-9]+$')
+  actual_count=$(find "$REPO_ROOT/hub/bin" -maxdepth 1 -type f | wc -l | tr -d ' ')
+  if ! assert_equals "$actual_count" "$declared_count" "HUB_FILE_COUNT 일치"; then
+    record_failure "$test_name" "T25-1: HUB_FILE_COUNT=$declared_count, 실제 파일 수=$actual_count"
+    return 1
+  fi
+
+  # T25-2: --scope user 설치 후 hub/bin 7개 존재, --scope project 설치 후 .claude/hub 미생성
+  local sandbox_user sandbox_project
+  sandbox_user=$(mktemp -d)
+  sandbox_project=$(mktemp -d)
+  trap "rm -rf '$sandbox_user' '$sandbox_project'" EXIT
+
+  HOME="$sandbox_user" "$INSTALL_SCRIPT" --scope user > /dev/null 2>&1
+  local installed_hub_count
+  installed_hub_count=$(find "$sandbox_user/.claude/hub/bin" -maxdepth 1 -type f 2>/dev/null | wc -l | tr -d ' ')
+  if [[ "$installed_hub_count" -ne "$declared_count" ]]; then
+    record_failure "$test_name" "T25-2: --scope user 설치 후 hub/bin 파일 수=$installed_hub_count (기대 $declared_count)"
+    return 1
+  fi
+
+  (cd "$sandbox_project" && "$INSTALL_SCRIPT" --scope project > /dev/null 2>&1)
+  if [[ -d "$sandbox_project/.claude/hub" ]]; then
+    record_failure "$test_name" "T25-2: --scope project 에 .claude/hub 가 생성됨 (기대: 미생성)"
+    return 1
+  fi
+
+  # T25-3: 훅 마커가 세 문서에서 동일 문자열로 등장
+  local marker="# DZH_HUB_HOOK"
+  local doc_file
+  for doc_file in "$hub_settings_file" "$hub_command_file" "$readme_file"; do
+    if ! grep -qF "$marker" "$doc_file"; then
+      record_failure "$test_name" "T25-3: $marker 마커 미발견: $doc_file"
+      return 1
+    fi
+  done
+
+  # T25-4: 훅 커맨드 문자열에 || true 와 >/dev/null 이 모두 있다
+  if ! grep -F "|| true" "$hub_settings_file" | grep -qF ">/dev/null"; then
+    record_failure "$test_name" "T25-4: 훅 커맨드에 || true 와 >/dev/null 이 한 줄에 함께 없음"
+    return 1
+  fi
+
+  # T25-5: type: "http" 를 쓰지 말라는 근거 문구
+  if ! grep -qF 'type: "http"' "$hub_command_file"; then
+    record_failure "$test_name" "T25-5: type:\"http\" 관련 근거 문구 미발견"
+    return 1
+  fi
+
+  # T25-6: dashboard.md 에 불변식 2·5 문구가 여전히 존재한다 (티어 1 파서의 전제)
+  if ! grep -qF '<li id="dz-step-…">' "$dashboard_command_file"; then
+    record_failure "$test_name" "T25-6: 불변식 2 문구(dz-step) 미발견"
+    return 1
+  fi
+  if ! grep -qF '<li id="dz-impl-…">' "$dashboard_command_file"; then
+    record_failure "$test_name" "T25-6: 불변식 5 문구(dz-impl) 미발견"
+    return 1
+  fi
+
+  # T25-7: hub_hook.py 에 Notification 문자열이 없다 (미설치 결정의 회귀 방지)
+  if grep -q "Notification" "$hub_hook_file"; then
+    record_failure "$test_name" "T25-7: hub_hook.py 에 Notification 문자열이 존재함"
+    return 1
+  fi
+
+  # T25-8: 포트 후보 8794 가 hub.py·commands/hub.md 에 일치하고, 8791 을 쓰지 않는다
+  if ! grep -q "8794" "$hub_py_file" || ! grep -q "8794" "$hub_command_file"; then
+    record_failure "$test_name" "T25-8: 포트 8794 가 hub.py 또는 commands/hub.md 에 없음"
+    return 1
+  fi
+  if grep -q "8791" "$hub_py_file" "$hub_command_file"; then
+    record_failure "$test_name" "T25-8: /dashboard 의 포트 8791 이 허브 파일에 등장함"
+    return 1
+  fi
+
+  # T25-9: README.md 가 "독립 커맨드 2종"으로 갱신됐다
+  if ! grep -qF "독립 커맨드 2종" "$readme_file"; then
+    record_failure "$test_name" "T25-9: README 에 '독립 커맨드 2종' 문구 미발견"
+    return 1
+  fi
+
+  # T25-10: hub_model.py·hub_parse.py 에 파일시스템 접근이 없다 (순수 레이어 경계의 기계적 강제)
+  local pure_file
+  for pure_file in "$REPO_ROOT/hub/bin/hub_model.py" "$REPO_ROOT/hub/bin/hub_parse.py"; do
+    if grep -qE 'open\(|Path\(|os\.' "$pure_file"; then
+      record_failure "$test_name" "T25-10: $pure_file 에 파일시스템 접근 흔적(open(/Path(/os.)이 있음"
+      return 1
+    fi
+  done
+
+  local hub_template_file="$REPO_ROOT/hub/bin/hub_template.html"
+
+  # T25-11(검수 m9 회귀): session.short_id 가 escapeHtml 없이 그대로 innerHTML 에 꽂히지 않는다
+  if grep -qF "+ session.short_id +" "$hub_template_file"; then
+    record_failure "$test_name" "T25-11: session.short_id 가 escapeHtml 없이 삽입됨(m9 회귀)"
+    return 1
+  fi
+  if ! grep -qF "escapeHtml(session.short_id)" "$hub_template_file"; then
+    record_failure "$test_name" "T25-11: escapeHtml(session.short_id) 미발견"
+    return 1
+  fi
+
+  # T25-12(검수 M6 회귀): 티어 1 렌더에 활성 단계·구현 진행·stale 병기가 반영됐다
+  if ! grep -qF "renderTier1ActiveStep" "$hub_template_file"; then
+    record_failure "$test_name" "T25-12: 티어 1 렌더에 활성 단계 표시가 없음"
+    return 1
+  fi
+  if ! grep -qF "renderTier1ImplProgress" "$hub_template_file"; then
+    record_failure "$test_name" "T25-12: 티어 1 렌더에 구현 진행(impl_done/impl_total) 표시가 없음"
+    return 1
+  fi
+  if ! grep -qF "직전 " "$hub_template_file"; then
+    record_failure "$test_name" "T25-12: stale 세션의 '직전 <base_state>' 병기 문구가 없음"
+    return 1
+  fi
+
+  # T25-13(검수 M1 회귀): JSON 유니코드 이스케이프로 교체됐고, HTML 엔티티 치환으로 되돌아가지 않았다
+  local render_hub_html_file="$REPO_ROOT/hub/bin/hub_model.py"
+  if ! grep -qF "u003c" "$render_hub_html_file"; then
+    record_failure "$test_name" "T25-13: render_hub_html 에 JSON 유니코드 이스케이프(u003c)가 없음"
+    return 1
+  fi
+  if grep -qF "&lt;" "$render_hub_html_file"; then
+    record_failure "$test_name" "T25-13: render_hub_html 이 HTML 엔티티 치환으로 회귀함(M1 회귀)"
+    return 1
+  fi
+
+  log_ok "$test_name 통과"
+  ((passed_tests++))
+}
+
 register_and_run_tests() {
   test_scope_project_new_install || true
   test_scope_user_new_install || true
@@ -1895,6 +2062,8 @@ register_and_run_tests() {
   test_manifest_fields_complete || true
   test_dashboard_template_integrity || true
   test_dashboard_option_docs || true
+  test_hub_unit_tests || true
+  test_hub_docs_and_constants || true
 }
 
 # 테스트 결과 요약 출력
@@ -1944,7 +2113,7 @@ main() {
   echo ""
 
   # 전체 테스트 개수
-  total_tests=22  # T1~T23 (T11 결번)
+  total_tests=24  # T1~T25 (T11 결번)
 
   # 각 테스트 실행
   register_and_run_tests

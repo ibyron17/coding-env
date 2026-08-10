@@ -1,0 +1,207 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<title>통합 허브 대시보드</title>
+<!--
+DZH:HUB 데이터 계약
+  #dzh-data : application/json 스크립트. HubSnapshot 을 그대로 담는다(snake_case 그대로).
+              hub_model.render_hub_html 이 이 블록 하나만 치환한다. 나머지는 정적이다.
+  갱신 모드는 /dashboard 와 같은 판정이다: location.protocol 이 http(s) 면 5초 폴링
+  (자기 URL 을 받아 문자열 전체 비교), 아니면 포커스 복귀 시 location.reload().
+-->
+<style>
+  :root{--ink:#172033;--muted:#5E6B7D;--line:#D9E2EC;--soft:#F4F7FB;--blue:#1E5AA8;--navy:#12335B;--green:#1F8A70;--orange:#F59E0B;--red:#C2410C;}
+  *{box-sizing:border-box}
+  body{margin:0;font-family:"Pretendard","Apple SD Gothic Neo","Malgun Gothic",sans-serif;color:var(--ink);background:#EEF3F8;line-height:1.5}
+  .wrap{max-width:960px;margin:32px auto;padding:0 16px}
+  h1{font-size:20px;margin:0 0 4px;color:var(--navy);letter-spacing:-.4px}
+  .sub{font-size:12.5px;color:var(--muted);margin-bottom:18px}
+  .card{background:#fff;border:1px solid var(--line);border-radius:14px;padding:16px 20px;box-shadow:0 8px 24px rgba(19,51,91,.06);margin-bottom:12px}
+  .project-head{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+  .project-name{font-size:15px;font-weight:800;color:var(--navy)}
+  .badge{display:inline-block;font-size:11px;font-weight:800;padding:2px 9px;border-radius:999px}
+  .badge.tier{background:var(--soft);color:var(--muted)}
+  .badge.state-working{background:#EAF2FB;color:var(--blue)}
+  .badge.state-idle{background:var(--soft);color:var(--muted)}
+  .badge.state-stale{background:#FEF3E2;color:var(--orange)}
+  .badge.state-done{background:#E5F3EE;color:var(--green)}
+  .last-activity{margin-left:auto;font-size:11.5px;color:var(--muted)}
+  .path{font-size:11.5px;color:var(--muted);margin-top:2px;word-break:break-all}
+  .tier1-pct{font-size:12px;font-weight:700;color:var(--blue);margin-top:8px}
+  .tier1-active{font-size:12px;color:var(--navy);margin-top:3px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .tier1-impl{font-size:11.5px;color:var(--muted);margin-top:2px}
+  .sessions{list-style:none;margin:10px 0 0;padding:0;font-size:13px}
+  .sessions li{padding:7px 0;border-top:1px solid var(--soft)}
+  .session-line{display:flex;align-items:baseline;gap:8px;flex-wrap:wrap}
+  .short-id{font-family:ui-monospace,monospace;font-size:11px;color:var(--muted)}
+  .phase{font-size:11px;font-weight:800;color:var(--blue)}
+  .phase.running::after{content:" · 진행중"}
+  .excerpt{color:var(--muted);font-size:12.5px;flex-basis:100%}
+  .empty{color:var(--muted);font-size:13px;padding:20px 4px;text-align:center}
+  .unresolved,.warnings{font-size:12px;color:var(--muted);margin-top:6px}
+  .warnings{color:var(--red)}
+  .foot{font-size:11.5px;color:var(--muted);text-align:right;margin-top:6px}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>통합 허브 대시보드</h1>
+  <div class="sub">모든 프로젝트의 진행 상황 · 읽기 전용 · <code>/hub</code> 로 갱신</div>
+  <div id="dzh-app"><div class="empty">불러오는 중…</div></div>
+  <div class="foot" id="dzh-collected-at"></div>
+</div>
+<script type="application/json" id="dzh-data">{}</script>
+<script>
+(function(){
+  var POLL_INTERVAL_MS = 5000;
+  var TICK_MS = 30000;
+  var MS_PER_MINUTE = 60000;
+  var MINUTES_PER_HOUR = 60;
+  var STATE_LABEL = {working:'작업중', idle:'대기', stale:'소식 없음', done:'완료'};
+
+  var app = document.getElementById('dzh-app');
+  var collectedAtLabel = document.getElementById('dzh-collected-at');
+  var isServed = location.protocol === 'http:' || location.protocol === 'https:';
+  var initialDataParse = parseSnapshotJson(document.getElementById('dzh-data').textContent);
+  var snapshot = initialDataParse.snapshot;
+  var initialParseError = initialDataParse.error;
+  var lastHtml = '';
+
+  // 데이터 블록이 깨지면(수동 편집·render_hub_html 결함 등) JSON.parse 가 던지고, try/catch 가
+  // 없으면 이 IIFE 전체가 죽어 render() 가 한 번도 안 불려 "불러오는 중…" 이 영구 고정된다(검수 n4).
+  function parseSnapshotJson(rawText){
+    try{
+      return {snapshot: JSON.parse(rawText || '{}'), error: null};
+    }catch(error){
+      return {snapshot: {}, error: error};
+    }
+  }
+
+  function elapsedLabel(fromMs){
+    var minutes = Math.floor((Date.now() - fromMs) / MS_PER_MINUTE);
+    if(!isFinite(minutes) || minutes < 0) return '방금';
+    if(minutes < 1) return '방금';
+    if(minutes < MINUTES_PER_HOUR) return minutes + '분 전';
+    return Math.floor(minutes / MINUTES_PER_HOUR) + '시간 ' + (minutes % MINUTES_PER_HOUR) + '분 전';
+  }
+
+  // stale 은 "소식 없음"만으로 부족하다 — 멈추기 전 마지막으로 뭘 하고 있었는지(base_state)를
+  // 병기해야 사용자가 "죽었나 아니면 그냥 조용한가"를 가늠할 수 있다(검수 M6 ③).
+  function stateLabel(state, baseState){
+    if(state === 'stale') return STATE_LABEL.stale + ' · 직전 ' + STATE_LABEL[baseState];
+    return STATE_LABEL[state];
+  }
+
+  function renderSession(session){
+    var phaseText = '';
+    if(session.inferred_phase){
+      phaseText = '<span class="phase' + (session.inferred_phase_running ? ' running' : '') + '">'
+        + escapeHtml(session.inferred_phase) + ' 추정</span>';
+    }
+    var excerpt = session.task_excerpt
+      ? '<span class="excerpt">' + escapeHtml(session.task_excerpt) + '</span>' : '';
+    return '<li><div class="session-line">'
+      + '<span class="badge state-' + session.state + '">' + stateLabel(session.state, session.base_state) + '</span>'
+      + '<span class="short-id">' + escapeHtml(session.short_id) + '</span>' + phaseText
+      + '</div>' + excerpt + '</li>';
+  }
+
+  function renderTier1ActiveStep(tier1){
+    var steps = tier1.steps || [];
+    var activeStep;
+    for(var i = 0; i < steps.length; i++){
+      if(steps[i].state === 'active'){ activeStep = steps[i]; break; }
+    }
+    if(!activeStep) return '';
+    var detail = activeStep.detail ? ' — ' + escapeHtml(activeStep.detail) : '';
+    return '<div class="tier1-active">' + escapeHtml(activeStep.name) + detail + '</div>';
+  }
+
+  function renderTier1ImplProgress(tier1){
+    if(!tier1.impl_total) return '';
+    return '<div class="tier1-impl">구현 세부 ' + tier1.impl_done + '/' + tier1.impl_total + '</div>';
+  }
+
+  function renderTier1(tier1){
+    if(!tier1) return '';
+    return '<div class="tier1-pct">' + escapeHtml(tier1.title) + ' — '
+      + tier1.completed + '/' + tier1.total + ' · ' + tier1.percent + '%</div>'
+      + renderTier1ActiveStep(tier1) + renderTier1ImplProgress(tier1);
+  }
+
+  function renderProject(project){
+    var sessionsHtml = project.sessions.length
+      ? '<ul class="sessions">' + project.sessions.map(renderSession).join('') + '</ul>' : '';
+    return '<div class="card">'
+      + '<div class="project-head">'
+      + '<span class="project-name">' + escapeHtml(project.display_name) + '</span>'
+      + '<span class="badge tier">티어 ' + project.tier + '</span>'
+      + '<span class="badge state-' + project.state + '">' + STATE_LABEL[project.state] + '</span>'
+      + '<span class="last-activity">' + elapsedLabel(project.last_activity_at_ms) + '</span>'
+      + '</div>'
+      + (project.path ? '<div class="path">' + escapeHtml(project.path) + '</div>' : '')
+      + renderTier1(project.tier1) + sessionsHtml + '</div>';
+  }
+
+  function escapeHtml(text){
+    return String(text).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+  }
+
+  function render(){
+    if(initialParseError){
+      app.innerHTML = '<div class="empty">데이터를 읽지 못했습니다 ('
+        + escapeHtml(String(initialParseError.message || initialParseError))
+        + '). 페이지를 새로고침해 보세요.</div>';
+      collectedAtLabel.textContent = '';
+      return;
+    }
+    if(!snapshot.projects || !snapshot.projects.length){
+      app.innerHTML = '<div class="empty">아직 프로젝트가 없습니다. 훅을 설치했나요? — /hub install</div>';
+    } else {
+      app.innerHTML = snapshot.projects.map(renderProject).join('');
+    }
+    var extra = '';
+    if(snapshot.unresolved_dir_names && snapshot.unresolved_dir_names.length){
+      extra += '<div class="unresolved">미확인 프로젝트 ' + snapshot.unresolved_dir_names.length + '개</div>';
+    }
+    if(snapshot.warnings && snapshot.warnings.length){
+      extra += '<div class="warnings">' + snapshot.warnings.map(escapeHtml).join('<br>') + '</div>';
+    }
+    app.insertAdjacentHTML('beforeend', extra);
+    collectedAtLabel.textContent = '수집 시각: ' + new Date(snapshot.collected_at_ms).toLocaleString('ko-KR');
+  }
+  render();
+  setInterval(render, TICK_MS);
+
+  if(!isServed){
+    var reloading = false;
+    var reloadOnce = function(){ if(reloading) return; reloading = true; location.reload(); };
+    document.addEventListener('visibilitychange', function(){ if(document.visibilityState==='visible') reloadOnce(); });
+    window.addEventListener('focus', reloadOnce);
+    return;
+  }
+
+  var busy = false;
+  function poll(){
+    if(busy) return;
+    busy = true;
+    fetch(location.pathname, {cache:'no-store'})
+      .then(function(res){ if(!res.ok) throw new Error(res.status); return res.text(); })
+      .then(function(html){
+        if(html === lastHtml) return;
+        lastHtml = html;
+        var fresh = new DOMParser().parseFromString(html, 'text/html');
+        var freshData = fresh.getElementById('dzh-data');
+        if(freshData){ snapshot = JSON.parse(freshData.textContent || '{}'); render(); }
+      })
+      .catch(function(){ /* 다음 폴링에서 다시 시도한다 — 화면은 마지막 정상 상태를 유지한다 */ })
+      .then(function(){ busy = false; });
+  }
+  setInterval(poll, POLL_INTERVAL_MS);
+  document.addEventListener('visibilitychange', function(){ if(document.visibilityState==='visible') poll(); });
+  window.addEventListener('focus', poll);
+})();
+</script>
+</body>
+</html>
