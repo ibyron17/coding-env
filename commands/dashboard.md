@@ -182,9 +182,12 @@ UpdateMode
 - `reload` 모드의 코드 경로는 **현재 스크립트와 의미상 동일**해야 한다. 플로팅 버튼은 비활성이다.
 - 플로팅 가능 조건 = `mode === "poll"` **AND** `'documentPictureInPicture' in window`.
   둘 중 하나라도 아니면 버튼은 `disabled` 이고 `#dz-pip-hint` 가 사유 한 줄을 보여준다.
-- 창 높이는 고정값이 아니다. 압축 뷰는 작업 추적 카드가 빠져 620px 요청 높이보다 콘텐츠가
-  짧으므로, 여는 시점과 매 폴링 동기화(`apply()`) 끝에 `resizePipToFit()` 가 `.wrap` 의 실제
-  높이(+24px 여백)로 `resizeTo()` 한다. `PIP_MIN_HEIGHT`~`PIP_MAX_HEIGHT`(200~720) 로 클램프한다.
+- 창 높이는 고정값이 아니다. 압축 뷰는 작업 추적 카드가 빠져 콘텐츠가 짧으므로,
+  `measureCompactHeight()` 가 여는 시점에 `.wrap` 을 `body.dz-pip` 상태로 순간 측정해 그 실제
+  높이(+24px 여백 +`PIP_CHROME_ALLOWANCE` 창 여백)를 PiP 창을 여는 호출의 초기 크기로 넘긴다.
+  `PIP_MIN_HEIGHT`~`PIP_MAX_HEIGHT`(200~720) 로 클램프한다. 열린 뒤의 `resizePipToFit()` 는
+  Document PiP 의 `resizeTo()` 가 사용자 제스처를 요구해(실측: `NotAllowedError`) rAF·폴링에서
+  호출하면 대개 조용히 실패한다 — 그래서 정확한 크기는 여는 시점 한 번에 정해진다.
 
 ### 정적 요소 추가 (동적 셀렉터 표에 넣지 않는다)
 
@@ -1131,8 +1134,17 @@ DZ:DASHBOARD 갱신 맵 (동적 영역 — 셀렉터 기반 정밀 치환, comma
 (function(){
   var POLL_INTERVAL_MS = 5000;          // 로컬 파일 폴링 주기
   var FAILURE_LIMIT = 3;                // 연속 실패 이 횟수부터 사용자에게 알린다
-  var PIP_WIDTH = 420, PIP_HEIGHT = 620;
+  var PIP_WIDTH = 420;
   var PIP_MIN_HEIGHT = 200, PIP_MAX_HEIGHT = 720;
+  // documentPictureInPicture 창의 요청 height 는 콘텐츠 높이가 아니라 outerHeight(제목
+  // 표시줄 포함) 로 해석된다(실측). 그 여백은 OS·브라우저마다 달라 미리 알 수 없다 — 창을
+  // 연 직후 outerHeight-innerHeight 를 재서 다음 열기부터 보정하는 방식도 시도했으나,
+  // .then() 시점엔 창 크기가 아직 안정되지 않아 값이 널뛰어 더 위험했다(실측: 두 번째
+  // 열기에서 요청 높이가 음수로 접혀 200px 바닥으로 떨어짐). 그래서 실측 보정 대신 여러
+  // 환경에서 관찰한 제목 표시줄 여백보다 넉넉한 고정값을 쓴다 — 몇십 px 여백이 남는 것이
+  // 콘텐츠가 잘리는 것보다 안전하다.
+  var PIP_CHROME_ALLOWANCE = 100;
+  var PIP_CONTENT_PADDING = 24;         // 콘텐츠 하단 여백(카드 그림자·라운딩 여유)
   var NOW_TICK_MS = 30000;              // 「지금」 카드 경과 시간 갱신 주기
   var MINUTES_PER_HOUR = 60;
   var MS_PER_MINUTE = 60000;
@@ -1239,13 +1251,33 @@ DZ:DASHBOARD 갱신 맵 (동적 영역 — 셀렉터 기반 정밀 치환, comma
     return fresh.querySelectorAll('input[name="dzs"]').length
         !== wrap.querySelectorAll('input[name="dzs"]').length;
   }
-  // 압축 뷰는 작업 추적 카드가 빠져 실제 콘텐츠가 620px 보다 훨씬 짧다 — 열 때 한 번,
-  // 이후 콘텐츠 높이가 바뀔 때마다(단계 상세 추가 등) 다시 맞춘다.
+  // 압축 뷰는 작업 추적 카드가 빠져 실제 콘텐츠가 훨씬 짧다 — 여는 시점의 크기를
+  // measureCompactHeight() 로 미리 맞추므로(아래), 이 함수는 열린 뒤 콘텐츠 높이가
+  // 바뀌었을 때(단계 상세 추가 등)의 보정 시도다. pipWindow.resizeTo() 는 Document PiP 창에서
+  // 사용자 제스처(transient activation)를 요구한다(Chrome 실측: NotAllowedError). 이 함수는
+  // rAF·폴링에서 호출되므로 제스처가 이미 소진된 뒤라 대개 조용히 실패한다 — 브라우저 API
+  // 한계이며 무해하게 catch 된다.
   function resizePipToFit(){
     if(!pipWindow) return;
-    var h = Math.ceil(wrap.getBoundingClientRect().height) + 24;
+    var h = Math.ceil(wrap.getBoundingClientRect().height) + PIP_CONTENT_PADDING;
     try{ pipWindow.resizeTo(PIP_WIDTH, Math.max(PIP_MIN_HEIGHT, Math.min(PIP_MAX_HEIGHT, h))); }
     catch(e){ /* 리사이즈 불가 환경이어도 폴링·동기화는 계속돼야 한다 */ }
+  }
+  // .wrap 은 아직 메인 문서(body.dz-pip 아님)에 있다 — 압축 뷰 클래스를 순간적으로 얹어
+  // 실제 렌더 높이를 재고 즉시 되돌린다. 읽기와 되돌리기가 같은 동기 구간 안에서 끝나므로
+  // 브라우저가 그 사이의 레이아웃을 페인트할 기회가 없어 화면 깜빡임이 없다. PiP 창을 여는
+  // 호출은 열린 뒤의 resizeTo() 와 달리 사용자 제스처를 그대로 쓸 수 있으므로, 크기는 여기서
+  // "처음부터 맞게" 정한다 — resizePipToFit() 의 사후 보정에 기대지 않는다.
+  // 메인 창은 보통 .wrap 의 max-width(860px)만큼 넓어 PIP_WIDTH(420)보다 훨씬 넓게 렌더링된다
+  // — 폭을 강제하지 않으면 실제 PiP 창에서 줄바꿈되는 텍스트(제목·단계 상세 등)가 측정
+  // 시점엔 한 줄로 남아 높이를 과소평가한다. 그래서 측정 동안만 .wrap 폭도 함께 좁힌다.
+  function measureCompactHeight(){
+    document.body.classList.add('dz-pip');
+    wrap.style.width = PIP_WIDTH + 'px';
+    var h = Math.ceil(wrap.getBoundingClientRect().height) + PIP_CONTENT_PADDING + PIP_CHROME_ALLOWANCE;
+    wrap.style.width = '';
+    document.body.classList.remove('dz-pip');
+    return Math.max(PIP_MIN_HEIGHT, Math.min(PIP_MAX_HEIGHT, h));
   }
   function apply(html){
     if(html === lastHtml) return;
@@ -1292,7 +1324,7 @@ DZ:DASHBOARD 갱신 맵 (동적 영역 — 셀렉터 기반 정밀 치환, comma
   }
   pipButton.addEventListener('click', function(){
     if(pipWindow){ pipWindow.close(); return; }
-    window.documentPictureInPicture.requestWindow({width:PIP_WIDTH, height:PIP_HEIGHT})
+    window.documentPictureInPicture.requestWindow({width:PIP_WIDTH, height:measureCompactHeight()})
       .then(function(win){
         pipWindow = win;
         var pipDocument = win.document;
