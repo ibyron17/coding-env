@@ -117,7 +117,7 @@ cd /path/to/my-project
 | `prp-commit` | 131 | 자연어로 파일 지정해 커밋 (컨벤션: 프로젝트 CLAUDE.md > commitlint 설정 > 기본 형식) |
 | `code-review` | 289 | 로컬 변경 또는 PR 검수 |
 | `env-update` | 184 | coding-env 레포 업데이트 (manifest 기반 자동 갱신) |
-| `dashboard` | 1334 | 세션 진행 상황을 프로젝트 로컬 HTML 대시보드로 기록 (init/step/impl/log + on/off 스위치, `serve`로 플로팅) |
+| `dashboard` | 1512 | 세션 진행 상황을 프로젝트 로컬 HTML 대시보드로 기록 (init/step/impl/log + on/off 스위치, `serve`로 플로팅) |
 
 각 커맨드의 동작:
 
@@ -144,8 +144,9 @@ cd /path/to/my-project
   현재 단계·경과 시간·다음 단계는 「지금」 카드가 새 인자 없이 자동으로 보여줍니다.
   `on`/`off`(`dashboard_enabled`, 기본 켜짐)로 이 프로젝트·나에게만 기록 여부를 전환할 수
   있고, 자동으로 뜬 서버에서 Document Picture-in-Picture 플로팅 창을 열면 5초 간격 폴링
-  갱신됩니다(`serve`는 서버가 없을 때 수동으로 다시 띄우는 용도로 남아 있습니다). `prp-*`
-  체인과 무관한 독립 커맨드입니다.
+  갱신됩니다(`serve`는 서버가 없을 때 수동으로 다시 띄우는 용도로 남아 있습니다). 커밋 로그를
+  남기면(`log commit`) 자동으로 띄웠던 서버가 정리되고, 이미 열려 있던 플로팅 창은 마지막
+  화면 그대로 조용히 고정됩니다. `prp-*` 체인과 무관한 독립 커맨드입니다.
 
   ![대시보드 예시 — 매크로 단계, 구현 세부 작업 패널, 작업 추적 로그](docs/images/dashboard-sample.png)
 

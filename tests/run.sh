@@ -996,10 +996,10 @@ test_manifest_fields_complete() {
 }
 
 # T22: dashboard 템플릿 무결성 — LLM 지시문 방식이라 런타임 Edit 결과는 검증 대상이 아니고,
-# 설치·문서 정합성만 자동 검증한다 (하위 검증 T22-1~T22-79).
+# 설치·문서 정합성만 자동 검증한다 (하위 검증 T22-1~T22-90).
 test_dashboard_template_integrity() {
   local test_name="T22"
-  local test_desc="dashboard 템플릿 무결성 (T22-1~T22-79)"
+  local test_desc="dashboard 템플릿 무결성 (T22-1~T22-90)"
   log_test_name "$test_name" "$test_desc"
 
   local sandbox
@@ -1059,11 +1059,74 @@ test_dashboard_template_integrity() {
     return 1
   fi
 
-  # T22-6: init 절차에 기존 파일 덮어쓰기 가드 문구 존재 (재발 방지책)
-  # 실행 코드가 없는 LLM 지시문이라 가드 "로직"의 실제 동작은 검증할 수 없고,
-  # 지시문 안에 가드 문구가 남아있는지만 grep 으로 확인한다.
-  if ! grep -q "덮어쓰지 않는다" "$dashboard_command_file"; then
-    record_failure "$test_name" "T22-6: init 기존 파일 가드 문구 미발견"
+  # T22-6: init 절차가 기존 파일 재사용 시 로그(작업 추적)를 보존한다는 가드 — 명령
+  # ("9단계는 건너뛴다")과 그 근거 문장을 「이미 존재하면」 분기 범위 안에서 함께 확인한다.
+  # 범위를 좁히고 빈 범위를 먼저 확인하는 이유는 T22-81 라운드에서 실증된 함정("문자열
+  # 등장만 세는 테스트는 무관한 편집에 잠식된다") 때문이다 — 이 가드 문구가 다른 절로
+  # 복사되거나 명령만 뒤집혀도(9단계도 수행하도록) 이 범위 밖에서는 검출되지 않아야 한다.
+  local init_reuse_branch
+  init_reuse_branch=$(sed -n '/이미 존재하면/,/존재하지 않으면/p' "$dashboard_command_file")
+  if [[ -z "$init_reuse_branch" ]]; then
+    record_failure "$test_name" "T22-6: init 「이미 존재하면」 분기 범위 추출 실패 — 앵커가 깨졌다"
+    return 1
+  fi
+  if ! grep -qF '9단계(로그 초기화)는 건너뛴다' <<< "$init_reuse_branch"; then
+    record_failure "$test_name" "T22-6: 로그 초기화 건너뛰기 명령 미발견"
+    return 1
+  fi
+  if ! grep -qF '비우면 방금 보존한 이전 세션 기록이 사라진다' <<< "$init_reuse_branch"; then
+    record_failure "$test_name" "T22-6: 로그 보존 근거 문구 미발견"
+    return 1
+  fi
+
+  # T22-88: init 재사용 시 상태 갱신(e 단계)이 필요한 9개 앵커를 모두 grep 하는지 확인.
+  # 하나라도 빠지면 그 요소만 옛 작업 값에 고착된 채 남는다(이번 라운드의 원인 버그와
+  # 같은 클래스 — 「지금」 카드 대신 이번엔 제목/진행 시각화/구현 세부 작업 패널이었다).
+  # **범위를 e 단계의 grep 명령 블록 자체로 좁힌다** — 같은 앵커 문자열이 바로 뒤 설명
+  # 문장에도 등장해(예: "`id="dz-impl-tasks"`·`id="dz-impl-count"` 는 선택이다") 범위가
+  # 「이미 존재하면」 분기 전체였을 때는 grep -e 절을 실제로 지워도 통과해 버렸다(실측 확인).
+  local e_step_grep_block
+  e_step_grep_block=$(sed -n '/grep -n -e .*id="dz-title"/,/\.claude\/dashboard\.html$/p' "$dashboard_command_file")
+  if [[ -z "$e_step_grep_block" ]]; then
+    record_failure "$test_name" "T22-88: e 단계 grep 명령 블록 추출 실패 — 앵커가 깨졌다"
+    return 1
+  fi
+  local e_step_anchors=(
+    'id="dz-title"' 'id="dz-subtitle"' 'id="dz-progress-bar"' 'id="dz-progress-pct"'
+    'id="dz-steps"' 'id="dz-matrix"' 'id="dz-updated"' 'id="dz-impl-tasks"' 'id="dz-impl-count"'
+    'id="dz-impl-1"'
+  )
+  for anchor in "${e_step_anchors[@]}"; do
+    if ! grep -qF -- "$anchor" <<< "$e_step_grep_block"; then
+      record_failure "$test_name" "T22-88: init 재사용 분기의 grep 블록에 $anchor 앵커 없음"
+      return 1
+    fi
+  done
+
+  # T22-89(역방향 인접 검증): 재사용 분기가 여전히 10단계(자동 발행)를 호출하고 그 지점에서
+  # 절차를 종료하는지 확인한다. 자동 발행이 빠지면 재-init 세션에는 서버도 포트 각인도
+  # 없어져 log commit 의 자동 종료가 조용히 무력화된다(T22-81 이 지키는 성질이 다른
+  # 경로로 뚫린다).
+  if ! grep -qF '[자동 발행]' <<< "$init_reuse_branch"; then
+    record_failure "$test_name" "T22-89: init 재사용 분기에 [자동 발행] 호출 없음"
+    return 1
+  fi
+  if ! grep -qF '여기서 종료' <<< "$init_reuse_branch"; then
+    record_failure "$test_name" "T22-89: init 재사용 분기의 종료 지점 문구 없음"
+    return 1
+  fi
+
+  # T22-90: 구현 세부 작업 패널 초기화 지시 두 절반이 재사용 분기에 모두 있는지 확인한다
+  # — 카운터 문구(0/0 · 0%)만 검사하면 목록 자체를 비우는 <ol id="dz-impl-tasks"> 치환
+  # 지시가 삭제돼도 통과한다(둘은 서로 다른 대상이라 하나만 검사하면 다른 하나의 삭제를
+  # 놓친다).
+  if ! grep -qF '0/0 · 0%' <<< "$init_reuse_branch"; then
+    record_failure "$test_name" "T22-90: 구현 세부 작업 카운터 초기화(0/0 · 0%) 지시 없음"
+    return 1
+  fi
+  if ! grep -qF 'id="dz-impl-tasks"' <<< "$init_reuse_branch" \
+      || ! grep -qF '빈 목록으로 치환' <<< "$init_reuse_branch"; then
+    record_failure "$test_name" "T22-90: 구현 세부 작업 목록(#dz-impl-tasks) 초기화 지시 없음"
     return 1
   fi
 
@@ -1704,6 +1767,121 @@ test_dashboard_template_integrity() {
   # 엉뚱한 서버를 끈다.
   if ! grep -qF '/dashboard serve stop {포트}' "$dashboard_command_file"; then
     record_failure "$test_name" "T22-79: /dashboard serve stop {포트} 미발견"
+    return 1
+  fi
+
+  # T22-80: #dz-log 여는 태그의 각인 슬롯과 속성 순서 — data-server-port 가 유실되거나
+  # data-current-session 앞으로 끼어들면(T22-11 파손) 이 한 줄이 동시에 잡아낸다.
+  if ! grep -qF 'id="dz-log" data-current-session="1" data-server-port=""' "$dashboard_command_file"; then
+    record_failure "$test_name" "T22-80: #dz-log 각인 슬롯(data-server-port) 미발견 또는 속성 순서 위반"
+    return 1
+  fi
+
+  # T22-81: 각인 "호출 지점"이 자동 발행 3단계와 serve 3·4단계 모두에 있는지 확인한다.
+  # data-server-port 라는 리터럴은 공통 절차(「포트 각인」) 본문에도 나오므로 그것만 세면
+  # 호출부가 통째로 삭제돼도 통과해 버린다(실측 회귀: 호출부 삭제 후에도 예전 버전은 통과했다) —
+  # 그래서 [포트 각인] 호출 링크 자체를 앵커로 쓴다. 한쪽만 유실돼도 "자동으로 뜬 서버" 또는
+  # "수동 serve 서버" 중 하나가 영영 안 죽는다(요구사항 3).
+  # 카운트 임계값 방식은 무관한 편집이 카운트를 채우면 조용히 무력해진다(R1 회귀 재현으로
+  # 확인됨: MEDIUM-2 수정이 serve 4단계의 [포트 각인] 참조를 1개에서 2개로 늘려, "serve 절
+  # 전체에서 2개 이상"이라는 임계값이 3단계(기동 시) 각인이 통째로 삭제돼도 4단계 2개만으로
+  # 충족돼 버렸다). 그래서 호출 지점마다 범위를 쪼개 각각 최소 1회를 확인한다.
+  local autopublish_call_section serve_start_section serve_stop_section
+  autopublish_call_section=$(sed -n '/^### 3\. URL 확정과 포트 각인/,/^### 4\./p' "$dashboard_command_file")
+  if [[ -z "$autopublish_call_section" ]]; then
+    record_failure "$test_name" "T22-81: 「자동 발행」 3단계(URL 확정과 포트 각인) 범위 추출 실패 — 앵커가 깨졌다"
+    return 1
+  fi
+  if ! grep -qF '[포트 각인]' <<< "$autopublish_call_section"; then
+    record_failure "$test_name" "T22-81: 「자동 발행」 3단계에 [포트 각인] 호출 없음(자동으로 뜬 서버가 영영 안 죽는 회귀)"
+    return 1
+  fi
+  serve_start_section=$(sed -n '/^3\. 아래를 \*\*백그라운드\*\*/,/^4\. `stop`/p' "$dashboard_command_file")
+  if [[ -z "$serve_start_section" ]]; then
+    record_failure "$test_name" "T22-81: serve 3단계(기동) 범위 추출 실패 — 앵커가 깨졌다"
+    return 1
+  fi
+  if ! grep -qF '[포트 각인]' <<< "$serve_start_section"; then
+    record_failure "$test_name" "T22-81: serve 3단계(기동 성공 시)에 [포트 각인] 호출 없음(수동 serve 서버가 영영 안 죽는 회귀)"
+    return 1
+  fi
+  serve_stop_section=$(sed -n '/^4\. `stop`/,/^5\. 위 \[자동 발행\]/p' "$dashboard_command_file")
+  if [[ -z "$serve_stop_section" ]]; then
+    record_failure "$test_name" "T22-81: serve 4단계(stop) 범위 추출 실패 — 앵커가 깨졌다"
+    return 1
+  fi
+  if ! grep -qF '[포트 각인]' <<< "$serve_stop_section"; then
+    record_failure "$test_name" "T22-81: serve 4단계(stop 시)에 [포트 각인] 호출 없음(각인 해제 누락 — 낡은 각인이 다른 프로젝트 서버를 끄는 회귀)"
+    return 1
+  fi
+
+  # T22-82: log 절에 자동 종료 로직과 commit 전용 분기 조건이 함께 존재하는지 확인.
+  local log_section
+  log_section=$(sed -n '/^## `log`/,/^## 자동 발행/p' "$dashboard_command_file")
+  if ! grep -qF 'pkill -f "http.server' <<< "$log_section"; then
+    record_failure "$test_name" "T22-82: log 절에서 pkill 자동 종료 로직 미발견"
+    return 1
+  fi
+  if ! grep -qF '첫 인자가 `commit` 일 때만' <<< "$log_section"; then
+    record_failure "$test_name" "T22-82: log 절에서 commit 전용 분기 조건 미발견"
+    return 1
+  fi
+
+  # T22-83(역방향): 종료 로직이 step·impl 절로 번지지 않았는지 확인. T22-77(비발행)의 대칭.
+  # 역방향 테스트는 범위 추출이 실패(앵커 유실)하면 grep -q 가 그냥 실패해 "조용히 통과"해
+  # 버리므로, 범위가 비어 있지 않은지부터 먼저 확인한다.
+  local step_impl_section
+  step_impl_section=$(sed -n '/^## `step`/,/^## `log`/p' "$dashboard_command_file")
+  if [[ -z "$step_impl_section" ]]; then
+    record_failure "$test_name" "T22-83: step·impl 절 범위 추출 실패 — 앵커가 깨졌다"
+    return 1
+  fi
+  if grep -q 'pkill' <<< "$step_impl_section"; then
+    record_failure "$test_name" "T22-83: step·impl 절 범위에 pkill 이 번져 있음"
+    return 1
+  fi
+
+  # T22-84(역방향): 불변식 8 — <script> 블록은 data-server-port 를 읽지도 쓰지도 않는다.
+  local script_block
+  script_block=$(sed -n '/^<script>/,/<\/script>/p' "$dashboard_command_file")
+  if [[ -z "$script_block" ]]; then
+    record_failure "$test_name" "T22-84: <script> 블록 범위 추출 실패 — 앵커가 깨졌다"
+    return 1
+  fi
+  if grep -q 'data-server-port' <<< "$script_block"; then
+    record_failure "$test_name" "T22-84: <script> 블록이 data-server-port 를 참조함(불변식 8 위반)"
+    return 1
+  fi
+
+  # T22-85(역방향): 요구사항 2의 유일한 보증 — poll() 실패 경로가 PiP 창을 닫거나 리로드하면
+  # "커밋 직전 화면에서 고정"이라는 목표가 깨진다.
+  local poll_body
+  poll_body=$(sed -n '/function poll(){/,/setInterval(poll,/p' "$dashboard_command_file")
+  if [[ -z "$poll_body" ]]; then
+    record_failure "$test_name" "T22-85: poll() 범위 추출 실패 — 앵커가 깨졌다"
+    return 1
+  fi
+  if grep -q 'close()\|location.reload' <<< "$poll_body"; then
+    record_failure "$test_name" "T22-85: poll() 실패 경로에서 close()/location.reload 발견 — PiP 고정 회귀"
+    return 1
+  fi
+
+  # T22-86: sleep 6 지연과 그 근거(POLL_INTERVAL_MS) — 지연을 "불필요한 대기"로 오해해
+  # 지우면 커밋 화면이 PiP 에 닿지 못한다. log 절 범위로 좁혀서 검사한다(파일 전역이면
+  # 이 지연이 log commit 경로 밖으로 옮겨져도 통과해 버린다).
+  if ! grep -qF 'sleep 6 && pkill' <<< "$log_section"; then
+    record_failure "$test_name" "T22-86: log 절 범위에서 sleep 6 && pkill 미발견"
+    return 1
+  fi
+  if ! grep -qF 'POLL_INTERVAL_MS' <<< "$log_section"; then
+    record_failure "$test_name" "T22-86: log 절 범위에서 POLL_INTERVAL_MS 근거 문구 미발견"
+    return 1
+  fi
+
+  # T22-87: 종료 코드 1(이미 꺼진 서버) 비에러 처리 문구 — 없으면 커밋 턴마다 불필요한
+  # 에러 보고가 발생한다(요구사항 4).
+  if ! grep -qF '종료 코드 1' <<< "$log_section" && ! grep -qF '에러가 아니다' <<< "$log_section"; then
+    record_failure "$test_name" "T22-87: log 절 범위에서 '종료 코드 1' 또는 '에러가 아니다' 문구 미발견"
     return 1
   fi
 
