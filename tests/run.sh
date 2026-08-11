@@ -1893,10 +1893,10 @@ test_hub_unit_tests() {
   ((passed_tests++))
 }
 
-# T25: 허브 문서·상수 정합성 (하위 검증 T25-1~T25-26)
+# T25: 허브 문서·상수 정합성 (하위 검증 T25-1~T25-31)
 test_hub_docs_and_constants() {
   local test_name="T25"
-  local test_desc="허브 문서·상수 정합성 (T25-1~T25-26)"
+  local test_desc="허브 문서·상수 정합성 (T25-1~T25-31)"
   log_test_name "$test_name" "$test_desc"
 
   local hub_settings_file="$REPO_ROOT/hub/bin/hub_settings.py"
@@ -1912,7 +1912,7 @@ test_hub_docs_and_constants() {
   local dashboard_command_file="$REPO_ROOT/commands/dashboard.md"
   local readme_file="$REPO_ROOT/README.md"
 
-  # T25-1(개정 R-M5 — 대상 이동): HUB_FILE_COUNT 는 이제 hub/install.sh 가 갖는다(값 9)
+  # T25-1(개정 R-M5 — 대상 이동): HUB_FILE_COUNT 는 이제 hub/install.sh 가 갖는다(값 10)
   local declared_count actual_count
   declared_count=$(grep -oE '^readonly HUB_FILE_COUNT=[0-9]+' "$hub_install_file" | grep -oE '[0-9]+$')
   actual_count=$(find "$REPO_ROOT/hub/bin" -maxdepth 1 -type f | wc -l | tr -d ' ')
@@ -1996,9 +1996,10 @@ test_hub_docs_and_constants() {
     return 1
   fi
 
-  # T25-10: hub_model.py·hub_parse.py 에 파일시스템 접근이 없다 (순수 레이어 경계의 기계적 강제)
+  # T25-10(+ T25-27 — hub_usage.py 추가): hub_model.py·hub_parse.py·hub_usage.py 에
+  # 파일시스템 접근이 없다 (순수 레이어 경계의 기계적 강제)
   local pure_file
-  for pure_file in "$REPO_ROOT/hub/bin/hub_model.py" "$REPO_ROOT/hub/bin/hub_parse.py"; do
+  for pure_file in "$REPO_ROOT/hub/bin/hub_model.py" "$REPO_ROOT/hub/bin/hub_parse.py" "$REPO_ROOT/hub/bin/hub_usage.py"; do
     if grep -qE 'open\(|Path\(|os\.' "$pure_file"; then
       record_failure "$test_name" "T25-10: $pure_file 에 파일시스템 접근 흔적(open(/Path(/os.)이 있음"
       return 1
@@ -2260,6 +2261,56 @@ PYEOF
   fi
   if [[ ! -f "$sandbox_stop_fail/.claude/hub/bin/hub.py" ]]; then
     record_failure "$test_name" "T25-26: server-stop 실패 시 bin/ 이 보존되지 않음(정지 수단 소멸)"
+    return 1
+  fi
+
+  # T25-28(결정 T1·T3 회귀): 다크 테마는 미디어 쿼리 + data-theme 속성 오버라이드 둘 다로
+  # 성립하고, 'dzh-theme' 리터럴은 head FOUC 스크립트 + 본문 IIFE 두 곳에 각각 등장해야 한다
+  # (head 스크립트는 자족적이어야 해서 상수 공유가 불가능하다).
+  if ! grep -qF "prefers-color-scheme" "$hub_template_file"; then
+    record_failure "$test_name" "T25-28: hub_template.html 에 prefers-color-scheme 가 없음"
+    return 1
+  fi
+  if ! grep -qF "data-theme" "$hub_template_file"; then
+    record_failure "$test_name" "T25-28: hub_template.html 에 data-theme 가 없음"
+    return 1
+  fi
+  local dzh_theme_literal_count
+  dzh_theme_literal_count=$(grep -oF "'dzh-theme'" "$hub_template_file" | wc -l | tr -d ' ')
+  if [[ "$dzh_theme_literal_count" -lt 2 ]]; then
+    record_failure "$test_name" "T25-28: 'dzh-theme' 리터럴이 ${dzh_theme_literal_count}회만 등장(기대 2회 이상)"
+    return 1
+  fi
+
+  # T25-29(팔레트 회귀 방지): 색각 안전성이 없는 구형 초록·빨강·주황이 템플릿에서 완전히 사라져야 한다.
+  local legacy_color
+  for legacy_color in "#1F8A70" "#C2410C" "#F59E0B"; do
+    if grep -qF "$legacy_color" "$hub_template_file"; then
+      record_failure "$test_name" "T25-29: hub_template.html 에 색각 안전성 없는 팔레트($legacy_color)가 남아 있음"
+      return 1
+    fi
+  done
+
+  # T25-30(색 이외 채널 회귀 방지): 상태 배지가 색만이 아니라 글리프로도 구분되고,
+  # 그 글리프는 스크린리더에서 숨겨진다(aria-hidden).
+  if ! grep -qF "STATE_GLYPH" "$hub_template_file"; then
+    record_failure "$test_name" "T25-30: hub_template.html 에 STATE_GLYPH 가 없음"
+    return 1
+  fi
+  if ! grep -qF "aria-hidden" "$hub_template_file"; then
+    record_failure "$test_name" "T25-30: hub_template.html 에 aria-hidden 이 없음"
+    return 1
+  fi
+
+  # T25-31(문서 정합): show_usage_panel 스위치와 데이터 출처(plan-usage-history.json)가
+  # hub/README.md 에 문서화돼 있다.
+  local hub_readme_usage_file="$REPO_ROOT/hub/README.md"
+  if ! grep -qF "show_usage_panel" "$hub_readme_usage_file"; then
+    record_failure "$test_name" "T25-31: hub/README.md 에 show_usage_panel 행이 없음"
+    return 1
+  fi
+  if ! grep -qF "plan-usage-history.json" "$hub_readme_usage_file"; then
+    record_failure "$test_name" "T25-31: hub/README.md 에 plan-usage-history.json 언급이 없음"
     return 1
   fi
 

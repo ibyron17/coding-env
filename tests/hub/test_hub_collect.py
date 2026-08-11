@@ -17,12 +17,17 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "hub", "b
 
 import hub_collect  # noqa: E402
 import hub_model  # noqa: E402
+import hub_usage  # noqa: E402
 
 
 def _minimal_snapshot(collected_at_ms: int) -> hub_model.HubSnapshot:
     return hub_model.HubSnapshot(
         collected_at_ms=collected_at_ms, projects=(), unresolved_dir_names=(), warnings=()
     )
+
+
+def _usage_history_text(t=1786433123899, fh=10, sd=19) -> str:
+    return json.dumps({"version": 2, "samples": [{"t": t, "org": "org-1", "u": {"fh": fh, "sd": sd}}]})
 
 
 class ServerRecordRoundTripTest(unittest.TestCase):
@@ -391,6 +396,124 @@ class LoadConfigValidationTest(unittest.TestCase):
         config, warnings = hub_collect.load_config()
         self.assertEqual(config, hub_model.HubConfig())
         self.assertEqual(len(warnings), 1)
+
+    def test_case25_show_usage_panel_wrong_type_falls_back_to_default_with_warning(self) -> None:
+        """케이스 25 — config.json 의 show_usage_panel:"yes" 는 기본값 True + 경고 1건."""
+        hub_collect.CONFIG_PATH.write_text(json.dumps({"show_usage_panel": "yes"}))
+        config, warnings = hub_collect.load_config()
+        self.assertTrue(config.show_usage_panel)
+        self.assertTrue(any("show_usage_panel" in warning for warning in warnings))
+
+
+class UsageForSnapshotTest(unittest.TestCase):
+    """케이스 18~23 — read_latest_usage_sample · _usage_for_snapshot 의 반환 계약(PRP 「반환 계약」 표)."""
+
+    def setUp(self) -> None:
+        self.temp_dir = Path(tempfile.mkdtemp())
+        self.original_path = hub_collect.PLAN_USAGE_HISTORY_PATH
+        hub_collect.PLAN_USAGE_HISTORY_PATH = self.temp_dir / "plan-usage-history.json"
+        self.now_ms = 1786433123899
+
+    def tearDown(self) -> None:
+        for path in self.temp_dir.glob("*"):
+            path.chmod(0o644)
+        hub_collect.PLAN_USAGE_HISTORY_PATH = self.original_path
+        shutil.rmtree(self.temp_dir, ignore_errors=True)
+
+    def test_case18_missing_file_returns_none_without_warnings(self) -> None:
+        sample, warnings = hub_collect.read_latest_usage_sample()
+        self.assertIsNone(sample)
+        self.assertEqual(warnings, ())
+
+    def test_case19_switch_off_never_reads_the_file(self) -> None:
+        """검수 m6 — read_latest_usage_sample 래퍼가 아니라 I/O 경계(Path.read_text)에서
+        직접 확인한다. 래퍼만 모킹하면 누군가 스위치 검사보다 먼저 read_text 를 호출하는
+        구현으로 바뀌어도 이 테스트가 통과해 U4 의 프라이버시 계약(읽지 않는다)이 고정되지
+        않는다."""
+        hub_collect.PLAN_USAGE_HISTORY_PATH.write_text(_usage_history_text())
+        config = hub_model.HubConfig(show_usage_panel=False)
+        with mock.patch.object(hub_collect.Path, "read_text") as mocked_read_text:
+            sample, warnings = hub_collect._usage_for_snapshot(self.now_ms, config)
+        self.assertIsNone(sample)
+        self.assertEqual(warnings, ())
+        mocked_read_text.assert_not_called()
+
+    def test_case20_broken_json_returns_none_with_one_warning(self) -> None:
+        hub_collect.PLAN_USAGE_HISTORY_PATH.write_text("{not valid json")
+        sample, warnings = hub_collect.read_latest_usage_sample()
+        self.assertIsNone(sample)
+        self.assertEqual(len(warnings), 1)
+
+    def test_case21_unreadable_file_returns_none_with_one_warning(self) -> None:
+        hub_collect.PLAN_USAGE_HISTORY_PATH.write_text(_usage_history_text())
+        hub_collect.PLAN_USAGE_HISTORY_PATH.chmod(0o000)
+        sample, warnings = hub_collect.read_latest_usage_sample()
+        self.assertIsNone(sample)
+        self.assertEqual(len(warnings), 1)
+
+    def test_case22_expired_sample_returns_none_without_warnings(self) -> None:
+        six_hours_ms = 6 * 60 * 60 * 1000
+        hub_collect.PLAN_USAGE_HISTORY_PATH.write_text(
+            _usage_history_text(t=self.now_ms - six_hours_ms)
+        )
+        config = hub_model.HubConfig()
+        sample, warnings = hub_collect._usage_for_snapshot(self.now_ms, config)
+        self.assertIsNone(sample)
+        self.assertEqual(warnings, ())
+
+    def test_case23_normal_file_returns_usage_sample(self) -> None:
+        hub_collect.PLAN_USAGE_HISTORY_PATH.write_text(
+            _usage_history_text(t=self.now_ms, fh=10, sd=19)
+        )
+        config = hub_model.HubConfig()
+        sample, warnings = hub_collect._usage_for_snapshot(self.now_ms, config)
+        self.assertEqual(
+            sample, hub_usage.UsageSample(sampled_at_ms=self.now_ms, session_percent=10, weekly_percent=19)
+        )
+        self.assertEqual(warnings, ())
+
+    def test_case_m1_truncated_multibyte_write_does_not_raise(self) -> None:
+        """검수 M1 회귀 — 앱이 파일을 다시 쓰는 도중의 찢긴 읽기(리스크 6)가 멀티바이트 경계에서
+        나면 UnicodeDecodeError 가 나는데, 이는 ValueError 서브클래스라 `except OSError` 로
+        잡히지 않는다. 기존 케이스 20(`"{not valid json"`)은 유효한 UTF-8 이라 이 경로를 못
+        잡는다 — 여기서는 실제로 잘린 멀티바이트 시퀀스를 바이트로 직접 쓴다."""
+        truncated_bytes = b'{"version":2,"samples":[{"t":1,"org":"o","u":{"fh":' + b"\xed\xa0"
+        hub_collect.PLAN_USAGE_HISTORY_PATH.write_bytes(truncated_bytes)
+        try:
+            sample, warnings = hub_collect.read_latest_usage_sample()
+        except UnicodeDecodeError:
+            self.fail("read_latest_usage_sample 가 UnicodeDecodeError 를 던졌다 — 절대 던지지 않아야 한다")
+        self.assertIsNone(sample)
+        self.assertEqual(len(warnings), 1)
+
+
+class CollectSnapshotUsageIsolationTest(unittest.TestCase):
+    """케이스 24 — 사용량 파싱 실패가 collect_snapshot() 전체를 죽이지 않는다(실패 격리 회귀 방지)."""
+
+    def setUp(self) -> None:
+        self.temp_dir = Path(tempfile.mkdtemp())
+        self.original_events_dir = hub_collect.EVENTS_DIR
+        self.original_projects_dir = hub_collect.PROJECTS_DIR
+        self.original_config_path = hub_collect.CONFIG_PATH
+        self.original_usage_path = hub_collect.PLAN_USAGE_HISTORY_PATH
+        hub_collect.EVENTS_DIR = self.temp_dir / "events"
+        hub_collect.PROJECTS_DIR = self.temp_dir / "projects"
+        hub_collect.CONFIG_PATH = self.temp_dir / "config.json"
+        hub_collect.PLAN_USAGE_HISTORY_PATH = self.temp_dir / "plan-usage-history.json"
+        hub_collect.PLAN_USAGE_HISTORY_PATH.write_text("{not valid json")
+
+    def tearDown(self) -> None:
+        hub_collect.EVENTS_DIR = self.original_events_dir
+        hub_collect.PROJECTS_DIR = self.original_projects_dir
+        hub_collect.CONFIG_PATH = self.original_config_path
+        hub_collect.PLAN_USAGE_HISTORY_PATH = self.original_usage_path
+        shutil.rmtree(self.temp_dir, ignore_errors=True)
+
+    def test_case24_broken_usage_file_does_not_abort_project_collection(self) -> None:
+        snapshot = hub_collect.collect_snapshot(1786433123899)
+        self.assertEqual(snapshot.projects, ())
+        self.assertIsNone(snapshot.usage)
+        self.assertTrue(any("사용량 파일 계약 불일치" in warning for warning in snapshot.warnings))
 
 
 if __name__ == "__main__":

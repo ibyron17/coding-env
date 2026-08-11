@@ -2,6 +2,7 @@
 <html lang="ko">
 <head>
 <meta charset="utf-8">
+<meta name="color-scheme" content="light dark">
 <title>통합 허브 대시보드</title>
 <!--
 DZH:HUB 데이터 계약
@@ -9,59 +10,148 @@ DZH:HUB 데이터 계약
               hub_model.render_hub_html 이 이 블록 하나만 치환한다. 나머지는 정적이다.
   갱신 모드는 /dashboard 와 같은 판정이다: location.protocol 이 http(s) 면 5초 폴링
   (자기 URL 을 받아 문자열 전체 비교), 아니면 포커스 복귀 시 location.reload().
+  폴링이 내용을 갱신하는 요소는 #dzh-app · #dzh-collected-at · #dzh-usage 세 개뿐이다
+  (불변식 H1, docs/prps/hub-theme-and-usage-panel.md). 테마 토글 버튼은 이 셋 바깥의
+  정적 마크업이라 폴링과 무관하게 DOM 이 그대로 유지된다.
 -->
 <style>
-  :root{--ink:#172033;--muted:#5E6B7D;--line:#D9E2EC;--soft:#F4F7FB;--blue:#1E5AA8;--navy:#12335B;--green:#1F8A70;--orange:#F59E0B;--red:#C2410C;}
+  :root{
+    color-scheme:light;
+    --bg:#EEF3F8;--surface:#FFFFFF;--ink:#172033;--head:#12335B;--muted:#5A6879;
+    --line:#D9E2EC;--soft:#F4F7FB;
+    --accent:#0072B2;--accent-ink:#005B8F;--accent-soft:#E4F0F8;
+    --attention:#B45309;--attention-soft:#FBEEDC;
+    --shadow:0 8px 24px rgba(19,51,91,.06);
+  }
+  @media (prefers-color-scheme:dark){
+    :root:not([data-theme="light"]){
+      color-scheme:dark;
+      --bg:#0E1621;--surface:#16202D;--ink:#E6EDF5;--head:#DCE7F2;--muted:#94A5B8;
+      --line:#26364A;--soft:#1B2634;
+      --accent:#56B4E9;--accent-ink:#8ACBF0;--accent-soft:#12324A;
+      --attention:#E69F00;--attention-soft:#3B2B0D;
+      --shadow:0 8px 24px rgba(0,0,0,.45);
+    }
+  }
+  :root[data-theme="dark"]{
+    color-scheme:dark;
+    --bg:#0E1621;--surface:#16202D;--ink:#E6EDF5;--head:#DCE7F2;--muted:#94A5B8;
+    --line:#26364A;--soft:#1B2634;
+    --accent:#56B4E9;--accent-ink:#8ACBF0;--accent-soft:#12324A;
+    --attention:#E69F00;--attention-soft:#3B2B0D;
+    --shadow:0 8px 24px rgba(0,0,0,.45);
+  }
   *{box-sizing:border-box}
-  body{margin:0;font-family:"Pretendard","Apple SD Gothic Neo","Malgun Gothic",sans-serif;color:var(--ink);background:#EEF3F8;line-height:1.5}
+  body{margin:0;font-family:"Pretendard","Apple SD Gothic Neo","Malgun Gothic",sans-serif;color:var(--ink);background:var(--bg);line-height:1.5}
   .wrap{max-width:960px;margin:32px auto;padding:0 16px}
-  h1{font-size:20px;margin:0 0 4px;color:var(--navy);letter-spacing:-.4px}
+  h1{font-size:20px;margin:0 0 4px;color:var(--head);letter-spacing:-.4px}
   .sub{font-size:12.5px;color:var(--muted);margin-bottom:18px}
-  .card{background:#fff;border:1px solid var(--line);border-radius:14px;padding:16px 20px;box-shadow:0 8px 24px rgba(19,51,91,.06);margin-bottom:12px}
+  .card{background:var(--surface);border:1px solid var(--line);border-radius:14px;padding:16px 20px;box-shadow:var(--shadow);margin-bottom:12px}
   .project-head{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
-  .project-name{font-size:15px;font-weight:800;color:var(--navy)}
+  .project-name{font-size:15px;font-weight:800;color:var(--head)}
   .badge{display:inline-block;font-size:11px;font-weight:800;padding:2px 9px;border-radius:999px}
+  .badge .glyph{margin-right:3px}
   .badge.tier{background:var(--soft);color:var(--muted)}
-  .badge.state-working{background:#EAF2FB;color:var(--blue)}
+  .badge.state-working{background:var(--accent-soft);color:var(--accent-ink);box-shadow:inset 3px 0 0 var(--accent)}
   .badge.state-idle{background:var(--soft);color:var(--muted)}
-  .badge.state-stale{background:#FEF3E2;color:var(--orange)}
-  .badge.state-done{background:#E5F3EE;color:var(--green)}
+  .badge.state-stale{background:var(--attention-soft);color:var(--attention);box-shadow:inset 3px 0 0 var(--attention)}
+  .badge.state-done{background:transparent;color:var(--muted);border:1px solid var(--line)}
   .last-activity{margin-left:auto;font-size:11.5px;color:var(--muted)}
   .path{font-size:11.5px;color:var(--muted);margin-top:2px;word-break:break-all}
-  .tier1-pct{font-size:12px;font-weight:700;color:var(--blue);margin-top:8px}
-  .tier1-active{font-size:12px;color:var(--navy);margin-top:3px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .tier1-pct{font-size:12px;font-weight:700;color:var(--accent-ink);margin-top:8px}
+  .tier1-active{font-size:12px;color:var(--head);margin-top:3px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
   .tier1-impl{font-size:11.5px;color:var(--muted);margin-top:2px}
   .sessions{list-style:none;margin:10px 0 0;padding:0;font-size:13px}
   .sessions li{padding:7px 0;border-top:1px solid var(--soft)}
   .session-line{display:flex;align-items:baseline;gap:8px;flex-wrap:wrap}
   .short-id{font-family:ui-monospace,monospace;font-size:11px;color:var(--muted)}
-  .phase{font-size:11px;font-weight:800;color:var(--blue)}
+  .phase{font-size:11px;font-weight:800;color:var(--accent-ink)}
   .phase.running::after{content:" · 진행중"}
   .excerpt{color:var(--muted);font-size:12.5px;flex-basis:100%}
   .empty{color:var(--muted);font-size:13px;padding:20px 4px;text-align:center}
-  .unresolved,.warnings{font-size:12px;color:var(--muted);margin-top:6px}
-  .warnings{color:var(--red)}
+  .unresolved{font-size:12px;color:var(--muted);margin-top:6px}
+  .warnings{font-size:12px;color:var(--attention);margin-top:6px;border-left:3px solid var(--attention);padding-left:8px}
+  .warnings::before{content:"⚠ "}
   .foot{font-size:11.5px;color:var(--muted);text-align:right;margin-top:6px}
+  .theme-toggle{position:fixed;top:16px;right:16px;z-index:30;font-size:11.5px;font-weight:700;color:var(--muted);background:var(--surface);border:1px solid var(--line);border-radius:999px;padding:6px 12px;cursor:pointer;box-shadow:var(--shadow)}
+  .theme-toggle:hover{color:var(--accent-ink);border-color:var(--accent)}
+  body.has-usage .wrap{padding-bottom:132px}
+  .usage{position:fixed;bottom:16px;left:50%;transform:translateX(-50%);width:min(420px, calc(100vw - 32px));z-index:20;background:var(--surface);border:1px solid var(--line);border-radius:14px;padding:14px 18px;box-shadow:var(--shadow)}
+  .usage-title{font-size:12.5px;font-weight:800;color:var(--head);margin-bottom:8px}
+  .usage-row{display:flex;justify-content:space-between;align-items:baseline;font-size:12.5px;color:var(--ink);margin-top:8px}
+  .usage-title + .usage-row{margin-top:0}
+  .usage-pct{font-weight:700;color:var(--accent-ink)}
+  .usage-bar{height:8px;border-radius:999px;background:var(--soft);margin-top:4px;overflow:hidden}
+  .usage-bar>span{display:block;height:100%;background:var(--accent);border-radius:999px}
+  .usage-meta{font-size:11px;color:var(--muted);margin-top:10px;text-align:right}
 </style>
+<script>
+/* body 파싱 전에 실행돼 첫 페인트부터 확정 테마로 그린다(FOUC 방지, 결정 T3).
+   localStorage 접근은 file:// 나 저장소 차단 환경에서 던질 수 있어 반드시 감싼다. */
+try{var m=localStorage.getItem('dzh-theme');
+    if(m==='light'||m==='dark')document.documentElement.setAttribute('data-theme',m);}catch(e){}
+</script>
 </head>
 <body>
+<button id="dzh-theme-toggle" class="theme-toggle" type="button">테마: 시스템</button>
 <div class="wrap">
   <h1>통합 허브 대시보드</h1>
   <div class="sub">모든 프로젝트의 진행 상황 · 읽기 전용 · <code>/hub</code> 로 갱신</div>
   <div id="dzh-app"><div class="empty">불러오는 중…</div></div>
   <div class="foot" id="dzh-collected-at"></div>
 </div>
+<aside id="dzh-usage" class="usage" hidden></aside>
 <script type="application/json" id="dzh-data">{}</script>
 <script>
+(function(){
+  // 테마 토글 — 3상태 순환(시스템 → 라이트 → 다크 → 시스템, 결정 T2). 버튼은 #dzh-app 밖의
+  // 정적 마크업이라 5초 폴링(불변식 H1)과 무관하게 이 IIFE 하나로 수명이 끝난다.
+  var THEME_STORAGE_KEY = 'dzh-theme';
+  var THEME_CYCLE = ['system', 'light', 'dark'];
+  var THEME_BUTTON_LABEL = {system:'테마: 시스템', light:'테마: 라이트', dark:'테마: 다크'};
+  var toggleButton = document.getElementById('dzh-theme-toggle');
+  if(!toggleButton) return;
+
+  function currentThemeOverride(){
+    try{
+      var stored = localStorage.getItem(THEME_STORAGE_KEY);
+      return (stored === 'light' || stored === 'dark') ? stored : 'system';
+    }catch(e){
+      return 'system';
+    }
+  }
+
+  function applyThemeButtonLabel(){
+    toggleButton.textContent = THEME_BUTTON_LABEL[currentThemeOverride()];
+  }
+
+  toggleButton.addEventListener('click', function(){
+    var next = THEME_CYCLE[(THEME_CYCLE.indexOf(currentThemeOverride()) + 1) % THEME_CYCLE.length];
+    try{
+      if(next === 'system') localStorage.removeItem(THEME_STORAGE_KEY);
+      else localStorage.setItem(THEME_STORAGE_KEY, next);
+    }catch(e){ /* 저장 실패 — 이번 페이지 로드 동안만 토글이 적용된다(결정 T3) */ }
+    if(next === 'system') document.documentElement.removeAttribute('data-theme');
+    else document.documentElement.setAttribute('data-theme', next);
+    applyThemeButtonLabel();
+  });
+  applyThemeButtonLabel();
+})();
+
 (function(){
   var POLL_INTERVAL_MS = 5000;
   var TICK_MS = 30000;
   var MS_PER_MINUTE = 60000;
   var MINUTES_PER_HOUR = 60;
   var STATE_LABEL = {working:'작업중', idle:'대기', stale:'소식 없음', done:'완료'};
+  var STATE_GLYPH = {working:'●', idle:'○', stale:'▲', done:'✓'};
+  var USAGE_SESSION_LABEL = '세션 (5시간)';
+  var USAGE_WEEKLY_LABEL = '주간 (7일)';
+  var USAGE_CYCLE_NOTE = '· 약 15분 주기';
 
   var app = document.getElementById('dzh-app');
   var collectedAtLabel = document.getElementById('dzh-collected-at');
+  var usageEl = document.getElementById('dzh-usage');
   var isServed = location.protocol === 'http:' || location.protocol === 'https:';
   var initialDataParse = parseSnapshotJson(document.getElementById('dzh-data').textContent);
   var snapshot = initialDataParse.snapshot;
@@ -93,6 +183,17 @@ DZH:HUB 데이터 계약
     return STATE_LABEL[state];
   }
 
+  // 색 + 형태(글리프) + 텍스트 3채널 배지(색각 안전 팔레트 보강). baseState 는 선택 인자다 —
+  // 세션 배지는 stale 이면 "직전 …"를 병기하고(stateLabel), 프로젝트 배지는 baseState 가 없어
+  // STATE_LABEL 을 그대로 쓴다. 여기서 baseState 를 필수로 만들면 stale 프로젝트에서
+  // "소식 없음 · 직전 undefined" 가 나온다.
+  function renderStateBadge(state, baseState){
+    var label = baseState ? stateLabel(state, baseState) : STATE_LABEL[state];
+    return '<span class="badge state-' + state + '">'
+         + '<span class="glyph" aria-hidden="true">' + STATE_GLYPH[state] + '</span>'
+         + label + '</span>';
+  }
+
   function renderSession(session){
     var phaseText = '';
     if(session.inferred_phase){
@@ -102,7 +203,7 @@ DZH:HUB 데이터 계약
     var excerpt = session.task_excerpt
       ? '<span class="excerpt">' + escapeHtml(session.task_excerpt) + '</span>' : '';
     return '<li><div class="session-line">'
-      + '<span class="badge state-' + session.state + '">' + stateLabel(session.state, session.base_state) + '</span>'
+      + renderStateBadge(session.state, session.base_state)
       + '<span class="short-id">' + escapeHtml(session.short_id) + '</span>' + phaseText
       + '</div>' + excerpt + '</li>';
   }
@@ -137,7 +238,7 @@ DZH:HUB 데이터 계약
       + '<div class="project-head">'
       + '<span class="project-name">' + escapeHtml(project.display_name) + '</span>'
       + '<span class="badge tier">티어 ' + project.tier + '</span>'
-      + '<span class="badge state-' + project.state + '">' + STATE_LABEL[project.state] + '</span>'
+      + renderStateBadge(project.state)
       + '<span class="last-activity">' + elapsedLabel(project.last_activity_at_ms) + '</span>'
       + '</div>'
       + (project.path ? '<div class="path">' + escapeHtml(project.path) + '</div>' : '')
@@ -159,6 +260,42 @@ DZH:HUB 데이터 계약
 
   function formatTimestamp(epochMs){
     return new Date(epochMs).toLocaleString('ko-KR');
+  }
+
+  // #dzh-data 는 신뢰 가능한 서버 생성물이지만 템플릿의 관행대로 방어한다 — Number() 강제
+  // 변환 후 isFinite 가 아니면 막대를 그리지 않고, 표시 폭은 0~100 으로 클램프한다(레이아웃
+  // 붕괴·스타일 속성 주입 방지). 표시 숫자(rawValue)는 클램프하지 않은 원값을 쓴다.
+  function clampPercent(value){
+    var number = Number(value);
+    if(!isFinite(number)) return null;
+    return Math.max(0, Math.min(100, number));
+  }
+
+  function renderUsageBar(label, rawValue){
+    var clamped = clampPercent(rawValue);
+    if(clamped === null) return '';
+    return '<div class="usage-row"><span>' + label + '</span><span class="usage-pct">' + rawValue + '%</span></div>'
+      + '<div class="usage-bar" role="progressbar" aria-valuenow="' + clamped + '" aria-valuemin="0" aria-valuemax="100" aria-label="' + label + ' 사용률"><span style="width:' + clamped + '%"></span></div>';
+  }
+
+  function hideUsagePanel(){
+    usageEl.hidden = true;
+    document.body.classList.remove('has-usage');
+  }
+
+  // 컨테이너(#dzh-usage)는 정적, 내용은 파생이다(결정 M2) — 매 render() 마다 다시 그리되
+  // 접기/닫기 같은 사용자 상태는 두지 않는다(결정 U5). usage 가 없으면(스위치 off·파일
+  // 없음·계약 불일치·만료, 결정 U3·U4) 조용히 숨긴다 — 경고를 띄우지 않는다.
+  function renderUsagePanel(usage){
+    if(!usage){ hideUsagePanel(); return; }
+    var sessionBar = renderUsageBar(USAGE_SESSION_LABEL, usage.session_percent);
+    var weeklyBar = renderUsageBar(USAGE_WEEKLY_LABEL, usage.weekly_percent);
+    if(!sessionBar || !weeklyBar){ hideUsagePanel(); return; }
+    var meta = '마지막 갱신 ' + elapsedLabel(usage.sampled_at_ms) + ' ' + USAGE_CYCLE_NOTE;
+    usageEl.innerHTML = '<div class="usage-title">Claude 사용 한도</div>' + sessionBar + weeklyBar
+      + '<div class="usage-meta" title="' + escapeHtml(formatTimestamp(usage.sampled_at_ms)) + '">' + meta + '</div>';
+    usageEl.hidden = false;
+    document.body.classList.add('has-usage');
   }
 
   function renderConnectionStatus(){
@@ -198,6 +335,7 @@ DZH:HUB 데이터 계약
     }
     app.insertAdjacentHTML('beforeend', extra);
     renderConnectionStatus();
+    renderUsagePanel(snapshot.usage);
   }
   render();
   setInterval(render, TICK_MS);

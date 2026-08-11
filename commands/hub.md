@@ -130,6 +130,13 @@ python3 "$HOME/.claude/hub/bin/hub.py" status --json
 `events_today_and_yesterday`(오늘+어제 이벤트 수) · `server_alive`·`server_crashed_evidence`·
 `server_collect_stalled`(서버 요약) · `last_collected_at_ms` 를 표로 보고한다.
 
+`usage_panel_enabled`(사용량 패널 스위치)·`usage_sample_age_ms`(마지막 사용량 샘플의
+나이, ms)도 같은 표에 곁들인다. `usage_panel_enabled:false` 면 `config.json` 에서 껐다는
+뜻이고, `true` 인데 `usage_sample_age_ms` 가 `null` 이면 macOS 데스크톱 앱의 사용량 파일이
+없거나 계약이 안 맞는 것이며, 숫자인데 5시간(18,000,000ms)을 넘으면 만료돼 패널이 표시되지
+않는 것이다 — 패널이 안 보이는 네 이유(스위치 off·파일 없음·계약 불일치·만료)를 이 두
+필드로 구분한다.
+
 ---
 
 ## 구현 노트 (사람이 읽는 참고용 — 이 절은 실행하지 않는다)

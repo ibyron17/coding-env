@@ -11,6 +11,7 @@ from dataclasses import asdict, dataclass
 from typing import Literal, Sequence
 
 from hub_parse import Tier1Snapshot
+from hub_usage import UsageSample
 
 SessionState = Literal["working", "idle", "stale", "done"]
 Phase = Literal["설계", "구현", "검수"]
@@ -62,6 +63,7 @@ class HubConfig:
     record_prompt_excerpt: bool = True
     server_port: int = 8794                        # 상주 서버 고정 포트(북마크 가능해야 한다)
     server_collect_interval_seconds: int = 5       # 수집 루프 주기
+    show_usage_panel: bool = True                  # false 면 사용량 파일을 아예 읽지 않는다(결정 U4)
 
 
 # ---- 사실(fact) ----
@@ -128,6 +130,7 @@ class HubSnapshot:
     projects: tuple[ProjectView, ...]
     unresolved_dir_names: tuple[str, ...]
     warnings: tuple[str, ...]
+    usage: UsageSample | None = None    # 없으면 패널을 그리지 않는다(요구 2). 마지막 필드 — 기본값 순서 제약
 
 
 # ---- 상주 서버 (개정 1 rev2) ----

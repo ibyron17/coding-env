@@ -15,7 +15,7 @@
 hub/install.sh
 ```
 
-`~/.claude/hub/bin/` 에 9개 파일을 설치한다. `--scope` 인자가 없다 — 설치 위치는 이 하나뿐이며,
+`~/.claude/hub/bin/` 에 10개 파일을 설치한다. `--scope` 인자가 없다 — 설치 위치는 이 하나뿐이며,
 머신 전역 자산이라 프로젝트마다 사본을 두지 않는다.
 
 - `--force` — 수정된 파일이 있어도 덮어쓴다
@@ -65,6 +65,27 @@ hub/install.sh              # 1. 실행 코드 설치
   `config.json` 은 어떤 경로로도 노출되지 않는다. 다만 이 포트에 닿는 **로컬**의 다른 프로세스는
   `hub.html` 에 인라인된 프롬프트 발췌를 읽을 수 있다. 끄는 수단은 `record_prompt_excerpt:false`
   와 `/hub server stop`.
+- 아래 「사용량 패널」의 계정 단위 사용률도 같은 방식으로 `hub.html` 에 인라인된다. 끄는
+  수단은 `config.json` 의 `show_usage_panel: false` — 이 경우 사용량 파일 자체를 읽지 않는다.
+
+## 사용량 패널 — 5시간·7일 한도 사용률
+
+허브 페이지 하단에 세션(5시간)·주간(7일) 한도 사용률을 막대 2개로 보여준다. 출처는
+Claude 데스크톱 앱이 남기는 비공개 파일 `~/Library/Application Support/Claude/plan-usage-history.json`
+**하나뿐**이다 — **macOS 데스크톱 앱이 설치된 환경에서만** 표시된다. 리눅스·윈도우·터미널
+전용 환경에서는 파일이 애초에 없으므로 이 기능이 조용히 존재하지 않는다(경고 없음).
+
+- 데이터가 없거나(파일 부재), 5시간보다 오래됐거나(앱을 안 켠 지 오래됨), 스위치가 꺼져
+  있으면 패널 전체를 표시하지 않는다 — 부분 패널이나 "0%" 오해를 만들지 않는다.
+- 앱 업데이트로 파일 스키마가 바뀌면(계약 불일치) 패널이 사라지고 `warnings` 에 경고가 1건
+  뜬다. `/hub status` 의 `usage_panel_enabled`·`usage_sample_age_ms` 로 원인을 일부 구분할
+  수 있다 — `usage_panel_enabled:false` 면 스위치로 껐다는 뜻이고, `true` 인데
+  `usage_sample_age_ms` 가 `null` 이면 파일이 없거나 계약이 안 맞는 것이며(이 둘은 값만으로는
+  구분되지 않는다), 숫자인데 5시간을 넘으면 만료된 것이다.
+- 갱신 주기는 데스크톱 앱이 정한다(실측 중앙값 15.2분) — 5초 폴링과 별개다. 패널에 "약 15분
+  주기" 문구를 항상 병기해 실시간 수치로 오해하지 않게 한다.
+- 실측 환경은 조직(org) 1종뿐이라 여러 조직을 오가는 계정에서는 마지막 샘플이 어느
+  조직 것인지 필터하지 않는다 — 표시가 어색하면 `show_usage_panel:false` 로 끈다.
 
 ## 티어 한계 — 프로젝트마다 "가진 것 중 가장 높은 티어"로 표시한다
 
@@ -89,6 +110,7 @@ hub/install.sh              # 1. 실행 코드 설치
 | `record_prompt_excerpt` | `true` | 프롬프트 발췌 기록 여부 |
 | `server_port` | `8794` | 상주 서버 고정 포트 |
 | `server_collect_interval_seconds` | `5` | 수집 루프 주기 |
+| `show_usage_panel` | `true` | `false` 면 사용량 패널을 끈다 — 사용량 히스토리 파일을 아예 읽지 않는다 |
 
 ## 제거
 
@@ -103,7 +125,7 @@ hub/install.sh --uninstall
 
 ```
 ~/.claude/hub/
-├── bin/                     # hub/install.sh 가 배포. 9개 파일
+├── bin/                     # hub/install.sh 가 배포. 10개 파일
 ├── config.json              # 선택
 ├── server.json               # 서버 자신이 bind 직후 1회 쓴다(PID·포트·기동 시각)
 ├── server_heartbeat          # 수집 루프가 매 사이클 touch — 생존 판정의 정본

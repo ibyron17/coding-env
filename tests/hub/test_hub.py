@@ -148,15 +148,31 @@ class CmdOpenServerAwareTest(unittest.TestCase):
 
 class CmdStatusServerSummaryTest(unittest.TestCase):
     """검수 M2-3 — `/hub status` 가 server_collect_stalled 를 서버 요약에 포함하는지 확인한다.
-    실제 ~/.claude 는 건드리지 않는다 — HUB_HTML_PATH·hook_install_status·이벤트 읽기를 전부 모킹한다."""
+    실제 ~/.claude 는 건드리지 않는다 — HUB_HTML_PATH·hook_install_status·이벤트 읽기·
+    config.json·사용량 히스토리·마지막 collect 실패 기록을 전부 모킹/격리한다(검수 M2 — cmd_status 가
+    load_config()·_usage_sample_age_ms() 를 호출하게 되면서 실제 개발자 머신의
+    비공개 사용량 파일을 읽던 회귀가 있었다).
+
+    LAST_COLLECT_ERROR_PATH 도 격리한다(검수 R2-n1) — cmd_status 는 read_last_collect_failure()
+    도 부르는데, 그 상수는 HUB_HOME 과 별개로 임포트 시점에 확정되므로 직접 바꿔야 한다.
+    이 클래스의 "실제 ~/.claude 를 건드리지 않는다"는 주장이 문자 그대로 참이 되는 조건이다."""
 
     def setUp(self) -> None:
         self.temp_dir = Path(tempfile.mkdtemp())
         self.original_html_path = hub_collect.HUB_HTML_PATH
+        self.original_config_path = hub_collect.CONFIG_PATH
+        self.original_usage_path = hub_collect.PLAN_USAGE_HISTORY_PATH
+        self.original_error_path = hub_collect.LAST_COLLECT_ERROR_PATH
         hub_collect.HUB_HTML_PATH = self.temp_dir / "hub.html"  # 존재하지 않는 경로 — 실제 파일 미접근
+        hub_collect.CONFIG_PATH = self.temp_dir / "config.json"  # 존재하지 않으면 기본값
+        hub_collect.PLAN_USAGE_HISTORY_PATH = self.temp_dir / "plan-usage-history.json"  # 실제 사용량 파일 미접근
+        hub_collect.LAST_COLLECT_ERROR_PATH = self.temp_dir / "last_collect_error.json"
 
     def tearDown(self) -> None:
         hub_collect.HUB_HTML_PATH = self.original_html_path
+        hub_collect.CONFIG_PATH = self.original_config_path
+        hub_collect.PLAN_USAGE_HISTORY_PATH = self.original_usage_path
+        hub_collect.LAST_COLLECT_ERROR_PATH = self.original_error_path
         shutil.rmtree(self.temp_dir, ignore_errors=True)
 
     def _make_status(self, collect_stalled: bool) -> hub_model.ServerStatus:
@@ -182,6 +198,34 @@ class CmdStatusServerSummaryTest(unittest.TestCase):
     def test_collect_not_stalled_is_surfaced_as_false(self) -> None:
         payload = self._run_cmd_status(collect_stalled=False)
         self.assertFalse(payload["server_collect_stalled"])
+
+    def test_usage_sample_age_ms_is_null_when_switch_is_off(self) -> None:
+        """`commands/hub.md` 의 공개 출력 계약 — 스위치 off 면 usage_sample_age_ms 는 null."""
+        hub_collect.CONFIG_PATH.write_text(json.dumps({"show_usage_panel": False}))
+        payload = self._run_cmd_status(collect_stalled=False)
+        self.assertFalse(payload["usage_panel_enabled"])
+        self.assertIsNone(payload["usage_sample_age_ms"])
+
+    def test_usage_sample_age_ms_is_null_when_usage_file_is_absent(self) -> None:
+        """`commands/hub.md` 의 공개 출력 계약 — 파일이 없으면 enabled 는 true 인데 age 는 null.
+
+        비-macOS·터미널 전용 사용자가 **항상** 보게 되는 상태다(검수 R2-n2). 스위치 off 와
+        값이 다르다는 점이 핵심이다 — off 는 enabled 도 false 다. setUp 이 잡아 둔 임시 경로에
+        파일을 쓰지 않는 것만으로 이 상황이 재현된다.
+        """
+        self.assertFalse(hub_collect.PLAN_USAGE_HISTORY_PATH.exists())
+        payload = self._run_cmd_status(collect_stalled=False)
+        self.assertTrue(payload["usage_panel_enabled"])
+        self.assertIsNone(payload["usage_sample_age_ms"])
+
+    def test_usage_sample_age_ms_is_int_when_usage_file_is_normal(self) -> None:
+        """`commands/hub.md` 의 공개 출력 계약 — 정상 사용량 파일이면 usage_sample_age_ms 는 정수."""
+        hub_collect.PLAN_USAGE_HISTORY_PATH.write_text(
+            json.dumps({"version": 2, "samples": [{"t": 1, "org": "o", "u": {"fh": 10, "sd": 19}}]})
+        )
+        payload = self._run_cmd_status(collect_stalled=False)
+        self.assertTrue(payload["usage_panel_enabled"])
+        self.assertIsInstance(payload["usage_sample_age_ms"], int)
 
 
 if __name__ == "__main__":

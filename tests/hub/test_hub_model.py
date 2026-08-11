@@ -9,6 +9,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "hub", "b
 
 import hub_model  # noqa: E402  (sys.path 조정 후 임포트)
 import hub_parse  # noqa: E402
+import hub_usage  # noqa: E402
 
 STALE_AFTER_MS = 30 * 60 * 1000
 BASE_TIME_MS = 1_786_000_000_000
@@ -293,6 +294,14 @@ class RenderHubHtmlTest(unittest.TestCase):
         parsed = json.loads(inner)
         self.assertEqual(parsed["collected_at_ms"], BASE_TIME_MS)
 
+    def test_case28_usage_none_snapshot_renders_json_null(self) -> None:
+        template = '<html><body><script type="application/json" id="dzh-data">{}</script></body></html>'
+        rendered = hub_model.render_hub_html(template, self._minimal_snapshot())
+        payload = rendered.split('id="dzh-data">', 1)[1].rsplit("</script>", 1)[0]
+        self.assertIn('"usage": null', payload)
+        parsed = json.loads(payload)
+        self.assertIsNone(parsed["usage"])
+
 
 class Tier1PriorityTest(unittest.TestCase):
     """쟁점 3 — 티어 1 이 있으면 티어 1 이 이긴다(합성 시 tier=1)."""
@@ -435,6 +444,30 @@ class SnapshotContentKeyTest(unittest.TestCase):
         key_clean = hub_model.snapshot_content_key(self._snapshot(warnings=()))
         key_warned = hub_model.snapshot_content_key(self._snapshot(warnings=("문제 발생",)))
         self.assertNotEqual(key_clean, key_warned)
+
+
+class UsageSnapshotContentKeyTest(unittest.TestCase):
+    """케이스 26~27 — usage 필드와 snapshot_content_key 의 상호작용(결정 D3 회귀 방지)."""
+
+    def _snapshot(self, collected_at_ms=BASE_TIME_MS, usage=None):
+        return hub_model.HubSnapshot(
+            collected_at_ms=collected_at_ms, projects=(), unresolved_dir_names=(),
+            warnings=(), usage=usage,
+        )
+
+    def test_case26_usage_only_difference_changes_key(self) -> None:
+        key_without_usage = hub_model.snapshot_content_key(self._snapshot(usage=None))
+        key_with_usage = hub_model.snapshot_content_key(
+            self._snapshot(usage=hub_usage.UsageSample(sampled_at_ms=BASE_TIME_MS, session_percent=10, weekly_percent=19))
+        )
+        self.assertNotEqual(key_without_usage, key_with_usage)
+
+    def test_case27_collected_at_ms_only_difference_same_key_usage_present(self) -> None:
+        """D3 회귀 방지 — usage 가 있어도 collected_at_ms 만 다르면 키는 같다(5초마다 재작성되지 않는다)."""
+        usage = hub_usage.UsageSample(sampled_at_ms=BASE_TIME_MS, session_percent=10, weekly_percent=19)
+        key_a = hub_model.snapshot_content_key(self._snapshot(collected_at_ms=BASE_TIME_MS, usage=usage))
+        key_b = hub_model.snapshot_content_key(self._snapshot(collected_at_ms=BASE_TIME_MS + 5000, usage=usage))
+        self.assertEqual(key_a, key_b)
 
 
 class ParseServerRecordTest(unittest.TestCase):

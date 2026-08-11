@@ -15,6 +15,7 @@ from pathlib import Path
 
 import hub_model
 import hub_parse
+import hub_usage
 
 HUB_HOME = Path.home() / ".claude" / "hub"
 EVENTS_DIR = HUB_HOME / "events"
@@ -23,6 +24,11 @@ CONFIG_PATH = HUB_HOME / "config.json"
 PROJECTS_DIR = Path.home() / ".claude" / "projects"
 SCRIPT_DIR = Path(__file__).resolve().parent
 TEMPLATE_PATH = SCRIPT_DIR / "hub_template.html"
+# Claude 데스크톱 앱이 남기는 비공개 사용량 히스토리(macOS 전용, 실측 완료 — 리스크 1).
+# 다른 OS·터미널 전용 환경에는 이 파일이 정상적으로 없다.
+PLAN_USAGE_HISTORY_PATH = (
+    Path.home() / "Library" / "Application Support" / "Claude" / "plan-usage-history.json"
+)
 # 배경 spawn(hub_hook.py)의 stdout/stderr 는 DEVNULL 이라 실패가 완전히 무성음이 된다 — 마지막
 # collect 실패를 이 파일에 남겨 `/hub status` 가 읽을 수 있게 한다(검수 M7).
 LAST_COLLECT_ERROR_PATH = HUB_HOME / "last_collect_error.json"
@@ -64,6 +70,7 @@ _CONFIG_FIELD_TYPES: dict[str, type | tuple[type, ...]] = {
     "record_prompt_excerpt": bool,
     "server_port": int,
     "server_collect_interval_seconds": int,
+    "show_usage_panel": bool,
 }
 
 
@@ -272,6 +279,48 @@ def _tier3_activity_by_encoded_name(
     return activity, tuple(warnings)
 
 
+# ---- 사용량 (Claude 데스크톱 앱, docs/prps/hub-theme-and-usage-panel.md) ----
+def read_latest_usage_sample() -> tuple[hub_usage.UsageSample | None, tuple[str, ...]]:
+    """사용량 히스토리 파일을 읽어 마지막 샘플을 돌려준다. 이 함수는 절대 예외를 던지지 않는다.
+
+    반환 계약(PRP 「반환 계약」 표가 정본): 파일 부재는 macOS 데스크톱 앱이 없는 환경에서
+    정상이므로 경고를 내지 않는다. 읽기 실패·계약 불일치만 경고 1건을 남긴다.
+    """
+    if not PLAN_USAGE_HISTORY_PATH.is_file():
+        return None, ()
+    try:
+        # errors="replace" — 앱이 파일을 다시 쓰는 도중의 찢긴 읽기(리스크 6)가 멀티바이트
+        # 경계에서 나면 UnicodeDecodeError 가 나는데, 이는 ValueError 서브클래스라 OSError 로
+        # 잡히지 않는다(검수 M1). U+FFFD 로 치환하면 JSON 파싱이 자연스럽게 실패해 기존
+        # "계약 불일치 → 경고 1건" 경로로 합류한다 — read_recent_events 의 선례와 동일하다.
+        text = PLAN_USAGE_HISTORY_PATH.read_text(encoding="utf-8", errors="replace")
+    except OSError as error:
+        return None, (f"{PLAN_USAGE_HISTORY_PATH}: 사용량 파일 읽기 실패 ({error})",)
+    sample = hub_usage.parse_usage_history(text)
+    if sample is None:
+        return None, (f"{PLAN_USAGE_HISTORY_PATH}: 사용량 파일 계약 불일치 — 패널을 표시하지 않습니다",)
+    return sample, ()
+
+
+def _usage_for_snapshot(
+    now_ms: int, config: hub_model.HubConfig
+) -> tuple[hub_usage.UsageSample | None, tuple[str, ...]]:
+    """스위치 · 만료까지 적용해 화면에 실을 샘플을 고른다(사설).
+
+    `show_usage_panel` 이 꺼져 있으면 파일을 열지도 않는다(결정 U4) — CSS 로 숨기는 게
+    아니라 읽기 자체를 중단하는 것이 진짜 프라이버시 제어다. 만료(5시간 초과)는 앱을 안
+    켰을 뿐인 정상 시나리오라 경고 없이 숨긴다(결정 U3).
+    """
+    if not config.show_usage_panel:
+        return None, ()
+    sample, warnings = read_latest_usage_sample()
+    if sample is None:
+        return None, warnings
+    if hub_usage.is_usage_sample_expired(sample, now_ms):
+        return None, ()
+    return sample, warnings
+
+
 # ---- 합성 ----
 def collect_snapshot(now_ms: int) -> hub_model.HubSnapshot:
     """3티어를 전부 읽어 하나의 HubSnapshot 으로 합성한다. 실패는 warnings 로 드러난다."""
@@ -308,11 +357,14 @@ def collect_snapshot(now_ms: int) -> hub_model.HubSnapshot:
     projects = hub_model.compose_project_views(
         tier1_by_path, sessions_by_path, tier3_by_path, now_ms, stale_after_ms
     )
+    usage, usage_warnings = _usage_for_snapshot(now_ms, config)
+    warnings.extend(usage_warnings)
     return hub_model.HubSnapshot(
         collected_at_ms=now_ms,
         projects=projects,
         unresolved_dir_names=unresolved,
         warnings=tuple(warnings),
+        usage=usage,
     )
 
 

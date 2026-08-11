@@ -120,14 +120,32 @@ def cmd_open(args: argparse.Namespace) -> int:
     return 0
 
 
+def _usage_sample_age_ms(now_ms: int, config: hub_model.HubConfig) -> int | None:
+    """진단용 — 사용량 샘플의 나이(ms). 스위치 off·파일 없음·계약 불일치면 None.
+
+    만료 여부와 무관하게 나이를 보고한다 — 패널이 안 보이는 네 가지 이유(스위치 off·파일
+    없음·계약 불일치·만료)는 화면상 전부 "패널 없음"으로 똑같이 보이는데, 계약 불일치만
+    warnings 로 드러나므로 나머지를 구분할 창구가 이 필드뿐이다
+    (docs/prps/hub-theme-and-usage-panel.md).
+    """
+    if not config.show_usage_panel:
+        return None
+    sample, _warnings = hub_collect.read_latest_usage_sample()
+    if sample is None:
+        return None
+    return now_ms - sample.sampled_at_ms
+
+
 def cmd_status(args: argparse.Namespace) -> int:
-    """훅 설치 상태 · 이벤트 · 마지막 수집 실패 · 서버 요약을 보고한다(검수 R3-m2)."""
+    """훅 설치 상태 · 이벤트 · 마지막 수집 실패 · 서버 요약 · 사용량 진단을 보고한다(검수 R3-m2)."""
+    now_ms = _now_ms()
     hook_status = hub_settings.hook_install_status()
-    today_events, event_read_warnings = hub_collect.read_recent_events(_now_ms())
+    today_events, event_read_warnings = hub_collect.read_recent_events(now_ms)
     last_collected_ms = (
         int(hub_collect.HUB_HTML_PATH.stat().st_mtime * 1000) if hub_collect.HUB_HTML_PATH.exists() else None
     )
     server = hub_daemon.server_status()
+    config, _config_warnings = hub_collect.load_config()
     _report(
         {
             "ok": True,
@@ -139,6 +157,8 @@ def cmd_status(args: argparse.Namespace) -> int:
             "server_alive": server.alive,
             "server_crashed_evidence": server.crashed_evidence,
             "server_collect_stalled": server.collect_stalled,
+            "usage_panel_enabled": config.show_usage_panel,
+            "usage_sample_age_ms": _usage_sample_age_ms(now_ms, config),
         },
         args.json,
     )
