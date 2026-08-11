@@ -309,5 +309,155 @@ class Tier1PriorityTest(unittest.TestCase):
         self.assertEqual(views[0].tier, 1)
 
 
+class ShouldSpawnCollectTest(unittest.TestCase):
+    """M21~M24 — 훅의 재수집 spawn 판정(개정 쟁점 R3)."""
+
+    THROTTLE_MS = 5000
+
+    def test_m21_server_alive_always_false(self) -> None:
+        """서버가 살아 있으면 쓰로틀이 지났어도 spawn 하지 않는다 — 서버가 전담한다."""
+        result = hub_model.should_spawn_collect(
+            now_ms=BASE_TIME_MS, server_alive=True,
+            hub_html_mtime_ms=BASE_TIME_MS - 60_000, spawn_stamp_mtime_ms=None,
+            throttle_ms=self.THROTTLE_MS,
+        )
+        self.assertFalse(result)
+
+    def test_m22_server_dead_no_stamp_hub_html_stale(self) -> None:
+        result = hub_model.should_spawn_collect(
+            now_ms=BASE_TIME_MS, server_alive=False,
+            hub_html_mtime_ms=BASE_TIME_MS - 6000, spawn_stamp_mtime_ms=None,
+            throttle_ms=self.THROTTLE_MS,
+        )
+        self.assertTrue(result)
+
+    def test_m23_server_dead_recent_stamp_is_throttled(self) -> None:
+        result = hub_model.should_spawn_collect(
+            now_ms=BASE_TIME_MS, server_alive=False,
+            hub_html_mtime_ms=BASE_TIME_MS - 60_000, spawn_stamp_mtime_ms=BASE_TIME_MS - 2000,
+            throttle_ms=self.THROTTLE_MS,
+        )
+        self.assertFalse(result)
+
+    def test_m24_hub_html_missing_but_server_alive_is_false(self) -> None:
+        """서버가 살아 있으면 hub.html 이 없어도 False — 다음 사이클에 서버가 만든다."""
+        result = hub_model.should_spawn_collect(
+            now_ms=BASE_TIME_MS, server_alive=True,
+            hub_html_mtime_ms=None, spawn_stamp_mtime_ms=None,
+            throttle_ms=self.THROTTLE_MS,
+        )
+        self.assertFalse(result)
+
+    def test_m24b_hub_html_missing_and_server_dead_with_no_stamp_spawns_immediately(self) -> None:
+        """검수 M2-5 — 서버가 죽고 hub.html 도 없으면(HUB_HOME 쓰기 실패 등으로 한 번도 못
+        만든 경우 포함) 훅 폴백이 곧바로 뚫려야 한다. 예전에는 hub_html_mtime_ms 가 None 이면
+        서버 상태와 무관하게 항상 False 라, 상주 서버가 hub.html 을 한 번도 못 만든 채 수집
+        스레드까지 죽으면 훅 폴백조차 영원히 막히는 이중 실패였다."""
+        result = hub_model.should_spawn_collect(
+            now_ms=BASE_TIME_MS, server_alive=False,
+            hub_html_mtime_ms=None, spawn_stamp_mtime_ms=None,
+            throttle_ms=self.THROTTLE_MS,
+        )
+        self.assertTrue(result)
+
+    def test_m24c_hub_html_missing_and_server_dead_but_recent_stamp_is_throttled(self) -> None:
+        """즉시 재시도를 허용해도 쓰로틀은 여전히 산다 — 매 훅마다 spawn 하지 않는다."""
+        result = hub_model.should_spawn_collect(
+            now_ms=BASE_TIME_MS, server_alive=False,
+            hub_html_mtime_ms=None, spawn_stamp_mtime_ms=BASE_TIME_MS - 2000,
+            throttle_ms=self.THROTTLE_MS,
+        )
+        self.assertFalse(result)
+
+
+class IsServerAliveTest(unittest.TestCase):
+    """M25 — 하트비트 나이로 상주 서버 생존을 판정한다."""
+
+    TTL_MS = 15_000
+
+    def test_m25_no_heartbeat_file(self) -> None:
+        self.assertFalse(hub_model.is_server_alive(BASE_TIME_MS, None, self.TTL_MS))
+
+    def test_m25_just_before_ttl(self) -> None:
+        heartbeat_mtime_ms = BASE_TIME_MS - (self.TTL_MS - 1)
+        self.assertTrue(hub_model.is_server_alive(BASE_TIME_MS, heartbeat_mtime_ms, self.TTL_MS))
+
+    def test_m25_just_after_ttl(self) -> None:
+        heartbeat_mtime_ms = BASE_TIME_MS - self.TTL_MS
+        self.assertFalse(hub_model.is_server_alive(BASE_TIME_MS, heartbeat_mtime_ms, self.TTL_MS))
+
+
+class ServerHeartbeatTtlMsTest(unittest.TestCase):
+    """M26 — 수집 주기 3배, 하한 15초."""
+
+    def test_m26_short_interval_hits_floor(self) -> None:
+        self.assertEqual(hub_model.server_heartbeat_ttl_ms(1), 15_000)
+
+    def test_m26_default_interval_hits_floor(self) -> None:
+        self.assertEqual(hub_model.server_heartbeat_ttl_ms(5), 15_000)
+
+    def test_m26_long_interval_uses_multiplier(self) -> None:
+        self.assertEqual(hub_model.server_heartbeat_ttl_ms(60), 180_000)
+
+
+class SnapshotContentKeyTest(unittest.TestCase):
+    """M27~M29 — collected_at_ms 를 뺀 안정적 키(쓰기 억제, 개정 쟁점 R3)."""
+
+    def _session(self, state="working", base_state="working"):
+        return hub_model.SessionView(
+            session_id="s1", short_id="s1", state=state, base_state=base_state,
+            last_event_at_ms=BASE_TIME_MS, task_excerpt=None,
+            inferred_phase=None, inferred_phase_running=False, active_agent_types=(),
+        )
+
+    def _snapshot(self, collected_at_ms=BASE_TIME_MS, session_state="working", warnings=()):
+        project = hub_model.ProjectView(
+            display_name="coding-env", path="/repo", tier=2, state=session_state,
+            last_activity_at_ms=BASE_TIME_MS, sessions=(self._session(session_state),),
+            tier1=None, note=None,
+        )
+        return hub_model.HubSnapshot(
+            collected_at_ms=collected_at_ms, projects=(project,),
+            unresolved_dir_names=(), warnings=warnings,
+        )
+
+    def test_m27_only_collected_at_ms_differs_same_key(self) -> None:
+        key_a = hub_model.snapshot_content_key(self._snapshot(collected_at_ms=BASE_TIME_MS))
+        key_b = hub_model.snapshot_content_key(self._snapshot(collected_at_ms=BASE_TIME_MS + 5000))
+        self.assertEqual(key_a, key_b)
+
+    def test_m28_session_state_transition_changes_key(self) -> None:
+        key_working = hub_model.snapshot_content_key(self._snapshot(session_state="working"))
+        key_stale = hub_model.snapshot_content_key(self._snapshot(session_state="stale"))
+        self.assertNotEqual(key_working, key_stale)
+
+    def test_m29_warnings_only_difference_changes_key(self) -> None:
+        key_clean = hub_model.snapshot_content_key(self._snapshot(warnings=()))
+        key_warned = hub_model.snapshot_content_key(self._snapshot(warnings=("문제 발생",)))
+        self.assertNotEqual(key_clean, key_warned)
+
+
+class ParseServerRecordTest(unittest.TestCase):
+    """D6 — 정상 1건, 나머지 전부 None(예외 없음). hub_daemon.py 와 hub_collect.py 가 공유하는
+    파서를 hub_model.py 하나로 합쳤다(검수 m3) — 실사용 경로(hub_collect.read_server_record)를
+    이 테스트가 직접 덮는다."""
+
+    def test_d6_valid_record(self) -> None:
+        record = hub_model.parse_server_record(
+            '{"pid": 123, "port": 8794, "started_at_ms": 1786000000000}'
+        )
+        self.assertIsNotNone(record)
+        self.assertEqual((record.pid, record.port, record.started_at_ms), (123, 8794, 1786000000000))
+
+    def test_d6_missing_field(self) -> None:
+        self.assertIsNone(hub_model.parse_server_record('{"pid": 123, "port": 8794}'))
+
+    def test_d6_broken_json(self) -> None:
+        self.assertIsNone(hub_model.parse_server_record("{not valid json"))
+
+    def test_d6_empty_file(self) -> None:
+        self.assertIsNone(hub_model.parse_server_record(""))
+
+
 if __name__ == "__main__":
     unittest.main()

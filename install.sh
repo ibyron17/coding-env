@@ -12,7 +12,6 @@ readonly REPO_ROOT
 readonly RULES_FILE_COUNT=37
 readonly AGENTS_FILE_COUNT=4
 readonly COMMANDS_FILE_COUNT=9
-readonly HUB_FILE_COUNT=7
 readonly MAX_DIFF_LINES=20
 readonly MANIFEST_FILE_NAME=".coding-env.json"
 readonly MANIFEST_VERSION=1
@@ -25,7 +24,6 @@ target_claude_md=""
 target_rules_dir=""
 target_agents_dir=""
 target_commands_dir=""
-target_hub_dir=""
 
 log_info() { echo "[INFO] $*"; }
 log_warn() { echo "[WARN] $*" >&2; }
@@ -96,8 +94,6 @@ resolve_target_paths() {
   target_rules_dir="$target_base_dir/.claude/rules"
   target_agents_dir="$target_base_dir/.claude/agents"
   target_commands_dir="$target_base_dir/.claude/commands"
-  # 허브는 머신 전역 자산이다 — --scope user 에서만 설치 대상이 된다(설계 결정, docs/prps/hub-dashboard.md).
-  [[ "$scope" == "user" ]] && target_hub_dir="$target_base_dir/.claude/hub/bin"
 
   if is_symlinked_path "$target_base_dir"; then
     log_error "심볼릭 링크입니다: $target_base_dir"
@@ -173,8 +169,8 @@ check_claude_md_conflict() {
 
 check_no_symlink_targets() {
   local directory_path
-  for directory_path in "$target_rules_dir" "$target_agents_dir" "$target_commands_dir" "$target_hub_dir"; do
-    if [[ -n "$directory_path" && -L "$directory_path" ]]; then
+  for directory_path in "$target_rules_dir" "$target_agents_dir" "$target_commands_dir"; do
+    if [[ -L "$directory_path" ]]; then
       log_error "심볼릭 링크입니다: $directory_path"
       return 1
     fi
@@ -224,7 +220,6 @@ check_preconditions() {
   check_directory_conflict "$REPO_ROOT/rules" "$target_rules_dir" || return 1
   check_directory_conflict "$REPO_ROOT/agents" "$target_agents_dir" || return 1
   check_directory_conflict "$REPO_ROOT/commands" "$target_commands_dir" || return 1
-  [[ -n "$target_hub_dir" ]] && { check_directory_conflict "$REPO_ROOT/hub/bin" "$target_hub_dir" || return 1; }
   return 0
 }
 
@@ -373,9 +368,6 @@ install_claude_md() {
 build_manifest_json() {
   local installed_at="$1"
   local installed_from_commit="$2"
-  # project scope 는 허브를 설치하지 않는다(머신 전역 자산, --scope user 전용).
-  local hub_files_count=0
-  [[ -n "$target_hub_dir" ]] && hub_files_count="$HUB_FILE_COUNT"
 
   cat <<EOF
 {
@@ -389,8 +381,7 @@ build_manifest_json() {
     "CLAUDE_md": 1,
     "rules": $RULES_FILE_COUNT,
     "agents": $AGENTS_FILE_COUNT,
-    "commands": $COMMANDS_FILE_COUNT,
-    "hub": $hub_files_count
+    "commands": $COMMANDS_FILE_COUNT
   }
 }
 EOF
@@ -459,12 +450,6 @@ log_installation_plan() {
   log_plan "cp -R commands/. $target_commands_dir/   (${COMMANDS_FILE_COUNT}개)"
 
   local planned_total=$((RULES_FILE_COUNT + AGENTS_FILE_COUNT + COMMANDS_FILE_COUNT))
-  if [[ -n "$target_hub_dir" ]]; then
-    log_plan "cp -R hub/bin/. $target_hub_dir/   (${HUB_FILE_COUNT}개)"
-    planned_total=$((planned_total + HUB_FILE_COUNT))
-  else
-    log_info "hub/ 은 --scope user 전용이라 건너뜁니다 (허브는 머신 전역 자산)"
-  fi
   if claude_md_is_identical; then
     log_protected "$target_claude_md 내용 동일 → 건너뜀"
   else
@@ -492,18 +477,11 @@ perform_installation() {
   install_directory "rules" "$REPO_ROOT/rules" "$target_rules_dir" "$RULES_FILE_COUNT" || return 1
   install_directory "agents" "$REPO_ROOT/agents" "$target_agents_dir" "$AGENTS_FILE_COUNT" || return 1
   install_directory "commands" "$REPO_ROOT/commands" "$target_commands_dir" "$COMMANDS_FILE_COUNT" || return 1
-  local hub_files_count=0
-  if [[ -n "$target_hub_dir" ]]; then
-    install_directory "hub" "$REPO_ROOT/hub/bin" "$target_hub_dir" "$HUB_FILE_COUNT" || return 1
-    hub_files_count="$HUB_FILE_COUNT"
-  else
-    log_info "hub/ 은 --scope user 전용이라 건너뜁니다 (허브는 머신 전역 자산)"
-  fi
   install_claude_md || return 1
   save_manifest_file || return 1
   report_global_command_overlap
 
-  log_done "$((RULES_FILE_COUNT + AGENTS_FILE_COUNT + COMMANDS_FILE_COUNT + hub_files_count + 1))개 파일 반영 완료"
+  log_done "$((RULES_FILE_COUNT + AGENTS_FILE_COUNT + COMMANDS_FILE_COUNT + 1))개 파일 반영 완료"
   return 0
 }
 

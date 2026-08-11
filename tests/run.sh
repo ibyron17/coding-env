@@ -1893,52 +1893,59 @@ test_hub_unit_tests() {
   ((passed_tests++))
 }
 
-# T25: 허브 문서·상수 정합성 (하위 검증 T25-1~T25-13)
+# T25: 허브 문서·상수 정합성 (하위 검증 T25-1~T25-26)
 test_hub_docs_and_constants() {
   local test_name="T25"
-  local test_desc="허브 문서·상수 정합성 (T25-1~T25-13)"
+  local test_desc="허브 문서·상수 정합성 (T25-1~T25-26)"
   log_test_name "$test_name" "$test_desc"
 
   local hub_settings_file="$REPO_ROOT/hub/bin/hub_settings.py"
   local hub_hook_file="$REPO_ROOT/hub/bin/hub_hook.py"
   local hub_py_file="$REPO_ROOT/hub/bin/hub.py"
+  local hub_collect_file="$REPO_ROOT/hub/bin/hub_collect.py"
+  local hub_model_file="$REPO_ROOT/hub/bin/hub_model.py"
+  local hub_server_file="$REPO_ROOT/hub/bin/hub_server.py"
+  local hub_daemon_file="$REPO_ROOT/hub/bin/hub_daemon.py"
+  local hub_install_file="$REPO_ROOT/hub/install.sh"
   local hub_command_file="$REPO_ROOT/commands/hub.md"
+  local env_update_command_file="$REPO_ROOT/commands/env-update.md"
   local dashboard_command_file="$REPO_ROOT/commands/dashboard.md"
   local readme_file="$REPO_ROOT/README.md"
 
-  # T25-1: HUB_FILE_COUNT == 실제 hub/bin/* 파일 수
+  # T25-1(개정 R-M5 — 대상 이동): HUB_FILE_COUNT 는 이제 hub/install.sh 가 갖는다(값 9)
   local declared_count actual_count
-  declared_count=$(grep -oE '^readonly HUB_FILE_COUNT=[0-9]+' "$INSTALL_SCRIPT" | grep -oE '[0-9]+$')
+  declared_count=$(grep -oE '^readonly HUB_FILE_COUNT=[0-9]+' "$hub_install_file" | grep -oE '[0-9]+$')
   actual_count=$(find "$REPO_ROOT/hub/bin" -maxdepth 1 -type f | wc -l | tr -d ' ')
   if ! assert_equals "$actual_count" "$declared_count" "HUB_FILE_COUNT 일치"; then
     record_failure "$test_name" "T25-1: HUB_FILE_COUNT=$declared_count, 실제 파일 수=$actual_count"
     return 1
   fi
 
-  # T25-2: --scope user 설치 후 hub/bin 7개 존재, --scope project 설치 후 .claude/hub 미생성
-  local sandbox_user sandbox_project
-  sandbox_user=$(mktemp -d)
-  sandbox_project=$(mktemp -d)
-  trap "rm -rf '$sandbox_user' '$sandbox_project'" EXIT
+  # T25-2(개정 R-M5 — 반전): 루트 install.sh 는 hub 를 전혀 모른다. hub/install.sh 가 독립 설치한다
+  local sandbox_root sandbox_hub
+  sandbox_root=$(mktemp -d)
+  sandbox_hub=$(mktemp -d)
+  trap "rm -rf '$sandbox_root' '$sandbox_hub'" EXIT
 
-  HOME="$sandbox_user" "$INSTALL_SCRIPT" --scope user > /dev/null 2>&1
+  HOME="$sandbox_root" "$INSTALL_SCRIPT" --scope user > /dev/null 2>&1
+  if [[ -d "$sandbox_root/.claude/hub" ]]; then
+    record_failure "$test_name" "T25-2: 루트 install.sh --scope user 후 .claude/hub 가 생성됨 (기대: 미생성)"
+    return 1
+  fi
+
+  HOME="$sandbox_hub" "$hub_install_file" > /dev/null 2>&1
   local installed_hub_count
-  installed_hub_count=$(find "$sandbox_user/.claude/hub/bin" -maxdepth 1 -type f 2>/dev/null | wc -l | tr -d ' ')
+  installed_hub_count=$(find "$sandbox_hub/.claude/hub/bin" -maxdepth 1 -type f 2>/dev/null | wc -l | tr -d ' ')
   if [[ "$installed_hub_count" -ne "$declared_count" ]]; then
-    record_failure "$test_name" "T25-2: --scope user 설치 후 hub/bin 파일 수=$installed_hub_count (기대 $declared_count)"
+    record_failure "$test_name" "T25-2: hub/install.sh 설치 후 hub/bin 파일 수=$installed_hub_count (기대 $declared_count)"
     return 1
   fi
 
-  (cd "$sandbox_project" && "$INSTALL_SCRIPT" --scope project > /dev/null 2>&1)
-  if [[ -d "$sandbox_project/.claude/hub" ]]; then
-    record_failure "$test_name" "T25-2: --scope project 에 .claude/hub 가 생성됨 (기대: 미생성)"
-    return 1
-  fi
-
-  # T25-3: 훅 마커가 세 문서에서 동일 문자열로 등장
+  # T25-3(개정 R-4 — 대상 이동): 마커 문서화는 이제 hub/README.md 가 맡는다(root README.md 는 분리됨)
   local marker="# DZH_HUB_HOOK"
+  local hub_readme_file="$REPO_ROOT/hub/README.md"
   local doc_file
-  for doc_file in "$hub_settings_file" "$hub_command_file" "$readme_file"; do
+  for doc_file in "$hub_settings_file" "$hub_command_file" "$hub_readme_file"; do
     if ! grep -qF "$marker" "$doc_file"; then
       record_failure "$test_name" "T25-3: $marker 마커 미발견: $doc_file"
       return 1
@@ -1973,12 +1980,12 @@ test_hub_docs_and_constants() {
     return 1
   fi
 
-  # T25-8: 포트 후보 8794 가 hub.py·commands/hub.md 에 일치하고, 8791 을 쓰지 않는다
-  if ! grep -q "8794" "$hub_py_file" || ! grep -q "8794" "$hub_command_file"; then
-    record_failure "$test_name" "T25-8: 포트 8794 가 hub.py 또는 commands/hub.md 에 없음"
+  # T25-8(개정 — 포트 상수가 hub_model.py 로 이동): 8794 정합, 8791 부재
+  if ! grep -q "8794" "$hub_model_file" || ! grep -q "8794" "$hub_command_file"; then
+    record_failure "$test_name" "T25-8: 포트 8794 가 hub_model.py 또는 commands/hub.md 에 없음"
     return 1
   fi
-  if grep -q "8791" "$hub_py_file" "$hub_command_file"; then
+  if grep -q "8791" "$hub_model_file" "$hub_command_file"; then
     record_failure "$test_name" "T25-8: /dashboard 의 포트 8791 이 허브 파일에 등장함"
     return 1
   fi
@@ -2032,6 +2039,227 @@ test_hub_docs_and_constants() {
   fi
   if grep -qF "&lt;" "$render_hub_html_file"; then
     record_failure "$test_name" "T25-13: render_hub_html 이 HTML 엔티티 치환으로 회귀함(M1 회귀)"
+    return 1
+  fi
+
+  # T25-14: hub/bin/*.py·commands/hub.md 에 serve 잔재가 없다(폐기 회귀 방지, 개정 쟁점 R2)
+  local serve_leftover_pattern='start_serving|stop_serving|/hub serve[^r]|pkill'
+  local source_file
+  for source_file in "$REPO_ROOT"/hub/bin/*.py "$hub_command_file"; do
+    if grep -qE "$serve_leftover_pattern" "$source_file"; then
+      record_failure "$test_name" "T25-14: $source_file 에 폐기된 serve 잔재가 남아 있음"
+      return 1
+    fi
+  done
+
+  # T25-15: hub_server.py 가 SimpleHTTPRequestHandler 를 쓰지 않고 화이트리스트를 갖는다(노출 표면 회귀 방지)
+  if grep -qF "SimpleHTTPRequestHandler" "$hub_server_file"; then
+    record_failure "$test_name" "T25-15: hub_server.py 가 SimpleHTTPRequestHandler 를 사용함(디렉토리 전체 노출 위험)"
+    return 1
+  fi
+  if ! grep -qF "ALLOWED_REQUEST_PATHS" "$hub_server_file"; then
+    record_failure "$test_name" "T25-15: hub_server.py 에 ALLOWED_REQUEST_PATHS 화이트리스트가 없음"
+    return 1
+  fi
+
+  # T25-16(검수 Nit2 — AST 검사로 승격): hub_daemon.py 의 **같은 함수 안에서** os.kill 호출보다
+  # is_our_server_process 호출이 먼저 나와야 한다(PID 재사용 방어 회귀 방지). 텍스트 줄 번호
+  # 비교보다 엄밀하다 — 함수 경계를 실제로 구분하므로 무관한 함수의 신원 확인이 우연히
+  # 앞줄에 있다는 이유로 통과하는 오탐이 없다.
+  local ast_check_output
+  ast_check_output=$(python3 - "$hub_daemon_file" <<'PYEOF'
+import ast
+import sys
+
+source_path = sys.argv[1]
+tree = ast.parse(open(source_path, encoding="utf-8").read(), filename=source_path)
+
+
+def is_os_kill_call(node):
+    return (
+        isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Attribute)
+        and node.func.attr == "kill"
+        and isinstance(node.func.value, ast.Name)
+        and node.func.value.id == "os"
+    )
+
+
+def is_identity_check_call(node):
+    return (
+        isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Name)
+        and node.func.id == "is_our_server_process"
+    )
+
+
+violations = []
+kill_call_total = 0
+for func in ast.walk(tree):
+    if not isinstance(func, (ast.FunctionDef, ast.AsyncFunctionDef)):
+        continue
+    kill_calls = [n for n in ast.walk(func) if is_os_kill_call(n)]
+    if not kill_calls:
+        continue
+    kill_call_total += len(kill_calls)
+    check_lines = [n.lineno for n in ast.walk(func) if is_identity_check_call(n)]
+    for kill_call in kill_calls:
+        if not any(line < kill_call.lineno for line in check_lines):
+            violations.append(f"{func.name}() 의 {kill_call.lineno}번째 줄")
+
+if kill_call_total == 0:
+    print("NO_KILL_CALLS_FOUND")
+elif violations:
+    print("VIOLATIONS:" + "; ".join(violations))
+else:
+    print("OK")
+PYEOF
+)
+  if [[ "$ast_check_output" == "NO_KILL_CALLS_FOUND" ]]; then
+    record_failure "$test_name" "T25-16: hub_daemon.py 에서 os.kill 호출을 찾지 못함"
+    return 1
+  fi
+  if [[ "$ast_check_output" != "OK" ]]; then
+    record_failure "$test_name" "T25-16: 신원 확인 없이 os.kill 을 호출하는 지점 — $ast_check_output"
+    return 1
+  fi
+
+  # T25-17: hub_daemon.py 에 start_new_session=True 가 있다(세션 무관 수명, 요구 R-1 의 기계적 강제)
+  if ! grep -qF "start_new_session=True" "$hub_daemon_file"; then
+    record_failure "$test_name" "T25-17: hub_daemon.py 에 start_new_session=True 가 없음"
+    return 1
+  fi
+
+  # T25-18: _tier3_activity_by_encoded_name 이 except OSError 를 포함한다(R3-m1 회귀)
+  local tier3_function_body
+  tier3_function_body=$(awk '/^def _tier3_activity_by_encoded_name\(/{flag=1; next} flag && /^def /{exit} flag{print}' "$hub_collect_file")
+  if ! echo "$tier3_function_body" | grep -qF "except OSError"; then
+    record_failure "$test_name" "T25-18: _tier3_activity_by_encoded_name 에 except OSError 가드가 없음"
+    return 1
+  fi
+
+  # T25-19: commands/hub.md 에 last_collect_failure·event_read_warnings 등장(R3-m2 회귀)
+  if ! grep -qF "last_collect_failure" "$hub_command_file"; then
+    record_failure "$test_name" "T25-19: commands/hub.md 에 last_collect_failure 미언급"
+    return 1
+  fi
+  if ! grep -qF "event_read_warnings" "$hub_command_file"; then
+    record_failure "$test_name" "T25-19: commands/hub.md 에 event_read_warnings 미언급"
+    return 1
+  fi
+
+  # T25-20: hub.py 의 cmd_open 함수 본문에 서버 기동 호출이 없다(암묵 기동 회귀 방지, 요구 R-2)
+  local cmd_open_body
+  cmd_open_body=$(awk '/^def cmd_open\(/{flag=1; next} flag && /^def /{exit} flag{print}' "$hub_py_file")
+  if echo "$cmd_open_body" | grep -qE "start_server|server-start"; then
+    record_failure "$test_name" "T25-20: cmd_open 이 서버를 기동하는 것으로 보임(암묵 기동 회귀)"
+    return 1
+  fi
+
+  # T25-21: 루트 install.sh 에 hub 문자열이 등장하지 않는다(설치 분리의 기계적 강제, 요구 R-5)
+  local root_hub_mentions
+  root_hub_mentions=$(grep -c "hub" "$INSTALL_SCRIPT" || true)
+  if [[ "$root_hub_mentions" -ne 0 ]]; then
+    record_failure "$test_name" "T25-21: install.sh 에 hub 문자열이 ${root_hub_mentions}건 등장함(기대 0)"
+    return 1
+  fi
+
+  # T25-22(검수 Nit3 — 임계값 완화): README.md 의 허브 언급이 14줄 이하이고 hub/README.md
+  # 링크를 포함한다(문서 분리 회귀 방지). 대소문자 구분 검색이다 — case-insensitive 는
+  # "GitHub" 까지 세어 오탐한다. 10 은 소소한 문구 조정에도 쉽게 넘는 빡빡한 값이었다.
+  local readme_hub_mentions readme_hub_link_count
+  readme_hub_mentions=$(grep -c "hub" "$readme_file" || true)
+  readme_hub_link_count=$(grep -cF "hub/README.md" "$readme_file" || true)
+  if [[ "$readme_hub_mentions" -gt 14 ]]; then
+    record_failure "$test_name" "T25-22: README.md 의 허브 언급이 ${readme_hub_mentions}줄(기대 14줄 이하)"
+    return 1
+  fi
+  if [[ "$readme_hub_link_count" -eq 0 ]]; then
+    record_failure "$test_name" "T25-22: README.md 에 hub/README.md 링크가 없음"
+    return 1
+  fi
+
+  # T25-23: hub/install.sh --uninstall 절차에서 server-stop·uninstall-hooks 가 rm -rf 보다 앞에 온다
+  local server_stop_line uninstall_hooks_line rm_rf_line
+  server_stop_line=$(grep -n "server-stop" "$hub_install_file" | head -1 | cut -d: -f1)
+  uninstall_hooks_line=$(grep -n "uninstall-hooks" "$hub_install_file" | head -1 | cut -d: -f1)
+  rm_rf_line=$(grep -n 'rm -rf "\$TARGET_BIN_DIR"' "$hub_install_file" | head -1 | cut -d: -f1)
+  if [[ -z "$server_stop_line" || -z "$uninstall_hooks_line" || -z "$rm_rf_line" ]]; then
+    record_failure "$test_name" "T25-23: server-stop/uninstall-hooks/rm -rf 셋 중 하나를 hub/install.sh 에서 찾지 못함"
+    return 1
+  fi
+  if [[ "$server_stop_line" -ge "$rm_rf_line" || "$uninstall_hooks_line" -ge "$rm_rf_line" ]]; then
+    record_failure "$test_name" "T25-23: server-stop·uninstall-hooks 가 rm -rf 보다 앞에 있지 않음(순서 위반)"
+    return 1
+  fi
+
+  # T25-24: commands/env-update.md 에 조건부 허브 절과 판정 경로(hub/bin/hub.py)가 있다(R-5 연동 회귀)
+  if ! grep -qF "Phase 4b" "$env_update_command_file"; then
+    record_failure "$test_name" "T25-24: commands/env-update.md 에 Phase 4b 절이 없음"
+    return 1
+  fi
+  if ! grep -qF "hub/bin/hub.py" "$env_update_command_file"; then
+    record_failure "$test_name" "T25-24: commands/env-update.md 에 판정 경로(hub/bin/hub.py)가 없음"
+    return 1
+  fi
+
+  # T25-25: commands/hub.md 사전 조건이 install.sh --scope user 를 안내하지 않고 hub/install.sh 를 안내한다
+  if grep -qF "install.sh --scope user 를 먼저 실행" "$hub_command_file"; then
+    record_failure "$test_name" "T25-25: commands/hub.md 가 존재하지 않는 절차(install.sh --scope user)를 안내함"
+    return 1
+  fi
+  if ! grep -qF "hub/install.sh" "$hub_command_file"; then
+    record_failure "$test_name" "T25-25: commands/hub.md 사전 조건에 hub/install.sh 안내가 없음"
+    return 1
+  fi
+
+  # T25-26(검수 n1 회귀 — 2방향 실측): stop_server_or_abort 의 ok 판정은 문자열 매칭이 아니라
+  # 실제 JSON 파싱이다. 압축 JSON(`"ok":true`, 공백 없음)으로도 성공을 오판 없이 인식해야
+  # 한다 — 예전의 `grep -q '"ok": true'` 였다면 이 공백 없는 형태를 실패로 오판했을 것이다.
+  # 반대로 ok:false 면 --force 없이 반드시 중단하고 bin/ 을 보존해야 한다(정지 수단 소멸 방지).
+  local sandbox_stop_ok sandbox_stop_fail
+  sandbox_stop_ok=$(mktemp -d)
+  sandbox_stop_fail=$(mktemp -d)
+  trap "rm -rf '$sandbox_root' '$sandbox_hub' '$sandbox_stop_ok' '$sandbox_stop_fail'" EXIT
+
+  mkdir -p "$sandbox_stop_ok/.claude/hub/bin"
+  cat > "$sandbox_stop_ok/.claude/hub/bin/hub.py" << 'PYEOF'
+#!/usr/bin/env python3
+import sys
+subcommand = sys.argv[1] if len(sys.argv) > 1 else ""
+if subcommand == "server-stop":
+    print('{"ok":true,"was_running":true}')
+elif subcommand == "uninstall-hooks":
+    print('{"ok":true,"removed":[]}')
+else:
+    print('{"ok":true}')
+PYEOF
+
+  mkdir -p "$sandbox_stop_fail/.claude/hub/bin"
+  cat > "$sandbox_stop_fail/.claude/hub/bin/hub.py" << 'PYEOF'
+#!/usr/bin/env python3
+import sys
+subcommand = sys.argv[1] if len(sys.argv) > 1 else ""
+if subcommand == "server-stop":
+    print('{"ok":false,"reason":"테스트로 강제한 실패"}')
+elif subcommand == "uninstall-hooks":
+    print('{"ok":true,"removed":[]}')
+else:
+    print('{"ok":true}')
+PYEOF
+
+  HOME="$sandbox_stop_ok" "$hub_install_file" --uninstall > /dev/null 2>&1
+  if [[ -d "$sandbox_stop_ok/.claude/hub/bin" ]]; then
+    record_failure "$test_name" "T25-26: server-stop 성공(압축 JSON)인데 bin/ 이 삭제되지 않음(오판 의심)"
+    return 1
+  fi
+
+  if HOME="$sandbox_stop_fail" "$hub_install_file" --uninstall > /dev/null 2>&1; then
+    record_failure "$test_name" "T25-26: server-stop 실패인데 hub/install.sh --uninstall 이 성공(exit 0)으로 끝남"
+    return 1
+  fi
+  if [[ ! -f "$sandbox_stop_fail/.claude/hub/bin/hub.py" ]]; then
+    record_failure "$test_name" "T25-26: server-stop 실패 시 bin/ 이 보존되지 않음(정지 수단 소멸)"
     return 1
   fi
 

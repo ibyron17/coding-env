@@ -1,23 +1,23 @@
 #!/usr/bin/env python3
-"""hub.py — CLI 엔트리. 서브커맨드(collect/open/serve/stop/install-hooks/uninstall-hooks/status)
-디스패치와 I/O 조립. commands/hub.md 가 이 서브커맨드들을 호출한다.
+"""hub.py — CLI 엔트리. 서브커맨드 디스패치와 I/O 조립. commands/hub.md 가 이 서브커맨드들을 호출한다.
 
-`serve` 의 기본 포트 후보(hub_model.HubConfig.serve_port_candidates)는 8794·8795·8796 이다 —
-`/dashboard` 가 쓰는 포트대와 겹치지 않게 분리했다(docs/prps/hub-dashboard.md 쟁점 6).
+`/hub`(인자 없음)는 서버를 기동하지 않는다(요구 R-2) — 하트비트가 신선하면 그 URL 을 열고,
+아니면 1회만 수집한다. 상주 서버 제어는 `server-start`/`server-stop`/`server-status`/`server-run`
+(포그라운드 디버깅용 진입점)이 전담한다(docs/prps/hub-dashboard.md 개정 쟁점 R1·R2).
 """
 
 import argparse
+import dataclasses
 import json
 import sys
 import time
 import webbrowser
 
 import hub_collect
+import hub_daemon
 import hub_model
+import hub_server
 import hub_settings
-
-MIN_PORT = 1024
-MAX_PORT = 65535
 
 
 def _now_ms() -> int:
@@ -60,58 +60,74 @@ def cmd_collect(args: argparse.Namespace) -> int:
     return 0
 
 
-def cmd_open(args: argparse.Namespace) -> int:
-    """수집 → hub.html 갱신 → 발행(서버 재사용/기동) → 브라우저 열기."""
-    try:
-        _collect_and_write()
-    except Exception as error:
-        hub_collect.record_collect_failure(str(error))
-        _report({"ok": False, "reason": f"collect 실패: {error}"}, args.json)
-        return 1
-    serve_result = hub_collect.start_serving(None)
-    url = serve_result.get("url") if serve_result.get("ok") else f"file://{hub_collect.HUB_HTML_PATH}"
+def _server_is_alive() -> tuple[bool, hub_model.HubConfig]:
+    config, _config_warnings = hub_collect.load_config()
+    ttl_ms = hub_model.server_heartbeat_ttl_ms(config.server_collect_interval_seconds)
+    heartbeat_mtime_ms = hub_collect.read_server_heartbeat_mtime_ms()
+    return hub_model.is_server_alive(_now_ms(), heartbeat_mtime_ms, ttl_ms), config
+
+
+def _open_browser(url: str) -> bool:
     try:
         webbrowser.open(url)
-        opened = True
+        return True
     except Exception:
-        opened = False
-    _report({"ok": True, "url": url, "served": bool(serve_result.get("ok")), "browser_opened": opened}, args.json)
+        return False
+
+
+def cmd_open(args: argparse.Namespace) -> int:
+    """서버가 살아 있고 hub.html 도 실재하면 수집 없이 그 URL 을 연다. 그 외에는 1회만
+    수집하고 `file://` 를 연다.
+
+    어떤 분기에서도 서버를 기동하지 않는다(요구 R-2) — "자동으로 뜨지 않는다"가 이 함수의
+    존재 이유다. 초판의 임시 서버 암묵 기동은 이 개정에서 완전히 제거됐다.
+
+    `server_alive`(하트비트)만 보고 URL 을 결정하지 않는다(검수 M1) — 하트비트가 신선해도
+    `hub.html` 이 아직 없거나(막 기동해 첫 사이클 전) 지워졌으면 그 URL 은 404 를 반환한다.
+    `hub.html` 실재까지 확인해야 사용자가 깨진 링크를 열지 않는다.
+    """
+    server_alive, config = _server_is_alive()
+    server_ready = server_alive and hub_collect.HUB_HTML_PATH.exists()
+    note = None
+    if server_ready:
+        url = f"http://localhost:{config.server_port}/hub.html"
+    else:
+        try:
+            _collect_and_write()
+        except Exception as error:
+            hub_collect.record_collect_failure(str(error))
+            _report({"ok": False, "reason": f"collect 실패: {error}"}, args.json)
+            return 1
+        url = f"file://{hub_collect.HUB_HTML_PATH}"
+        if server_alive:
+            note = (
+                "허브 서버는 살아 있지만 hub.html 이 아직 없어 이번 한 번만 직접 수집했습니다. "
+                "서버가 다음 수집 주기에 자동으로 다시 만듭니다."
+            )
+        else:
+            note = (
+                "허브 서버가 꺼져 있어 이번 한 번만 수집했습니다. "
+                "`/hub server start` 로 켜면 항상 최신 상태가 유지됩니다."
+            )
+
+    payload = {
+        "ok": True, "url": url, "server_alive": server_alive,
+        "browser_opened": _open_browser(url),
+    }
+    if note is not None:
+        payload["note"] = note
+    _report(payload, args.json)
     return 0
 
 
-def _parse_serve_args(raw_args: list[str]) -> tuple[str, int | None] | None:
-    """`serve [포트]` 또는 `serve stop [포트]` 를 (action, port) 로 해석한다. 실패하면 None."""
-    if not raw_args:
-        return "start", None
-    if raw_args[0] == "stop":
-        if len(raw_args) == 1:
-            return "stop", None
-        return ("stop", int(raw_args[1])) if raw_args[1].isdigit() else None
-    return ("start", int(raw_args[0])) if raw_args[0].isdigit() else None
-
-
-def cmd_serve(args: argparse.Namespace) -> int:
-    """`/hub serve [포트]` · `/hub serve stop [포트]`."""
-    parsed = _parse_serve_args(args.args)
-    if parsed is None:
-        _report({"ok": False, "reason": "포트는 1024~65535 숫자여야 합니다"}, args.json)
-        return 1
-    action, port = parsed
-    if port is not None and not (MIN_PORT <= port <= MAX_PORT):
-        _report({"ok": False, "reason": "포트는 1024~65535 범위여야 합니다"}, args.json)
-        return 1
-    result = hub_collect.stop_serving(port) if action == "stop" else hub_collect.start_serving(port)
-    _report(result, args.json)
-    return 0 if result.get("ok") else 1
-
-
 def cmd_status(args: argparse.Namespace) -> int:
-    """훅 6개 설치 여부, 오늘 이벤트 수, 마지막 수집 시각, 마지막 collect 실패(있으면)를 보고한다."""
+    """훅 설치 상태 · 이벤트 · 마지막 수집 실패 · 서버 요약을 보고한다(검수 R3-m2)."""
     hook_status = hub_settings.hook_install_status()
     today_events, event_read_warnings = hub_collect.read_recent_events(_now_ms())
     last_collected_ms = (
         int(hub_collect.HUB_HTML_PATH.stat().st_mtime * 1000) if hub_collect.HUB_HTML_PATH.exists() else None
     )
+    server = hub_daemon.server_status()
     _report(
         {
             "ok": True,
@@ -120,6 +136,9 @@ def cmd_status(args: argparse.Namespace) -> int:
             "event_read_warnings": list(event_read_warnings),
             "last_collected_at_ms": last_collected_ms,
             "last_collect_failure": hub_collect.read_last_collect_failure(),
+            "server_alive": server.alive,
+            "server_crashed_evidence": server.crashed_evidence,
+            "server_collect_stalled": server.collect_stalled,
         },
         args.json,
     )
@@ -140,28 +159,58 @@ def cmd_uninstall_hooks(args: argparse.Namespace) -> int:
     return 0 if result.get("ok") else 1
 
 
+def cmd_server_start(args: argparse.Namespace) -> int:
+    """`/hub server start` — 상주 서버 기동(세션 무관 분리 프로세스). 멱등."""
+    result = hub_daemon.start_server()
+    _report(result, args.json)
+    return 0 if result.get("ok") else 1
+
+
+def cmd_server_stop(args: argparse.Namespace) -> int:
+    """`/hub server stop` — 신원 확인 → SIGTERM → 필요 시 SIGKILL → 상태 파일 정리."""
+    result = hub_daemon.stop_server()
+    _report(result, args.json)
+    return 0 if result.get("ok") else 1
+
+
+def cmd_server_status(args: argparse.Namespace) -> int:
+    """`/hub server status` — 프로세스 · 하트비트 · HTTP 응답 · 비정상 종료 흔적 보고."""
+    _report(dataclasses.asdict(hub_daemon.server_status()), args.json)
+    return 0
+
+
+def cmd_server_run(args: argparse.Namespace) -> int:
+    """`server-run` — 상주 서버 본체(포그라운드로 블로킹). `server-start` 가 spawn 하는
+    내부 엔트리이며, 사람이 직접 부르는 것은 포그라운드 디버깅용이다."""
+    config, _config_warnings = hub_collect.load_config()
+    return hub_server.run_server(config)
+
+
 def build_parser() -> argparse.ArgumentParser:
     """서브커맨드마다 --json 을 개별 지원한다(호출 예시가 서브커맨드 뒤에 --json 을 둔다)."""
     parser = argparse.ArgumentParser(prog="hub.py")
     subparsers = parser.add_subparsers(dest="command", required=True)
 
-    for name in ("collect", "open", "status", "install-hooks", "uninstall-hooks"):
+    subcommand_names = (
+        "collect", "open", "status", "install-hooks", "uninstall-hooks",
+        "server-start", "server-stop", "server-status", "server-run",
+    )
+    for name in subcommand_names:
         subparser = subparsers.add_parser(name)
         subparser.add_argument("--json", action="store_true")
-
-    serve_parser = subparsers.add_parser("serve")
-    serve_parser.add_argument("--json", action="store_true")
-    serve_parser.add_argument("args", nargs="*")
     return parser
 
 
 COMMAND_HANDLERS = {
     "collect": cmd_collect,
     "open": cmd_open,
-    "serve": cmd_serve,
     "status": cmd_status,
     "install-hooks": cmd_install_hooks,
     "uninstall-hooks": cmd_uninstall_hooks,
+    "server-start": cmd_server_start,
+    "server-stop": cmd_server_stop,
+    "server-status": cmd_server_status,
+    "server-run": cmd_server_run,
 }
 
 

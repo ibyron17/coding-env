@@ -8,12 +8,9 @@ import dataclasses
 import json
 import os
 import re
-import socket
-import subprocess
 import sys
 import tempfile
 import time
-import urllib.request
 from pathlib import Path
 
 import hub_model
@@ -34,6 +31,11 @@ LAST_COLLECT_ERROR_PATH = HUB_HOME / "last_collect_error.json"
 # 오래된 mtime 을 보고 각자 spawn 을 결정해 버린다 — spawn 직전에 이 파일을 touch 하면
 # 뒤따르는 훅들이 곧바로 "최근에 이미 처리했다"고 판단한다.
 SPAWN_STAMP_PATH = HUB_HOME / ".collect_spawn_stamp"
+# 상주 서버(개정 1 rev2) 상태 파일 3종. server.json 은 서버 자신이 bind 직후 1회,
+# server_heartbeat 는 수집 루프가 매 사이클, server.log 는 stderr 리다이렉션 대상이다.
+SERVER_RECORD_PATH = HUB_HOME / "server.json"
+SERVER_HEARTBEAT_PATH = HUB_HOME / "server_heartbeat"
+SERVER_LOG_PATH = HUB_HOME / "server.log"
 
 
 class HubCollectError(Exception):
@@ -48,9 +50,6 @@ DASHBOARD_RELATIVE_PATH = ".claude/dashboard.html"
 PROJECT_MARKER_NAMES = (".claude", ".git")
 MILLISECONDS_PER_DAY = 24 * 60 * 60 * 1000
 DATE_FORMAT = "%Y-%m-%d"
-SERVE_BIND_ADDRESS = "127.0.0.1"
-SERVER_STARTUP_WAIT_SECONDS = 0.3
-VALID_PORT_RANGE = range(1024, 65536)
 
 
 # 필드별 기대 타입(검수 m5). bool 은 int 의 서브클래스라 int 기대 필드에 실수로 통과할 수 있지만,
@@ -63,17 +62,31 @@ _CONFIG_FIELD_TYPES: dict[str, type | tuple[type, ...]] = {
     "stale_after_minutes": int,
     "event_retention_days": int,
     "record_prompt_excerpt": bool,
-    "serve_port_candidates": (list, tuple),
+    "server_port": int,
+    "server_collect_interval_seconds": int,
+}
+
+
+# 개정 1(rev2)에서 폐기된 키. 조용히 무시하면 마이그레이션은 필요 없지만, 사용자가 그
+# 필드를 여전히 유효하다고 믿고 있을 수 있다 — 대체 필드를 안내한다(검수 m4).
+_DEPRECATED_CONFIG_FIELD_GUIDANCE: dict[str, str] = {
+    "serve_port_candidates": "'server_port' 로 대체됐습니다(상주 서버는 후보 순회 없이 고정 포트 하나만 씁니다)",
 }
 
 
 def _validate_config_overrides(raw: dict, defaults: hub_model.HubConfig) -> tuple[dict, tuple[str, ...]]:
-    """raw 의 각 필드 타입을 검증해 (안전한 override, 경고 목록) 을 돌려준다."""
+    """raw 의 각 필드 타입을 검증해 (안전한 override, 경고 목록) 을 돌려준다.
+
+    알 수 없는 키는 무시하되(존재해도 무해하다) 사유를 warnings 에 남긴다(검수 m4) — 조용히
+    무시하면 오타나 폐기된 키(`serve_port_candidates` 등)를 사용자가 눈치챌 방법이 없다.
+    """
     known_fields = {field.name for field in dataclasses.fields(defaults)}
     overrides: dict = {}
     warnings: list[str] = []
     for key, value in raw.items():
         if key not in known_fields:
+            guidance = _DEPRECATED_CONFIG_FIELD_GUIDANCE.get(key, "무시합니다 — 오타인지 확인하십시오")
+            warnings.append(f"config.json: 알 수 없는 필드 '{key}' — {guidance}")
             continue
         if not isinstance(value, _CONFIG_FIELD_TYPES[key]):
             warnings.append(f"config.json: '{key}' 타입이 맞지 않아 기본값을 씁니다")
@@ -223,25 +236,40 @@ def _encoded_ignore_globs(ignore_globs: tuple[str, ...]) -> tuple[str, ...]:
     return tuple(hub_model.encode_project_dir_name(pattern) for pattern in ignore_globs)
 
 
-def _tier3_activity_by_encoded_name(ignore_globs: tuple[str, ...]) -> dict[str, int]:
+def _tier3_activity_by_encoded_name(
+    ignore_globs: tuple[str, ...]
+) -> tuple[dict[str, int], tuple[str, ...]]:
     """~/.claude/projects/<인코딩>/*.jsonl (maxdepth 1) mtime 최댓값을 인코딩명별로 모은다.
 
     ignore_globs 를 인코딩한 패턴으로도 걸러 scratchpad·worktree 소음을 원천에서 제거한다
     (검수 m4) — 그러지 않으면 이 항목들이 매칭에 실패해 "미확인 프로젝트" 개수만 부풀린다.
+
+    두 지점에 OSError 가드를 둔다(검수 R3-m1): `iterdir()` 실패(권한 없음 등)는 티어 3
+    전체를 포기하고(티어 1·2 는 산다), entry 단위 stat 실패(glob 열거와 stat 사이의 TOCTOU)는
+    그 프로젝트만 건너뛴다. 상주 서버에서는 수집 루프가 매 사이클 같은 예외를 다시 만나므로
+    이 구멍을 열어 두면 위험이 더 크다.
     """
     if not PROJECTS_DIR.is_dir():
-        return {}
+        return {}, ()
     encoded_ignore_globs = _encoded_ignore_globs(ignore_globs)
-    activity = {}
-    for entry in PROJECTS_DIR.iterdir():
-        if not entry.is_dir():
+    try:
+        entries = list(PROJECTS_DIR.iterdir())
+    except OSError as error:
+        return {}, (f"{PROJECTS_DIR}: 목록 조회 실패 — 티어 3 전체를 건너뜁니다 ({error})",)
+
+    activity: dict[str, int] = {}
+    warnings: list[str] = []
+    for entry in entries:
+        if not entry.is_dir() or hub_model.should_ignore_cwd(entry.name, encoded_ignore_globs):
             continue
-        if hub_model.should_ignore_cwd(entry.name, encoded_ignore_globs):
+        try:
+            mtimes = [child.stat().st_mtime for child in entry.glob("*.jsonl")]
+        except OSError as error:
+            warnings.append(f"{entry}: mtime 조회 실패 — 이 프로젝트만 건너뜁니다 ({error})")
             continue
-        mtimes = [child.stat().st_mtime for child in entry.glob("*.jsonl")]
         if mtimes:
             activity[entry.name] = int(max(mtimes) * 1000)
-    return activity
+    return activity, tuple(warnings)
 
 
 # ---- 합성 ----
@@ -269,7 +297,8 @@ def collect_snapshot(now_ms: int) -> hub_model.HubSnapshot:
         if warning is not None:
             warnings.append(warning)
 
-    tier3_by_encoded_name = _tier3_activity_by_encoded_name(config.ignore_globs)
+    tier3_by_encoded_name, tier3_warnings = _tier3_activity_by_encoded_name(config.ignore_globs)
+    warnings.extend(tier3_warnings)
     resolved, unresolved = hub_model.resolve_project_dirs(
         list(tier3_by_encoded_name), list(candidate_paths)
     )
@@ -330,14 +359,22 @@ def touch_spawn_stamp() -> None:
 
 
 def record_collect_failure(reason: str) -> None:
-    """마지막 collect 실패를 관측 가능한 위치에 남긴다.
+    """마지막 collect 실패를 관측 가능한 위치에 남긴다. 이 함수 자신은 절대 예외를 던지지 않는다.
 
     배경 spawn(hub_hook.py)은 stdout/stderr 가 DEVNULL 이라 실패가 완전히 무성음이 된다 —
     `/hub status` 가 이 파일을 읽어 사용자에게 보여줄 수 있게 한다(검수 M7).
+
+    기록 자체가 실패해도(검수 M2) 예외를 올리지 않고 stderr(상주 서버라면 server.log 로
+    리다이렉션된다)로만 남긴다 — 1차 실패의 가장 흔한 원인이 HUB_HOME 쓰기 불가라, 이 함수가
+    그대로 예외를 던지면 "실패를 기록하려다 또 실패하는" 상관 실패가 호출자의 예외 처리
+    범위를 뚫고 나가 상주 서버의 수집 스레드 전체를 죽인다.
     """
-    HUB_HOME.mkdir(parents=True, exist_ok=True)
-    payload = json.dumps({"at_ms": int(time.time() * 1000), "reason": reason}, ensure_ascii=False)
-    _atomic_write_text(LAST_COLLECT_ERROR_PATH, HUB_HOME, "last_collect_error.json.", payload)
+    try:
+        HUB_HOME.mkdir(parents=True, exist_ok=True)
+        payload = json.dumps({"at_ms": int(time.time() * 1000), "reason": reason}, ensure_ascii=False)
+        _atomic_write_text(LAST_COLLECT_ERROR_PATH, HUB_HOME, "last_collect_error.json.", payload)
+    except OSError as error:
+        print(f"collect 실패 기록 자체가 실패했습니다: {reason} (기록 실패 사유: {error})", file=sys.stderr)
 
 
 def clear_collect_failure() -> None:
@@ -355,73 +392,59 @@ def read_last_collect_failure() -> dict | None:
         return None
 
 
-# ---- 로컬 정적 서버 (상주 프로세스 없음 — 부르면 뜨고 끝나는 스크립트뿐) ----
-def _is_valid_port(port: int) -> bool:
-    return port in VALID_PORT_RANGE
+# ---- 상주 서버 상태 (개정 1 rev2) ----
+def touch_server_heartbeat() -> None:
+    """상주 서버의 수집 루프가 매 사이클 호출한다 — 생존 판정의 정본(TTL 안이면 살아 있다)."""
+    HUB_HOME.mkdir(parents=True, exist_ok=True)
+    SERVER_HEARTBEAT_PATH.touch(exist_ok=True)
 
 
-def _serve_url(port: int) -> str:
-    return f"http://localhost:{port}/hub.html"
-
-
-_PORT_PROBE_TIMEOUT_SECONDS = 1
-
-
-def _probe_port(port: int) -> str:
-    """포트가 이 hub.html 을 이미 서빙 중이면 REUSE, 비어 있으면 FREE, 남의 서버면 OCCUPIED."""
-    with socket.socket() as probe_socket:
-        probe_socket.settimeout(_PORT_PROBE_TIMEOUT_SECONDS)
-        if probe_socket.connect_ex((SERVE_BIND_ADDRESS, port)) != 0:
-            return "FREE"
+def read_server_heartbeat_mtime_ms() -> int | None:
+    """하트비트 파일의 mtime(ms). 없으면 None."""
     try:
-        served_bytes = urllib.request.urlopen(_serve_url(port), timeout=_PORT_PROBE_TIMEOUT_SECONDS).read()
+        return int(SERVER_HEARTBEAT_PATH.stat().st_mtime * 1000)
     except OSError:
-        return "OCCUPIED"
-    return "REUSE" if served_bytes == HUB_HTML_PATH.read_bytes() else "OCCUPIED"
+        return None
 
 
-def _launch_server(port: int) -> dict:
-    """`/dashboard serve` 3단계와 같은 패턴 — 임시 디렉토리에 심볼릭 링크 하나만 두고 서빙한다."""
-    temp_dir = Path(tempfile.mkdtemp(prefix="dzh-hub-"))
-    (temp_dir / "hub.html").symlink_to(HUB_HTML_PATH)
-    command = [
-        sys.executable, "-m", "http.server", str(port),
-        "--bind", SERVE_BIND_ADDRESS, "--directory", str(temp_dir),
-    ]
-    subprocess.Popen(command, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-    time.sleep(SERVER_STARTUP_WAIT_SECONDS)
-    if _probe_port(port) != "REUSE":
-        return {"ok": False, "reason": f"포트 {port} 기동 확인 실패(다른 프로세스가 선점했을 수 있음)"}
-    return {"ok": True, "port": port, "started": True, "url": _serve_url(port)}
+def write_server_record(record: hub_model.ServerRecord) -> None:
+    """server.json 을 원자적으로 쓴다. 서버 자신이 bind 성공 직후 1회만 호출한다."""
+    HUB_HOME.mkdir(parents=True, exist_ok=True)
+    payload = json.dumps(dataclasses.asdict(record), ensure_ascii=False)
+    _atomic_write_text(SERVER_RECORD_PATH, HUB_HOME, "server.json.", payload)
 
 
-def start_serving(requested_port: int | None) -> dict:
-    """hub.html 을 로컬 서버로 발행한다. 이미 서빙 중이면 재사용하고 새로 띄우지 않는다."""
-    if not HUB_HTML_PATH.is_file():
-        return {"ok": False, "reason": "hub.html 이 없습니다 — 먼저 hub.py open 을 실행하십시오"}
-    if requested_port is not None and not _is_valid_port(requested_port):
-        return {"ok": False, "reason": "포트는 1024~65535 범위여야 합니다"}
-    config, _config_warnings = load_config()
-    candidates = [requested_port] if requested_port else list(config.serve_port_candidates)
-    for port in candidates:
-        probe = _probe_port(port)
-        if probe == "REUSE":
-            return {"ok": True, "port": port, "started": False, "url": _serve_url(port)}
-        if probe == "FREE":
-            return _launch_server(port)
-    return {"ok": False, "reason": "포트 후보가 전부 다른 서버에 쓰이고 있습니다"}
+def read_server_record() -> hub_model.ServerRecord | None:
+    """server.json 을 읽어 판다. 없거나 깨졌으면 None.
+
+    파싱은 hub_model.parse_server_record(순수)에 위임한다(검수 m3) — 예전에는 순환 임포트를
+    피하려고 이 함수 안에 같은 로직을 따로 두었는데, 그 결과 실제 운영 경로(이 함수)가
+    테스트 대상(hub_daemon 의 사본)과 다른 코드를 쓰는 위험이 있었다. hub_model.py 는
+    hub_collect.py·hub_daemon.py 양쪽이 이미 임포트하는 공통 하위 모듈이라 순환이 없다.
+    """
+    try:
+        text = SERVER_RECORD_PATH.read_text(encoding="utf-8")
+    except OSError:
+        return None
+    return hub_model.parse_server_record(text)
 
 
-def stop_serving(requested_port: int | None) -> dict:
-    """지정한 포트(없으면 후보 전부)에서 이 서버 패턴과 일치하는 http.server 를 종료한다."""
-    config, _config_warnings = load_config()
-    ports = [requested_port] if requested_port else list(config.serve_port_candidates)
-    stopped = []
-    for port in ports:
-        if not _is_valid_port(port):
-            continue
-        pattern = f"http.server {port} --bind {SERVE_BIND_ADDRESS}"
-        result = subprocess.run(["pkill", "-f", pattern], capture_output=True, check=False)
-        if result.returncode == 0:
-            stopped.append(port)
-    return {"ok": True, "stopped_ports": stopped}
+def clear_server_state(expected_pid: int | None = None) -> None:
+    """server.json + 하트비트를 제거한다. SIGTERM 정리와 stale 정리 양쪽에서 쓴다.
+
+    `expected_pid` 가 주어지면 **compare-and-delete** 로 동작한다(검수 m1) — 삭제 직전에
+    server.json 을 다시 읽어 그 pid 가 여전히 `expected_pid` 와 같을 때만 지운다. 무조건
+    삭제하면, 이 함수를 부르기로 판단한 시점과 실제 삭제 시점 사이에 다른 프로세스(다른
+    셸의 `server-start` 등)가 새 서버를 띄워 server.json 을 갈아 끼웠을 경우 방금 뜬 새
+    서버의 기록을 지워 CLI 로는 더 이상 찾지도 끌 수도 없는 고아로 만든다(실측).
+    `expected_pid` 를 생략하면(기본값 `None`) 무조건 삭제한다 — 다만 실사용 호출부는 SIGTERM
+    핸들러를 포함해 전부 자신의 pid 를 `expected_pid` 로 넘긴다(검수 Nit). 이 무조건 삭제
+    경로는 지금은 어떤 실행 경로도 밟지 않는 방어적 기본값이고, 최소 동작 확인은 테스트에서만
+    한다.
+    """
+    if expected_pid is not None:
+        current_record = read_server_record()
+        if current_record is not None and current_record.pid != expected_pid:
+            return
+    SERVER_RECORD_PATH.unlink(missing_ok=True)
+    SERVER_HEARTBEAT_PATH.unlink(missing_ok=True)

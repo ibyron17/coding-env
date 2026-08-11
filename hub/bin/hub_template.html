@@ -148,6 +148,34 @@ DZH:HUB 데이터 계약
     return String(text).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
   }
 
+  // 상주 서버(개정 쟁점 R3)는 내용이 바뀌지 않으면 hub.html 을 다시 쓰지 않는다 — 그래서
+  // collected_at_ms 는 "수집 시각"이 아니라 "마지막 변화 시각"이다. 폴링 성공/실패 자체가
+  // 서버 생존의 증거이므로, 그 상태를 별도로 표시해야 "멈춘 것"과 "변화가 없는 것"을 구별할 수
+  // 있다(초판 리스크 8 의 재발 방지).
+  var POLL_FAILURE_THRESHOLD = 2;
+  var consecutiveFailureCount = 0;
+  var lastPollSuccessAtMs = null;
+  var connectionLost = false;
+
+  function formatTimestamp(epochMs){
+    return new Date(epochMs).toLocaleString('ko-KR');
+  }
+
+  function renderConnectionStatus(){
+    if(initialParseError) return;
+    var lastChange = formatTimestamp(snapshot.collected_at_ms);
+    if(!isServed){
+      collectedAtLabel.textContent = '마지막 변화: ' + lastChange + ' · 허브 서버 꺼짐';
+      return;
+    }
+    if(connectionLost){
+      collectedAtLabel.textContent = '서버 연결 끊김 — 화면이 ' + lastChange + ' 에 멈췄습니다';
+      return;
+    }
+    var secondsSincePoll = lastPollSuccessAtMs ? Math.floor((Date.now() - lastPollSuccessAtMs) / 1000) : 0;
+    collectedAtLabel.textContent = '마지막 변화: ' + lastChange + ' · 서버 연결됨 (' + secondsSincePoll + '초 전 확인)';
+  }
+
   function render(){
     if(initialParseError){
       app.innerHTML = '<div class="empty">데이터를 읽지 못했습니다 ('
@@ -169,7 +197,7 @@ DZH:HUB 데이터 계약
       extra += '<div class="warnings">' + snapshot.warnings.map(escapeHtml).join('<br>') + '</div>';
     }
     app.insertAdjacentHTML('beforeend', extra);
-    collectedAtLabel.textContent = '수집 시각: ' + new Date(snapshot.collected_at_ms).toLocaleString('ko-KR');
+    renderConnectionStatus();
   }
   render();
   setInterval(render, TICK_MS);
@@ -189,13 +217,21 @@ DZH:HUB 데이터 계약
     fetch(location.pathname, {cache:'no-store'})
       .then(function(res){ if(!res.ok) throw new Error(res.status); return res.text(); })
       .then(function(html){
-        if(html === lastHtml) return;
+        consecutiveFailureCount = 0;
+        connectionLost = false;
+        lastPollSuccessAtMs = Date.now();
+        if(html === lastHtml){ renderConnectionStatus(); return; }
         lastHtml = html;
         var fresh = new DOMParser().parseFromString(html, 'text/html');
         var freshData = fresh.getElementById('dzh-data');
-        if(freshData){ snapshot = JSON.parse(freshData.textContent || '{}'); render(); }
+        if(freshData){ snapshot = JSON.parse(freshData.textContent || '{}'); }
+        render();
       })
-      .catch(function(){ /* 다음 폴링에서 다시 시도한다 — 화면은 마지막 정상 상태를 유지한다 */ })
+      .catch(function(){
+        consecutiveFailureCount++;
+        if(consecutiveFailureCount >= POLL_FAILURE_THRESHOLD) connectionLost = true;
+        renderConnectionStatus();
+      })
       .then(function(){ busy = false; });
   }
   setInterval(poll, POLL_INTERVAL_MS);

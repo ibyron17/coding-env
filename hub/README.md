@@ -1,0 +1,117 @@
+# 통합 허브 대시보드
+
+로컬 머신에서 돌고 있는 **모든 Claude Code 프로젝트**의 진행 상황(프로젝트/세션/단계)을
+한 페이지에서 **읽기 전용**으로 본다. 명령·제어 기능(중단·프롬프트 주입·승인)은 범위 밖이다.
+
+**coding-env 설치와 완전히 별개다.** `install.sh --scope project|user` 를 실행해도 허브는
+설치되지 않는다 — 허브는 상주 프로세스와 전역 훅을 남기는 별도 자산이라, 설치 동의도
+분리돼 있다. 설계 근거는 [`../docs/prps/hub-dashboard.md`](../docs/prps/hub-dashboard.md).
+
+---
+
+## 설치
+
+```bash
+hub/install.sh
+```
+
+`~/.claude/hub/bin/` 에 9개 파일을 설치한다. `--scope` 인자가 없다 — 설치 위치는 이 하나뿐이며,
+머신 전역 자산이라 프로젝트마다 사본을 두지 않는다.
+
+- `--force` — 수정된 파일이 있어도 덮어쓴다
+- `--dry-run` — 계획만 출력(파일시스템 변경 없음)
+- `--uninstall` — 서버 정지 → 훅 제거 → `bin/` 삭제(순서 고정, 아래 「제거」 참조)
+
+## 빠른 시작
+
+```bash
+hub/install.sh              # 1. 실행 코드 설치
+/hub install                 # 2. 전역 훅 6개 설치(옵트인)
+/hub server start             # 3. 상주 서버 기동
+/hub                         # 4. 브라우저에서 열기
+```
+
+## 서버
+
+`/hub server start|stop|status` 로 제어하는 상주 프로세스가 포트 **8794**(고정)에서
+`hub.html` 을 서빙하고, 5초마다 모든 프로젝트를 다시 수집한다.
+
+- **Claude Code 세션과 무관하게 산다.** `start_new_session=True`(POSIX `setsid`)로 띄우므로
+  세션이 끝나거나 터미널이 닫혀도 서버는 계속 돈다.
+- **재부팅하면 사라진다.** 자동 재기동을 하지 않는다 — "상시"는 "세션이 죽여도 살아남는다"는
+  뜻이지 "재부팅 후에도 뜬다"는 뜻이 아니다.
+- **크래시하면 그대로 죽는다.** 자동으로 되살리지 않는다. 대신 `/hub server status` 의
+  `crashed_evidence` 필드 + `server.log` 마지막 줄, 그리고 브라우저의 "서버 연결 끊김" 표시
+  세 곳에서 죽었다는 사실을 확인할 수 있다. 하트비트 TTL(수집 주기의 3배, 최소 15초)이
+  지나면 훅이 자동으로 폴백 수집을 시작해 갱신이 완전히 멎지는 않는다.
+- **`/hub`(인자 없음)는 서버를 켜지 않는다.** 서버가 이미 살아 있으면 그 URL 을 열고, 꺼져
+  있으면 1회만 수집한 뒤 `file://` 로 열면서 `/hub server start` 를 안내한다. 서버 기동은
+  언제나 사용자가 명시적으로 한다.
+
+## 훅 옵트인
+
+`/hub install` 이 `SessionStart`·`UserPromptSubmit`·`Stop`·`SubagentStart`·`SubagentStop`·
+`SessionEnd` 6개 이벤트에 전역 훅을 추가한다(`# DZH_HUB_HOOK` 마커로 식별). 이미 설치된 다른
+도구의 훅(CAM·Litmus 등)은 절대 읽지도 고치지도 않는다 — 마커가 붙은 엔트리만 우리 소유다.
+서버가 켜져 있으면 훅은 이벤트를 파일에 append 만 하고 재수집은 서버에 맡긴다(중복 수집 없음).
+서버가 꺼져 있으면(또는 크래시했으면) 훅이 폴백으로 재수집을 spawn 한다.
+
+## 프라이버시 고지
+
+- 프롬프트 앞부분 **120자**가 `~/.claude/hub/events/*.jsonl` 에 평문으로 최대 **7일** 보관된다.
+  `config.json` 의 `record_prompt_excerpt: false` 로 끌 수 있다.
+- **서버 가동 중에는 `127.0.0.1:8794` 가 열려 있다.** 루프백 바인딩(원격 불가) +
+  허용 경로 2개(`/`, `/hub.html`) 화이트리스트로 제한돼 있어 `events/*.jsonl`·`bin/*.py`·
+  `config.json` 은 어떤 경로로도 노출되지 않는다. 다만 이 포트에 닿는 **로컬**의 다른 프로세스는
+  `hub.html` 에 인라인된 프롬프트 발췌를 읽을 수 있다. 끄는 수단은 `record_prompt_excerpt:false`
+  와 `/hub server stop`.
+
+## 티어 한계 — 프로젝트마다 "가진 것 중 가장 높은 티어"로 표시한다
+
+| 티어 | 출처 | 얻는 것 | 없으면 |
+|------|------|--------|-------|
+| 1 | `<프로젝트>/.claude/dashboard.html` | 제목·단계별 상태·진행률 | 티어 2로 강등 |
+| 2 | `~/.claude/hub/events/*.jsonl` | 세션 목록·상태·단계 **추정** | 티어 3으로 강등 |
+| 3 | `~/.claude/projects/<인코딩>/*.jsonl` 의 **mtime** | 마지막 활동 시각뿐(내용은 절대 읽지 않는다) | 그 프로젝트는 목록에 없다 |
+
+`~/.claude/projects` 디렉토리명은 정방향으로만 매칭한다(역디코딩하지 않음) — 매칭되지 않은
+이름은 "미확인 프로젝트 N개"로 접혀 표시된다. 경로를 지어내는 일은 없다.
+
+## 설정 — `~/.claude/hub/config.json` (선택, 없으면 전부 기본값)
+
+| 필드 | 기본값 | 뜻 |
+|------|--------|-----|
+| `roots` | `[]` | 이 경로들을 훑어 `.claude`·`.git` 이 있는 디렉토리를 프로젝트로 추가한다 |
+| `ignore_globs` | worktree·`/tmp`·`/private/tmp` | 이 패턴에 맞는 경로는 제외한다 |
+| `scan_depth` | `3` | `roots` 스캔 깊이 |
+| `stale_after_minutes` | `30` | 이 시간 무활동이면 `stale` 로 표시 |
+| `event_retention_days` | `7` | 이보다 오래된 이벤트 파일은 삭제 |
+| `record_prompt_excerpt` | `true` | 프롬프트 발췌 기록 여부 |
+| `server_port` | `8794` | 상주 서버 고정 포트 |
+| `server_collect_interval_seconds` | `5` | 수집 루프 주기 |
+
+## 제거
+
+```bash
+hub/install.sh --uninstall
+```
+
+순서가 고정돼 있다: **서버 정지 → 훅 제거 → `bin/` 삭제.** `events/`·`hub.html`·`config.json`
+은 지우지 않는다 — 사용자 데이터이며, 지울지는 직접 결정한다(경로는 완료 메시지에 안내된다).
+
+## 파일 배치
+
+```
+~/.claude/hub/
+├── bin/                     # hub/install.sh 가 배포. 9개 파일
+├── config.json              # 선택
+├── server.json               # 서버 자신이 bind 직후 1회 쓴다(PID·포트·기동 시각)
+├── server_heartbeat          # 수집 루프가 매 사이클 touch — 생존 판정의 정본
+├── server.log                # 서버의 stderr. 크래시 원인 규명 창구
+├── events/YYYY-MM-DD.jsonl   # 훅 이벤트 로그(append-only, 날짜별)
+└── hub.html                  # 생성물 — 브라우저로 여는 유일한 파일
+```
+
+## 설계 근거
+
+전체 설계 결정과 근거는 [`../docs/prps/hub-dashboard.md`](../docs/prps/hub-dashboard.md) 참조.

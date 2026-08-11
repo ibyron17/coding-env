@@ -29,18 +29,21 @@ class HubHookScenarioTest(unittest.TestCase):
         self.original_html_path = hub_collect.HUB_HTML_PATH
         self.original_config_path = hub_collect.CONFIG_PATH
         self.original_spawn_stamp_path = hub_collect.SPAWN_STAMP_PATH
+        self.original_heartbeat_path = hub_collect.SERVER_HEARTBEAT_PATH
 
         hub_collect.EVENTS_DIR = self.temp_dir / "events"
         hub_collect.EVENTS_DIR.mkdir()
         hub_collect.HUB_HTML_PATH = self.temp_dir / "hub.html"
         hub_collect.CONFIG_PATH = self.temp_dir / "config.json"
         hub_collect.SPAWN_STAMP_PATH = self.temp_dir / ".collect_spawn_stamp"
+        hub_collect.SERVER_HEARTBEAT_PATH = self.temp_dir / "server_heartbeat"
 
     def tearDown(self) -> None:
         hub_collect.EVENTS_DIR = self.original_events_dir
         hub_collect.HUB_HTML_PATH = self.original_html_path
         hub_collect.CONFIG_PATH = self.original_config_path
         hub_collect.SPAWN_STAMP_PATH = self.original_spawn_stamp_path
+        hub_collect.SERVER_HEARTBEAT_PATH = self.original_heartbeat_path
         shutil.rmtree(self.temp_dir, ignore_errors=True)
 
     def _run_hook_with_stdin(self, payload: dict) -> None:
@@ -57,7 +60,12 @@ class RetentionReachabilityTest(HubHookScenarioTest):
         old_file.write_text('{"t":1,"e":"Stop","s":"s","c":"/repo"}\n')
 
         self.assertFalse(hub_collect.HUB_HTML_PATH.exists())  # 허브 off 상태 전제
-        self._run_hook_with_stdin({"hook_event_name": "Stop", "session_id": "s2", "cwd": "/repo"})
+
+        # 검수 M2-5 이후로는 이 조합(hub.html 없음 + 서버 죽음)이 실제로 spawn 을 한다 — 이
+        # 테스트의 관심사는 리텐션 정리이므로 subprocess.Popen 을 모킹해 실제 프로세스를
+        # 띄우지 않는다(실제 ~/.claude 를 건드리지 않는다는 이 파일의 전제를 지킨다).
+        with mock.patch("subprocess.Popen"):
+            self._run_hook_with_stdin({"hook_event_name": "Stop", "session_id": "s2", "cwd": "/repo"})
 
         self.assertFalse(old_file.exists())
 
@@ -89,11 +97,42 @@ class SpawnsBackgroundCollectTest(HubHookScenarioTest):
 
         mock_popen.assert_not_called()
 
-    def test_missing_hub_html_does_not_spawn(self) -> None:
+    def test_missing_hub_html_spawns_when_server_is_not_alive(self) -> None:
+        """검수 M2-5 — 서버가 죽어 있고(하트비트 없음) hub.html 도 없으면 훅 폴백이 뚫려야
+        한다. 예전에는 이 조합이 항상 False 라, 상주 서버가 HUB_HOME 쓰기 실패 등으로
+        hub.html 을 한 번도 못 만든 채 수집 스레드까지 죽으면 훅 폴백조차 영원히 막혀
+        사용자가 영구히 빈 페이지만 보는 이중 실패였다(hub_model.should_spawn_collect 참조)."""
+        with mock.patch("subprocess.Popen") as mock_popen:
+            self._run_hook_with_stdin({"hook_event_name": "Stop", "session_id": "s", "cwd": "/repo"})
+
+        mock_popen.assert_called_once()
+
+
+class ServerDelegationTest(HubHookScenarioTest):
+    """검수 개정 쟁점 R3 — 상주 서버가 살아 있으면(하트비트 신선) 훅은 spawn 하지 않는다."""
+
+    def test_fresh_heartbeat_suppresses_spawn_even_with_stale_hub_html(self) -> None:
+        hub_collect.HUB_HTML_PATH.write_text("stale-marker")
+        old_time = time.time() - ONE_HOUR_SECONDS
+        os.utime(hub_collect.HUB_HTML_PATH, (old_time, old_time))
+        hub_collect.SERVER_HEARTBEAT_PATH.write_text("")  # mtime = 지금 = 신선한 하트비트
+
         with mock.patch("subprocess.Popen") as mock_popen:
             self._run_hook_with_stdin({"hook_event_name": "Stop", "session_id": "s", "cwd": "/repo"})
 
         mock_popen.assert_not_called()
+
+    def test_stale_heartbeat_falls_back_to_hook_spawn(self) -> None:
+        hub_collect.HUB_HTML_PATH.write_text("stale-marker")
+        old_time = time.time() - ONE_HOUR_SECONDS
+        os.utime(hub_collect.HUB_HTML_PATH, (old_time, old_time))
+        hub_collect.SERVER_HEARTBEAT_PATH.write_text("")
+        os.utime(hub_collect.SERVER_HEARTBEAT_PATH, (old_time, old_time))  # 서버 크래시 흉내
+
+        with mock.patch("subprocess.Popen") as mock_popen:
+            self._run_hook_with_stdin({"hook_event_name": "Stop", "session_id": "s", "cwd": "/repo"})
+
+        mock_popen.assert_called_once()
 
 
 class ThrottleDebounceStampTest(HubHookScenarioTest):

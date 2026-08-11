@@ -87,13 +87,11 @@ cd /path/to/my-project
 | rules/ | 37 | `./.claude/rules/` | `~/.claude/rules/` | 12개 항상 · 25개 조건부 |
 | agents/ | 4 | `./.claude/agents/` | `~/.claude/agents/` | 호출 시 |
 | commands/ | 9 | `./.claude/commands/` | `~/.claude/commands/` | 호출 시 |
-| hub/bin/ | 7 | **설치 안 됨** | `~/.claude/hub/bin/` | `/hub` 호출 시(코드, 컨텍스트 아님) |
 
-**합계**: project scope 51개 파일 · user scope 58개 파일(hub/bin 포함, 머신 전역 자산).
+**합계**: project·user 모두 51개 파일.
 
 상시 컨텍스트를 차지하는 것은 **CLAUDE.md 1개 + rules 12개 = 13개(약 34KB)** 뿐입니다.
 나머지는 조건이 맞을 때(rules 25개) 또는 호출할 때(agents 4개, commands 9개)만 로드됩니다.
-`hub/bin/` 은 LLM 컨텍스트가 아니라 python3 가 실행하는 코드라 이 집계에 들어가지 않습니다.
 
 ### CLAUDE.md 구성
 
@@ -120,7 +118,7 @@ cd /path/to/my-project
 | `code-review` | 289 | 로컬 변경 또는 PR 검수 |
 | `env-update` | 184 | coding-env 레포 업데이트 (manifest 기반 자동 갱신) |
 | `dashboard` | 1224 | 세션 진행 상황을 프로젝트 로컬 HTML 대시보드로 기록 (init/step/impl/log + on/off 스위치, `serve`로 플로팅) |
-| `hub` | 117 | 로컬의 모든 프로젝트 진행 상황을 한 페이지에서 읽기 전용으로 집계 (`install`/`off`로 훅 옵트인, `serve`로 발행) |
+| `hub` | 153 | 로컬 모든 프로젝트 진행 상황을 한 페이지에 집계 (**별도 설치** — [hub/README.md](hub/README.md)) |
 
 각 커맨드의 동작:
 
@@ -154,19 +152,9 @@ cd /path/to/my-project
 
   ![대시보드 예시 — 매크로 단계, 구현 세부 작업 패널, 작업 추적 로그](docs/images/dashboard-sample.png)
 
-- **`/hub`** — 로컬 머신에서 돌고 있는 **모든** 프로젝트의 진행 상황(프로젝트/세션/단계)을
-  한 페이지에서 **읽기 전용**으로 봅니다. `/dashboard` 와 반대 방향으로, 사람이 아니라
-  `~/.claude/hub/bin/*.py`(python3 stdlib, 이 레포 최초의 실행 코드)가 파일에서 기계적으로
-  읽히는 사실만 집계합니다. `/hub install`(옵트인)로 `SessionStart`·`UserPromptSubmit`·`Stop`·
-  `SubagentStart`·`SubagentStop`·`SessionEnd` 6개 전역 훅을 설치하면, 다른 프로젝트에서 프롬프트를
-  입력한 지 5~10초 안에 화면이 스스로 갱신됩니다. **프라이버시**: 프롬프트 앞부분(120자)이
-  `~/.claude/hub/events/`에 평문으로 최대 7일 보관됩니다(`config.json`의
-  `record_prompt_excerpt:false`로 끌 수 있음, `/hub off`로 훅 자체를 제거할 수도 있음).
-  프로젝트별 `.claude/dashboard.html`(있으면 최우선 티어)·훅 이벤트 로그·
-  `~/.claude/projects` 파일명 mtime 세 티어를 프로젝트마다 "가진 것 중 가장 높은 티어"로 보여주며,
-  **`--scope user` 로만 설치됩니다**(머신 전역 자산이라 프로젝트마다 사본을 두지 않습니다).
-  설치된 훅은 커맨드 문자열에 `# DZH_HUB_HOOK` 마커가 붙어 있어 `/hub off` 가 다른 도구의
-  훅(CAM·Litmus 등)을 건드리지 않고 이 마커가 붙은 엔트리만 정확히 골라 제거합니다.
+- **`/hub`** — 로컬 머신에서 돌고 있는 **모든** 프로젝트의 진행 상황을 한 페이지에서
+  **읽기 전용**으로 봅니다. **coding-env 설치와 별개로 설치합니다** — 실행 코드·상주 서버·
+  전역 훅·프라이버시 고지·설정 전부는 [`hub/README.md`](hub/README.md) 를 참고하십시오.
 
 **의존 사슬 7종 + 독립 커맨드 2종.** `prp-implement` 가 `/code-review`·`/prp-commit`·`/prp-pr` 을,
 `prp-pr` 이 `/code-review`·`/prp-commit` 을 호출합니다. 일부만 설치하면 사슬이 끊기므로 전부 배포합니다.
@@ -340,14 +328,7 @@ coding-env/
 │   ├── env-update.md
 │   ├── dashboard.md
 │   └── hub.md
-├── hub/bin/                       # 7개 파일 — --scope user 전용 실행 코드(python3 stdlib)
-│   ├── hub.py                     # CLI 엔트리
-│   ├── hub_model.py                # ★순수. 이벤트 → 세션 사실 → 표시 상태
-│   ├── hub_parse.py                # ★순수. /dashboard DOM 파서
-│   ├── hub_collect.py              # I/O — 3티어 읽기 · hub.html 원자적 쓰기 · 로컬 서버
-│   ├── hub_hook.py                 # 훅 엔트리 — 항상 exit 0
-│   ├── hub_settings.py             # ~/.claude/settings.json 훅 병합 설치/제거
-│   └── hub_template.html           # 허브 페이지 골격
+├── hub/                            # 통합 허브 — 별도 설치(hub/README.md)
 ├── docs/prps/
 │   ├── coding-env.md              # 설계 문서 (PRP rev4)
 │   └── hub-dashboard.md           # 통합 허브 대시보드 설계 문서
