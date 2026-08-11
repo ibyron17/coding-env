@@ -1893,10 +1893,10 @@ test_hub_unit_tests() {
   ((passed_tests++))
 }
 
-# T25: 허브 문서·상수 정합성 (하위 검증 T25-1~T25-31)
+# T25: 허브 문서·상수 정합성 (하위 검증 T25-1~T25-36)
 test_hub_docs_and_constants() {
   local test_name="T25"
-  local test_desc="허브 문서·상수 정합성 (T25-1~T25-31)"
+  local test_desc="허브 문서·상수 정합성 (T25-1~T25-36)"
   log_test_name "$test_name" "$test_desc"
 
   local hub_settings_file="$REPO_ROOT/hub/bin/hub_settings.py"
@@ -2313,6 +2313,67 @@ PYEOF
     record_failure "$test_name" "T25-31: hub/README.md 에 plan-usage-history.json 언급이 없음"
     return 1
   fi
+
+  # T25-32(결정 G1~G5 회귀): 프로젝트 목록이 뷰포트 폭에 따라 열 수가 바뀌는 그리드이고,
+  # 카드가 행 높이에 맞춰 늘어나지 않으며, 비-카드 요소는 한 행을 다 쓴다.
+  local grid_token
+  for grid_token in "max-width:1440px" "display:grid" "repeat(auto-fill,minmax(320px,1fr))" \
+                    "align-items:start" "grid-column:1/-1"; do
+    if ! grep -qF "$grid_token" "$hub_template_file"; then
+      record_failure "$test_name" "T25-32: hub_template.html 에 그리드 규칙($grid_token)이 없음"
+      return 1
+    fi
+  done
+
+  # T25-33(결정 C1 · 불변식 H1′ 회귀 — 이 파일에서 가장 중요한 검사):
+  # 접기 버튼은 정적 마크업이어야 하고, 패널 컨테이너를 통째로 다시 그리는 코드가 되살아나면
+  # 접힘 상태가 30초 틱마다 초기화된다.
+  if ! grep -qF '<button id="dzh-usage-toggle"' "$hub_template_file"; then
+    record_failure "$test_name" "T25-33: 접기 버튼이 정적 마크업으로 존재하지 않음"
+    return 1
+  fi
+  if ! grep -qF 'id="dzh-usage-body"' "$hub_template_file"; then
+    record_failure "$test_name" "T25-33: 파생 본문 컨테이너(#dzh-usage-body)가 없음"
+    return 1
+  fi
+  if grep -qF "usageEl.innerHTML" "$hub_template_file"; then
+    record_failure "$test_name" "T25-33: usageEl.innerHTML 대입이 부활함 — 재렌더가 접기 버튼을 파괴한다"
+    return 1
+  fi
+
+  # T25-34(제약 C8 회귀): 접기 토글의 상태가 접근성 트리에 노출되고, 기존 막대의
+  # progressbar 시맨틱이 리팩토링 중 유실되지 않는다.
+  local a11y_token
+  for a11y_token in "aria-expanded" 'aria-controls="dzh-usage-body"' 'role="progressbar"'; do
+    if ! grep -qF "$a11y_token" "$hub_template_file"; then
+      record_failure "$test_name" "T25-34: hub_template.html 에 접근성 속성($a11y_token)이 없음"
+      return 1
+    fi
+  done
+
+  # T25-35(결정 L1·L3·C2 회귀): 패널은 우하단 고정이고(중앙 정렬 흔적이 남으면 안 된다),
+  # 하단 여백은 실측 커스텀 속성으로 주며, 접힘 상태는 전용 키에 저장된다.
+  if grep -qF "translateX(-50%)" "$hub_template_file"; then
+    record_failure "$test_name" "T25-35: 하단 중앙 정렬(translateX(-50%))이 남아 있음"
+    return 1
+  fi
+  local panel_token
+  for panel_token in "right:16px;bottom:16px" "--usage-clearance" "'dzh-usage-collapsed'"; do
+    if ! grep -qF -- "$panel_token" "$hub_template_file"; then
+      record_failure "$test_name" "T25-35: hub_template.html 에 패널 규칙($panel_token)이 없음"
+      return 1
+    fi
+  done
+
+  # T25-36(문서 정합): 화면 배치 변경이 hub/README.md 에 반영돼 있다.
+  local hub_readme_layout_file="$REPO_ROOT/hub/README.md"
+  local doc_token
+  for doc_token in "우하단" "접기" "그리드"; do
+    if ! grep -qF "$doc_token" "$hub_readme_layout_file"; then
+      record_failure "$test_name" "T25-36: hub/README.md 에 화면 배치 설명($doc_token)이 없음"
+      return 1
+    fi
+  done
 
   log_ok "$test_name 통과"
   ((passed_tests++))

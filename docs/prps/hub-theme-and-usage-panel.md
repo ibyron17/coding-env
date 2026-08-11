@@ -154,6 +154,10 @@ hub/bin/
 > `#dzh-usage` **세 개뿐이다.** 그 밖의 요소(테마 토글 버튼 포함)는 어떤 경로로도 치환하지
 > 않는다. 새 UI 를 더할 때 사용자 상태를 가진 요소는 반드시 이 셋 바깥에 둔다.
 
+> **개정됨.** H1 은 [`hub-usage-collapse-and-grid.md`](./hub-usage-collapse-and-grid.md) 의
+> **H1′** 로 대체됐다 — 갱신 대상이 `#dzh-usage` 에서 `#dzh-usage-body`·`#dzh-usage-summary`
+> 로 한 겹 안으로 이동했다.
+
 - **테마 토글 버튼**: `#dzh-app` 바깥의 정적 마크업 → 5초 폴링에도 DOM 노드가 그대로 살아
   있고, 테마 상태는 `<html data-theme>` 속성 + `localStorage` 에 있어 폴링과 무관하다.
 - **사용량 패널**: 내용은 스냅샷 파생이므로 매 `render()` 마다 다시 그려야 한다. 그래서
@@ -486,6 +490,10 @@ def _valid_percent(value: object) -> bool:
 
 ### 결정 U5 — 패널에 닫기/접기 버튼을 두지 않는다
 
+> **대체됨(superseded).** 이 결정은 [`hub-usage-collapse-and-grid.md`](./hub-usage-collapse-and-grid.md)
+> 의 결정 C1 이 대체한다 — 사용자가 접기/펼치기를 명시적으로 요구했고, 폴링 내성은 불변식
+> H1′ 로 해결했다. 아래 근거는 당시 판단의 기록으로 남긴다.
+
 닫기 버튼은 곧바로 "폴링을 견뎌야 하는 사용자 상태"가 되어 `localStorage` 왕복과 재렌더
 설계를 요구한다(테마와 같은 부담). 끄는 수단은 이미 U4 로 있고, 요구는 "보여준다"까지다.
 YAGNI.
@@ -506,9 +514,9 @@ YAGNI.
 
 | 항목 | 사양 |
 |------|------|
-| 배치 | `position:fixed; bottom:16px; left:50%; transform:translateX(-50%)`, `width:min(420px, calc(100vw - 32px))`, `z-index:20` |
+| 배치 | `position:fixed; bottom:16px; left:50%; transform:translateX(-50%)`, `width:min(420px, calc(100vw - 32px))`, `z-index:20` (현행: hub-usage-collapse-and-grid.md L1·L3) |
 | 컨테이너 | `<aside id="dzh-usage" class="usage" hidden></aside>` — **정적 마크업, `#dzh-app` 바깥**(불변식 H1) |
-| 가림 방지 | 패널이 있을 때만 `document.body.classList.add('has-usage')` → `body.has-usage .wrap{padding-bottom:132px}`. 없을 때 빈 여백을 남기지 않는다 |
+| 가림 방지 | 패널이 있을 때만 `document.body.classList.add('has-usage')` → `body.has-usage .wrap{padding-bottom:132px}`. 없을 때 빈 여백을 남기지 않는다 (현행: hub-usage-collapse-and-grid.md L1·L3) |
 | 막대 | `<div class="usage-bar" role="progressbar" aria-valuenow=… aria-valuemin="0" aria-valuemax="100" aria-label="세션 한도 사용률">` + 내부 `<span>` 의 `width:N%` |
 | 색 | 두 막대 모두 `--accent`(파랑) 단색. **임계값 색 변화 없음**(아래 대안 3) |
 | 숫자 | 항상 정수 % 텍스트를 병기 — 막대 길이 + 숫자 = 2채널 |
@@ -528,7 +536,7 @@ YAGNI.
 | # | 결정 | 한 줄 근거 |
 |---|------|-----------|
 | M1 | 새 순수 모듈 `hub_usage.py` | `hub_parse.py` 선례 — 외부 계약 파서는 독립 모듈 |
-| M2 | 폴링 동기화 영역 불변식 H1 | 사용자 상태를 가진 요소를 `#dzh-app` 밖에 둔다 |
+| M2 | 폴링 동기화 영역 불변식 H1 | 사용자 상태를 가진 요소를 `#dzh-app` 밖에 둔다 → H1′ 로 개정됨 |
 | D3 | 스냅샷에 now 파생값 금지 | content_key 가 매 사이클 바뀌어 재작성 폭주 |
 | T1 | 미디어 쿼리 + 속성 오버라이드 | JS 실패해도 시스템 테마는 산다 |
 | T2 | 3상태 순환 | "시스템으로 되돌리기"를 잃지 않는다 |
@@ -538,7 +546,7 @@ YAGNI.
 | U2 | 엄격 int + 0~100 | 실수 스케일 변경이 "0%" 로 조용히 새는 것을 막는다 |
 | U3 | 5시간 만료 → 미표시 | 창 길이 = 근거의 유효기간 |
 | U4 | `show_usage_panel` 스위치 | 프라이버시 고지의 기존 약속과 일관 |
-| U5 | 닫기 버튼 없음 | 폴링을 견디는 상태를 늘리지 않는다(YAGNI) |
+| U5 | 닫기 버튼 없음 | 폴링을 견디는 상태를 늘리지 않는다(YAGNI) → **대체됨**(hub-usage-collapse-and-grid.md C1) |
 | — | 디자인 패턴 도입 없음 | 함수 3개 + dataclass 1개로 끝난다. 추상화할 두 번째 사례가 없다 |
 
 ---

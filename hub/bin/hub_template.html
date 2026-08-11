@@ -10,9 +10,11 @@ DZH:HUB 데이터 계약
               hub_model.render_hub_html 이 이 블록 하나만 치환한다. 나머지는 정적이다.
   갱신 모드는 /dashboard 와 같은 판정이다: location.protocol 이 http(s) 면 5초 폴링
   (자기 URL 을 받아 문자열 전체 비교), 아니면 포커스 복귀 시 location.reload().
-  폴링이 내용을 갱신하는 요소는 #dzh-app · #dzh-collected-at · #dzh-usage 세 개뿐이다
-  (불변식 H1, docs/prps/hub-theme-and-usage-panel.md). 테마 토글 버튼은 이 셋 바깥의
-  정적 마크업이라 폴링과 무관하게 DOM 이 그대로 유지된다.
+  폴링이 내용을 갱신하는 요소는 #dzh-app · #dzh-collected-at · #dzh-usage-body ·
+  #dzh-usage-summary 네 개뿐이다(불변식 H1′, docs/prps/hub-usage-collapse-and-grid.md).
+  #dzh-usage 와 그 안의 #dzh-usage-toggle 은 정적 노드이며 class·aria-expanded 속성만
+  갱신한다(노드 교체 금지). 테마 토글 버튼은 이 넷 바깥의 정적 마크업이라 폴링과 무관하게
+  DOM 이 그대로 유지된다.
 -->
 <style>
   :root{
@@ -43,10 +45,12 @@ DZH:HUB 데이터 계약
   }
   *{box-sizing:border-box}
   body{margin:0;font-family:"Pretendard","Apple SD Gothic Neo","Malgun Gothic",sans-serif;color:var(--ink);background:var(--bg);line-height:1.5}
-  .wrap{max-width:960px;margin:32px auto;padding:0 16px}
+  .wrap{max-width:1440px;margin:32px auto;padding:0 16px}
+  #dzh-app{display:grid;grid-template-columns:repeat(auto-fill,minmax(320px,1fr));gap:12px;align-items:start}
+  #dzh-app>.empty,#dzh-app>.unresolved,#dzh-app>.warnings{grid-column:1/-1}
   h1{font-size:20px;margin:0 0 4px;color:var(--head);letter-spacing:-.4px}
   .sub{font-size:12.5px;color:var(--muted);margin-bottom:18px}
-  .card{background:var(--surface);border:1px solid var(--line);border-radius:14px;padding:16px 20px;box-shadow:var(--shadow);margin-bottom:12px}
+  .card{background:var(--surface);border:1px solid var(--line);border-radius:14px;padding:16px 20px;box-shadow:var(--shadow)}
   .project-head{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
   .project-name{font-size:15px;font-weight:800;color:var(--head)}
   .badge{display:inline-block;font-size:11px;font-weight:800;padding:2px 9px;border-radius:999px}
@@ -59,7 +63,7 @@ DZH:HUB 데이터 계약
   .last-activity{margin-left:auto;font-size:11.5px;color:var(--muted)}
   .path{font-size:11.5px;color:var(--muted);margin-top:2px;word-break:break-all}
   .tier1-pct{font-size:12px;font-weight:700;color:var(--accent-ink);margin-top:8px}
-  .tier1-active{font-size:12px;color:var(--head);margin-top:3px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .tier1-active{font-size:12px;color:var(--head);margin-top:3px;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
   .tier1-impl{font-size:11.5px;color:var(--muted);margin-top:2px}
   .sessions{list-style:none;margin:10px 0 0;padding:0;font-size:13px}
   .sessions li{padding:7px 0;border-top:1px solid var(--soft)}
@@ -75,11 +79,25 @@ DZH:HUB 데이터 계약
   .foot{font-size:11.5px;color:var(--muted);text-align:right;margin-top:6px}
   .theme-toggle{position:fixed;top:16px;right:16px;z-index:30;font-size:11.5px;font-weight:700;color:var(--muted);background:var(--surface);border:1px solid var(--line);border-radius:999px;padding:6px 12px;cursor:pointer;box-shadow:var(--shadow)}
   .theme-toggle:hover{color:var(--accent-ink);border-color:var(--accent)}
-  body.has-usage .wrap{padding-bottom:132px}
-  .usage{position:fixed;bottom:16px;left:50%;transform:translateX(-50%);width:min(420px, calc(100vw - 32px));z-index:20;background:var(--surface);border:1px solid var(--line);border-radius:14px;padding:14px 18px;box-shadow:var(--shadow)}
-  .usage-title{font-size:12.5px;font-weight:800;color:var(--head);margin-bottom:8px}
+  /* 184px 은 JS 가 못 도는 경우에만 쓰이는 fallback 이다(펼침 실측 153 + 여유 32 ≈ 185).
+     평소에는 applyUsageClearance() 가 --usage-clearance 를 실측값으로 덮어쓴다 —
+     USAGE_CLEARANCE_MARGIN_PX 를 고치면 이 숫자도 같이 봐야 한다(검수 LOW). */
+  body.has-usage .wrap{padding-bottom:var(--usage-clearance,184px)}
+  .usage{position:fixed;right:16px;bottom:16px;width:min(420px, calc(100vw - 32px));z-index:20;background:var(--surface);border:1px solid var(--line);border-radius:14px;padding:14px 18px;box-shadow:var(--shadow)}
+  .usage.usage-collapsed{width:auto;max-width:calc(100vw - 32px);padding:10px 14px}
+  .usage-toggle{display:flex;align-items:center;gap:8px;width:100%;padding:0;border:0;background:none;font:inherit;color:inherit;text-align:left;cursor:pointer}
+  .usage-toggle:hover .usage-title{color:var(--accent-ink)}
+  .usage-toggle:focus-visible{outline:2px solid var(--accent);outline-offset:3px}
+  .usage-title{font-size:12.5px;font-weight:800;color:var(--head)}
+  .usage-summary{font-size:12.5px;font-weight:700;color:var(--accent-ink)}
+  .usage-caret{margin-left:auto;font-size:10px;color:var(--muted)}
+  .usage-caret::before{content:"▾"}
+  .usage.usage-collapsed .usage-caret::before{content:"▸"}
+  .usage:not(.usage-collapsed) .usage-summary{display:none}
+  .usage.usage-collapsed .usage-body{display:none}
+  .usage-body{margin-top:8px}
+  .usage-body>.usage-row:first-child{margin-top:0}
   .usage-row{display:flex;justify-content:space-between;align-items:baseline;font-size:12.5px;color:var(--ink);margin-top:8px}
-  .usage-title + .usage-row{margin-top:0}
   .usage-pct{font-weight:700;color:var(--accent-ink)}
   .usage-bar{height:8px;border-radius:999px;background:var(--soft);margin-top:4px;overflow:hidden}
   .usage-bar>span{display:block;height:100%;background:var(--accent);border-radius:999px}
@@ -100,7 +118,15 @@ try{var m=localStorage.getItem('dzh-theme');
   <div id="dzh-app"><div class="empty">불러오는 중…</div></div>
   <div class="foot" id="dzh-collected-at"></div>
 </div>
-<aside id="dzh-usage" class="usage" hidden></aside>
+<aside id="dzh-usage" class="usage" hidden>
+  <button id="dzh-usage-toggle" class="usage-toggle" type="button"
+          aria-expanded="true" aria-controls="dzh-usage-body">
+    <span class="usage-title">Claude 사용 한도</span>
+    <span id="dzh-usage-summary" class="usage-summary"></span>
+    <span class="usage-caret" aria-hidden="true"></span>
+  </button>
+  <div id="dzh-usage-body" class="usage-body"></div>
+</aside>
 <script type="application/json" id="dzh-data">{}</script>
 <script>
 (function(){
@@ -148,10 +174,17 @@ try{var m=localStorage.getItem('dzh-theme');
   var USAGE_SESSION_LABEL = '세션 (5시간)';
   var USAGE_WEEKLY_LABEL = '주간 (7일)';
   var USAGE_CYCLE_NOTE = '· 약 15분 주기';
+  var USAGE_COLLAPSE_STORAGE_KEY = 'dzh-usage-collapsed';
+  var USAGE_COLLAPSED_FLAG = '1';
+  var USAGE_CLEARANCE_MARGIN_PX = 32;   // 패널 bottom 오프셋 16 + 여유 16
 
   var app = document.getElementById('dzh-app');
   var collectedAtLabel = document.getElementById('dzh-collected-at');
   var usageEl = document.getElementById('dzh-usage');
+  var usageToggleButton = document.getElementById('dzh-usage-toggle');
+  var usageBodyEl = document.getElementById('dzh-usage-body');
+  var usageSummaryEl = document.getElementById('dzh-usage-summary');
+  var isUsageCollapsed = readStoredUsageCollapsed();
   var isServed = location.protocol === 'http:' || location.protocol === 'https:';
   var initialDataParse = parseSnapshotJson(document.getElementById('dzh-data').textContent);
   var snapshot = initialDataParse.snapshot;
@@ -283,8 +316,44 @@ try{var m=localStorage.getItem('dzh-theme');
     document.body.classList.remove('has-usage');
   }
 
-  // 컨테이너(#dzh-usage)는 정적, 내용은 파생이다(결정 M2) — 매 render() 마다 다시 그리되
-  // 접기/닫기 같은 사용자 상태는 두지 않는다(결정 U5). usage 가 없으면(스위치 off·파일
+  // 저장된 접힘 상태를 읽는다. 저장소 접근이 막힌 환경(file:// 등)에서는 펼침으로 본다(결정 C3).
+  function readStoredUsageCollapsed(){
+    try{
+      return localStorage.getItem(USAGE_COLLAPSE_STORAGE_KEY) === USAGE_COLLAPSED_FLAG;
+    }catch(e){
+      return false;
+    }
+  }
+
+  // 접힘이면 플래그를 쓰고 펼침이면 키를 지운다(결정 C2). 저장 실패는 무시한다 — 이번
+  // 페이지 로드 동안만 토글이 유효하다(결정 C3, 테마 토글과 동일 처리).
+  function persistUsageCollapsed(collapsed){
+    try{
+      if(collapsed) localStorage.setItem(USAGE_COLLAPSE_STORAGE_KEY, USAGE_COLLAPSED_FLAG);
+      else localStorage.removeItem(USAGE_COLLAPSE_STORAGE_KEY);
+    }catch(e){ /* 저장 실패 — 이번 로드 동안만 유효(결정 C3) */ }
+  }
+
+  // 접힘 상태에 보일 한 줄 요약 문자열. 순수 함수 — DOM 에 닿지 않는다(결정 C5).
+  function usageSummaryText(usage){
+    return '세션 ' + usage.session_percent + '% · 주간 ' + usage.weekly_percent + '%';
+  }
+
+  // 패널 실측 높이로 본문 하단 여백(--usage-clearance)을 맞춘다(결정 L3). hidden 상태에서는
+  // offsetHeight 가 0 이므로 반드시 내용 채우기 → hidden=false 이후에 호출해야 한다(GOTCHA 4).
+  function applyUsageClearance(){
+    document.body.style.setProperty('--usage-clearance', (usageEl.offsetHeight + USAGE_CLEARANCE_MARGIN_PX) + 'px');
+  }
+
+  // 접힘 상태를 클래스·aria-expanded·하단 여백에 반영한다. 재렌더 후 복원 경로다(불변식 H1′).
+  function applyUsageCollapsedState(){
+    usageEl.classList.toggle('usage-collapsed', isUsageCollapsed);
+    usageToggleButton.setAttribute('aria-expanded', isUsageCollapsed ? 'false' : 'true');
+    applyUsageClearance();
+  }
+
+  // 컨테이너(#dzh-usage)와 토글 버튼(#dzh-usage-toggle)은 정적, 내용(#dzh-usage-body ·
+  // #dzh-usage-summary)만 파생이다(불변식 H1′, 결정 C1). usage 가 없으면(스위치 off·파일
   // 없음·계약 불일치·만료, 결정 U3·U4) 조용히 숨긴다 — 경고를 띄우지 않는다.
   function renderUsagePanel(usage){
     if(!usage){ hideUsagePanel(); return; }
@@ -292,10 +361,12 @@ try{var m=localStorage.getItem('dzh-theme');
     var weeklyBar = renderUsageBar(USAGE_WEEKLY_LABEL, usage.weekly_percent);
     if(!sessionBar || !weeklyBar){ hideUsagePanel(); return; }
     var meta = '마지막 갱신 ' + elapsedLabel(usage.sampled_at_ms) + ' ' + USAGE_CYCLE_NOTE;
-    usageEl.innerHTML = '<div class="usage-title">Claude 사용 한도</div>' + sessionBar + weeklyBar
+    usageSummaryEl.textContent = usageSummaryText(usage);
+    usageBodyEl.innerHTML = sessionBar + weeklyBar
       + '<div class="usage-meta" title="' + escapeHtml(formatTimestamp(usage.sampled_at_ms)) + '">' + meta + '</div>';
     usageEl.hidden = false;
     document.body.classList.add('has-usage');
+    applyUsageCollapsedState();
   }
 
   function renderConnectionStatus(){
@@ -337,6 +408,12 @@ try{var m=localStorage.getItem('dzh-theme');
     renderConnectionStatus();
     renderUsagePanel(snapshot.usage);
   }
+  usageToggleButton.addEventListener('click', function(){
+    isUsageCollapsed = !isUsageCollapsed;
+    persistUsageCollapsed(isUsageCollapsed);
+    applyUsageCollapsedState();
+  });
+
   render();
   setInterval(render, TICK_MS);
 
