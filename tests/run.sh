@@ -1893,10 +1893,10 @@ test_hub_unit_tests() {
   ((passed_tests++))
 }
 
-# T25: 허브 문서·상수 정합성 (하위 검증 T25-1~T25-36)
+# T25: 허브 문서·상수 정합성 (하위 검증 T25-1~T25-37)
 test_hub_docs_and_constants() {
   local test_name="T25"
-  local test_desc="허브 문서·상수 정합성 (T25-1~T25-36)"
+  local test_desc="허브 문서·상수 정합성 (T25-1~T25-37)"
   log_test_name "$test_name" "$test_desc"
 
   local hub_settings_file="$REPO_ROOT/hub/bin/hub_settings.py"
@@ -2374,6 +2374,17 @@ PYEOF
       return 1
     fi
   done
+
+  # T25-37(검수 m3 회귀): escapeHtml 이 따옴표도 이스케이프한다. usage-meta 의 title="..." 이
+  # 이 함수의 첫 속성 자리 사용처라, 따옴표를 넘기면 그대로 속성이 끊길 수 있었다.
+  if ! grep -qF '.replace(/"/g' "$hub_template_file"; then
+    record_failure "$test_name" 'T25-37: escapeHtml 에 큰따옴표 이스케이프가 없음'
+    return 1
+  fi
+  if ! grep -qF ".replace(/'/g" "$hub_template_file"; then
+    record_failure "$test_name" "T25-37: escapeHtml 에 작은따옴표 이스케이프가 없음"
+    return 1
+  fi
 
   log_ok "$test_name 통과"
   ((passed_tests++))

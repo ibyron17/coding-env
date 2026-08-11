@@ -278,8 +278,11 @@ try{var m=localStorage.getItem('dzh-theme');
       + renderTier1(project.tier1) + sessionsHtml + '</div>';
   }
 
+  // 따옴표도 이스케이프한다 — usage-meta 의 title="..." 이 이 함수의 첫 속성 자리 사용처다
+  // (검수 m3). 텍스트 자리에서는 무해하고, 속성 자리로 재사용될 다음 호출부를 미리 방어한다.
   function escapeHtml(text){
-    return String(text).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+    return String(text).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')
+      .replace(/"/g,'&quot;').replace(/'/g,'&#39;');
   }
 
   // 상주 서버(개정 쟁점 R3)는 내용이 바뀌지 않으면 hub.html 을 다시 쓰지 않는다 — 그래서
