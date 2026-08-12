@@ -93,12 +93,24 @@ class CmdOpenServerAwareTest(unittest.TestCase):
         hub_collect.CONFIG_PATH = self.original_config_path
         shutil.rmtree(self.temp_dir, ignore_errors=True)
 
+    def _stub_open_browser(self):
+        """실제 브라우저를 띄우지 않는 hub_daemon.open_browser 대체(GOTCHA 3).
+
+        `mock.patch("webbrowser.open")` 는 cmd_open 이 hub_daemon.open_browser 를 거쳐
+        `/usr/bin/open` 을 서브프로세스로 실행하는 경로를 전혀 막지 못한다 — hub_daemon
+        모듈의 함수 자체를 대체해야 한다.
+        """
+        return mock.patch.object(
+            hub_daemon, "open_browser",
+            return_value=hub_model.BrowserOpenResult(opened=True, focus_requested=True, fallback_reason=None),
+        )
+
     def test_fresh_heartbeat_and_existing_hub_html_opens_http_url_without_collecting(self) -> None:
         hub_collect.SERVER_HEARTBEAT_PATH.write_text("")  # mtime = 지금 = 신선
         hub_collect.HUB_HTML_PATH.write_text("<html></html>")
 
         with mock.patch.object(hub_collect, "collect_snapshot") as mock_collect, \
-             mock.patch("webbrowser.open"):
+             self._stub_open_browser():
             captured = io.StringIO()
             with redirect_stdout(captured):
                 exit_code = hub.cmd_open(_Args())
@@ -117,7 +129,7 @@ class CmdOpenServerAwareTest(unittest.TestCase):
 
         with mock.patch.object(hub_collect, "collect_snapshot") as mock_collect, \
              mock.patch.object(hub_collect, "write_hub_html"), \
-             mock.patch("webbrowser.open"):
+             self._stub_open_browser():
             mock_collect.return_value = mock.Mock(projects=())
             captured = io.StringIO()
             with redirect_stdout(captured):
@@ -133,7 +145,7 @@ class CmdOpenServerAwareTest(unittest.TestCase):
     def test_no_heartbeat_collects_once_and_opens_file_url_with_note(self) -> None:
         with mock.patch.object(hub_collect, "collect_snapshot") as mock_collect, \
              mock.patch.object(hub_collect, "write_hub_html"), \
-             mock.patch("webbrowser.open"):
+             self._stub_open_browser():
             mock_collect.return_value = mock.Mock(projects=())
             captured = io.StringIO()
             with redirect_stdout(captured):
@@ -145,6 +157,23 @@ class CmdOpenServerAwareTest(unittest.TestCase):
         self.assertFalse(payload["server_alive"])
         self.assertTrue(payload["url"].startswith("file://"))
         self.assertIn("server start", payload["note"])
+
+    def test_open_payload_exposes_browser_focus_field(self) -> None:
+        """계약 회귀 — `open --json` payload 에 browser_focus_requested 가 노출된다."""
+        hub_collect.SERVER_HEARTBEAT_PATH.write_text("")  # mtime = 지금 = 신선
+        hub_collect.HUB_HTML_PATH.write_text("<html></html>")
+
+        with mock.patch.object(hub_collect, "collect_snapshot") as mock_collect, \
+             self._stub_open_browser():
+            captured = io.StringIO()
+            with redirect_stdout(captured):
+                exit_code = hub.cmd_open(_Args())
+
+        self.assertEqual(exit_code, 0)
+        mock_collect.assert_not_called()
+        payload = json.loads(captured.getvalue())
+        self.assertIn("browser_focus_requested", payload)
+        self.assertTrue(payload["browser_focus_requested"])
 
 
 class CmdStatusServerSummaryTest(unittest.TestCase):

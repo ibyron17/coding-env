@@ -166,6 +166,23 @@ class ServerStatus:
     collect_stalled: bool                          # 프로세스는 살아 있는데 수집 스레드만 죽었다(검수 M2)
 
 
+# ---- 브라우저 열기 (재기동 + 포커스, docs/prps/hub-server-control-skill.md) ----
+@dataclass(frozen=True)
+class BrowserOpenResult:
+    """브라우저 열기 시도의 결과. `focus_requested` 는 '포그라운드로 올리는 경로를 썼다'는
+    뜻이며, 실제로 창이 올라왔는지는 OS 소관이라 확인하지 않는다.
+
+    `fallback_reason` 이 필요한 이유: macOS 에서 탭은 떴는데 창이 뒤에 남는 상황이 이 기능이
+    고치려는 증상이다. 폴백이 조용히 일어나면 사용자는 "고쳐졌다더니 그대로"만 보게 된다 —
+    이 필드가 그 원인을 표면화하는 유일한 창구다.
+    """
+
+    opened: bool                       # URL 을 여는 데 성공했는가
+    focus_requested: bool              # 포커스를 가져오는 경로(/usr/bin/open)로 열었는가
+    # 포커스 경로 실패 사유 또는(포커스 경로가 없던 플랫폼이면) webbrowser 예외. 정상이면 None
+    fallback_reason: str | None
+
+
 # ---- 1. 내부 이벤트 필터 ----
 def is_internal_session_start(event: HookEvent) -> bool:
     """compact 등 CLI 내부 사유로 발생한 SessionStart 인가."""

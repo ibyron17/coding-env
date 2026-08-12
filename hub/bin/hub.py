@@ -2,8 +2,9 @@
 """hub.py — CLI 엔트리. 서브커맨드 디스패치와 I/O 조립. commands/hub.md 가 이 서브커맨드들을 호출한다.
 
 `/hub`(인자 없음)는 서버를 기동하지 않는다(요구 R-2) — 하트비트가 신선하면 그 URL 을 열고,
-아니면 1회만 수집한다. 상주 서버 제어는 `server-start`/`server-stop`/`server-status`/`server-run`
-(포그라운드 디버깅용 진입점)이 전담한다(docs/prps/hub-dashboard.md 개정 쟁점 R1·R2).
+아니면 1회만 수집한다. 상주 서버 제어는 `server-start`/`server-stop`/`server-status`/
+`server-restart`/`server-run`(포그라운드 디버깅용 진입점)이 전담한다(docs/prps/hub-dashboard.md
+개정 쟁점 R1·R2).
 """
 
 import argparse
@@ -11,7 +12,6 @@ import dataclasses
 import json
 import sys
 import time
-import webbrowser
 
 import hub_collect
 import hub_daemon
@@ -68,14 +68,6 @@ def _server_is_alive() -> tuple[bool, hub_model.HubConfig]:
     return hub_model.is_server_alive(_now_ms(), heartbeat_mtime_ms, ttl_ms), config
 
 
-def _open_browser(url: str) -> bool:
-    try:
-        webbrowser.open(url)
-        return True
-    except Exception:
-        return False
-
-
 def cmd_open(args: argparse.Namespace) -> int:
     """서버가 살아 있고 hub.html 도 실재하면 수집 없이 그 URL 을 연다. 그 외에는 1회만
     수집하고 `file://` 를 연다.
@@ -111,10 +103,14 @@ def cmd_open(args: argparse.Namespace) -> int:
                 "`/hub server start` 로 켜면 항상 최신 상태가 유지됩니다."
             )
 
+    browser = hub_daemon.open_browser(url)
     payload = {
         "ok": True, "url": url, "server_alive": server_alive,
-        "browser_opened": _open_browser(url),
+        "browser_opened": browser.opened,
+        "browser_focus_requested": browser.focus_requested,
     }
+    if browser.fallback_reason is not None:
+        payload["browser_fallback_reason"] = browser.fallback_reason
     if note is not None:
         payload["note"] = note
     _report(payload, args.json)
@@ -252,6 +248,13 @@ def cmd_server_status(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_server_restart(args: argparse.Namespace) -> int:
+    """`/hub server restart` — 기존 서버 종료 → 포트 해제 대기 → 재기동. 멱등이 아니다(항상 재기동)."""
+    result = hub_daemon.restart_server()
+    _report(result, args.json)
+    return 0 if result.get("ok") else 1
+
+
 def cmd_server_run(args: argparse.Namespace) -> int:
     """`server-run` — 상주 서버 본체(포그라운드로 블로킹). `server-start` 가 spawn 하는
     내부 엔트리이며, 사람이 직접 부르는 것은 포그라운드 디버깅용이다."""
@@ -267,7 +270,7 @@ def build_parser() -> argparse.ArgumentParser:
     subcommand_names = (
         "collect", "open", "status", "install-hooks", "uninstall-hooks",
         "install-statusline", "uninstall-statusline",
-        "server-start", "server-stop", "server-status", "server-run",
+        "server-start", "server-stop", "server-status", "server-restart", "server-run",
     )
     for name in subcommand_names:
         subparser = subparsers.add_parser(name)
@@ -286,6 +289,7 @@ COMMAND_HANDLERS = {
     "server-start": cmd_server_start,
     "server-stop": cmd_server_stop,
     "server-status": cmd_server_status,
+    "server-restart": cmd_server_restart,
     "server-run": cmd_server_run,
 }
 

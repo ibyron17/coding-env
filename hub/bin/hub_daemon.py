@@ -1,8 +1,9 @@
 """hub_daemon.py — 프로세스 생명주기: 분리 spawn · ps 신원 확인 · SIGTERM/SIGKILL · 상태 보고.
 
-`is_our_server_process` 만 ★순수하다(tests/hub/test_hub_daemon.py 대상). `parse_server_record`
-는 hub_model.py 에 있다(검수 m3 — hub_collect.py 와 이중으로 유지하던 순수 파서를 하나로
-합쳤다). 나머지(`start_server`/`stop_server`/`server_status`)는 subprocess·시그널·시각에
+`is_our_server_process`·`browser_open_command`·`restart_note` 만 ★순수하다
+(tests/hub/test_hub_daemon.py 대상). `parse_server_record` 는 hub_model.py 에 있다(검수 m3 —
+hub_collect.py 와 이중으로 유지하던 순수 파서를 하나로 합쳤다). 나머지(`start_server`/
+`stop_server`/`server_status`/`open_browser`/`restart_server`)는 subprocess·시그널·시각에
 닿는 I/O 다.
 
 모듈 이름이 `hub_launchd.py` 가 아니라 `hub_daemon.py` 인 것은 개정 1(rev2)의 결과다 —
@@ -17,6 +18,7 @@ import subprocess
 import sys
 import time
 import urllib.request
+import webbrowser
 from pathlib import Path
 
 import hub_collect
@@ -35,6 +37,19 @@ SERVER_STOP_WAIT_SECONDS = 5
 SERVER_STOP_POLL_INTERVAL_SECONDS = 0.2
 SERVER_LOG_TAIL_LINES = 20
 
+# /usr/bin/open 은 -g 가 없으면 앱을 포그라운드로 올린다. 절대 경로를 쓰는 이유: PATH 에
+# 같은 이름의 사용자 스크립트가 있으면 그것이 실행될 수 있다.
+MACOS_OPEN_COMMAND_PATH = "/usr/bin/open"
+MACOS_PLATFORM_NAME = "darwin"
+BROWSER_OPEN_TIMEOUT_SECONDS = 5
+FORCED_STOP_NOTE = "정상 종료 신호에 응답하지 않아 강제 종료했습니다"
+SERVER_RESTART_PORT_WAIT_SECONDS = 3
+SERVER_RESTART_PORT_POLL_INTERVAL_SECONDS = 0.1
+ORPHANED_HEARTBEAT_REASON = (
+    "정지 직후에도 서버가 살아 있다고 판정됐습니다 — 고아 하트비트일 수 있습니다"
+    "(`/hub server status` 의 orphaned_evidence 를 확인하십시오)"
+)
+
 
 def is_our_server_process(ps_output: str, hub_py_path: str) -> bool:
     """`ps -p <pid> -o args=` 출력이 우리 hub.py server-run 인가.
@@ -51,6 +66,32 @@ def is_our_server_process(ps_output: str, hub_py_path: str) -> bool:
 # 유지하던 순수 파서를 하나로 합쳤다. 이 모듈은 (다른 모든 실사용 경로와 마찬가지로)
 # hub_collect.read_server_record() 를 통해서만 이 값을 읽는다. 직접 호출이 필요하면
 # hub_model.parse_server_record 를 쓴다.
+
+
+def browser_open_command(platform_name: str, url: str) -> list[str] | None:
+    """포커스까지 가져오며 URL 을 여는 외부 명령 argv. 지원 플랫폼이 아니면 None(webbrowser 폴백).
+
+    `url` 은 argv 원소 하나로 그대로 넣는다 — 셸을 거치면 공백이 든 `file://` 경로가 두
+    인자로 쪼개지고 셸 메타문자 주입 표면이 생긴다(GOTCHA 5). 리눅스·윈도우는 분기를 두지
+    않는다 — `webbrowser` 가 이미 그 플랫폼에서 창을 올린다.
+    """
+    if platform_name == MACOS_PLATFORM_NAME:
+        return [MACOS_OPEN_COMMAND_PATH, url]
+    return None
+
+
+def restart_note(stop_result: dict) -> str | None:
+    """stop 단계의 이례(PID 재사용·이미 종료·강제 종료)를 사용자에게 알릴 한 줄로 바꾼다. 정상이면 None.
+
+    `reason` 이 있으면 그 문구를 그대로 옮긴다 — 한국어 설명을 두 곳에서 관리하지 않기
+    위해서다(그 문구는 stop_server 가 이미 만든다).
+    """
+    reason = stop_result.get("reason")
+    if reason:
+        return reason
+    if stop_result.get("forced"):
+        return FORCED_STOP_NOTE
+    return None
 
 
 # ---- I/O: 프로세스 조회·기동·종료 ----
@@ -192,6 +233,57 @@ def _wait_for_process_exit(pid: int) -> dict:
     return {"ok": True, "was_running": True, "forced": True}
 
 
+def _wait_for_port_release(port: int) -> None:
+    """포트가 풀릴 때까지 최대 SERVER_RESTART_PORT_WAIT_SECONDS 동안 폴링한다(D5).
+
+    SIGKILL 직후 커널이 리스닝 소켓을 정리하기까지의 아주 짧은 창에 start 가 돌면 "다른
+    프로세스가 점유 중"이라는 틀린 진단이 난다. 대기는 짧고 상한이 있어야 한다(GOTCHA 2) —
+    초과해도 그냥 넘어간다. 그때는 정말 남의 프로세스이고 start 의 진단이 정확하다.
+    """
+    deadline = time.monotonic() + SERVER_RESTART_PORT_WAIT_SECONDS
+    while time.monotonic() < deadline and _is_port_occupied(port):
+        time.sleep(SERVER_RESTART_PORT_POLL_INTERVAL_SECONDS)
+
+
+def restart_server() -> dict:
+    """기존 서버를 확실히 내린 뒤 새로 띄운다(멱등 start 와 달리 항상 재기동한다).
+
+    stop 이 실패하면 start 를 시도하지 않는다 — 낡은 서버가 살아 있을 수 있는 상태에서
+    새로 띄우면 서버가 둘이 되려 시도하거나 포트 충돌로 엉뚱한 진단을 낸다(D4).
+    stop_server()·start_server() 를 그대로 호출하며(D3), 그 사이에 포트 해제를 잠깐
+    기다린다 — 두 함수의 안전장치(신원 확인·멱등)를 복제하지 않는다(GOTCHA 1).
+    """
+    stop_result = stop_server()
+    if not stop_result.get("ok"):
+        return {"ok": False, "phase": "stop", "reason": stop_result.get("reason")}
+
+    config, _config_warnings = hub_collect.load_config()
+    _wait_for_port_release(config.server_port)
+
+    start_result = start_server()
+    if start_result.get("already_running"):
+        # stop 을 성공시킨 직후이므로 이 상태는 정상이 아니다 — 고아 하트비트일 가능성이
+        # 크다(D6). 그 파일을 여기서 지우지 않는다(D7) — compare-and-delete 가 막으려던
+        # 위험(다른 셸이 그 사이 띄운 새 서버의 기록을 지우는 것)을 재현하지 않기 위해서다.
+        return {"ok": False, "phase": "start", "reason": ORPHANED_HEARTBEAT_REASON}
+    if not start_result.get("ok"):
+        result = {"ok": False, "phase": "start", "reason": start_result.get("reason")}
+        if "log_tail" in start_result:
+            result["log_tail"] = start_result["log_tail"]
+        return result
+
+    result = {
+        "ok": True,
+        "stopped_previous": stop_result.get("was_running", False),
+        "pid": start_result.get("pid"),
+        "url": start_result.get("url"),
+    }
+    note = restart_note(stop_result)
+    if note is not None:
+        result["note"] = note
+    return result
+
+
 def server_status() -> hub_model.ServerStatus:
     """프로세스 · 하트비트 · HTTP 응답 · 비정상 종료 흔적을 종합 판정한다."""
     config, _config_warnings = hub_collect.load_config()
@@ -226,4 +318,39 @@ def server_status() -> hub_model.ServerStatus:
         log_tail=_server_log_tail() if (crashed_evidence or collect_stalled) else None,
         orphaned_evidence=orphaned_evidence,
         collect_stalled=collect_stalled,
+    )
+
+
+# ---- I/O: 브라우저 ----
+def _fallback_to_webbrowser(url: str, fallback_reason: str | None) -> hub_model.BrowserOpenResult:
+    """포커스 경로가 없거나 실패했을 때 webbrowser 로 연다. 예외는 밖으로 내지 않는다(GOTCHA 7).
+
+    webbrowser.open() 이 던지는 예외도 fallback_reason 에 담는다 — 포커스 경로 실패 사유가
+    이미 있으면 그것을 보존하고, 없을 때만(포커스 경로 자체가 없던 경우) 이 예외로 채운다.
+    그러지 않으면 두 경로가 모두 실패했을 때 사유가 통째로 사라진다.
+    """
+    try:
+        opened = bool(webbrowser.open(url))
+    except Exception as error:
+        opened = False
+        if fallback_reason is None:
+            fallback_reason = str(error)
+    return hub_model.BrowserOpenResult(opened=opened, focus_requested=False, fallback_reason=fallback_reason)
+
+
+def open_browser(url: str, platform_name: str = sys.platform) -> hub_model.BrowserOpenResult:
+    """포커스 경로로 URL 을 열고, 안 되면 webbrowser 로 폴백한다. 예외를 밖으로 내보내지 않는다."""
+    command = browser_open_command(platform_name, url)
+    if command is None:
+        return _fallback_to_webbrowser(url, fallback_reason=None)
+    try:
+        result = subprocess.run(
+            command, capture_output=True, timeout=BROWSER_OPEN_TIMEOUT_SECONDS, check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired) as error:
+        return _fallback_to_webbrowser(url, fallback_reason=str(error))
+    if result.returncode == 0:
+        return hub_model.BrowserOpenResult(opened=True, focus_requested=True, fallback_reason=None)
+    return _fallback_to_webbrowser(
+        url, fallback_reason=f"{MACOS_OPEN_COMMAND_PATH} 종료 코드 {result.returncode}"
     )

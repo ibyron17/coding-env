@@ -50,6 +50,49 @@ class IsOurServerProcessTest(unittest.TestCase):
         self.assertTrue(hub_daemon.is_our_server_process(ps_output, spaced_path))
 
 
+class BrowserOpenCommandTest(unittest.TestCase):
+    """D9 — 플랫폼 판정을 순수 함수로 떼어 세 플랫폼 전부를 단위 테스트로 덮는다."""
+
+    def test_b1_darwin_uses_open_command_that_focuses(self) -> None:
+        url = "http://localhost:8794/hub.html"
+        self.assertEqual(
+            hub_daemon.browser_open_command("darwin", url),
+            ["/usr/bin/open", url],
+        )
+
+    def test_b2_linux_falls_back_to_webbrowser(self) -> None:
+        url = "http://localhost:8794/hub.html"
+        self.assertIsNone(hub_daemon.browser_open_command("linux", url))
+
+    def test_b3_windows_falls_back_to_webbrowser(self) -> None:
+        url = "http://localhost:8794/hub.html"
+        self.assertIsNone(hub_daemon.browser_open_command("win32", url))
+
+    def test_b4_url_stays_one_argv_element_even_with_spaces(self) -> None:
+        """셸 인젝션 표면 부재의 회귀(GOTCHA 5) — 공백 있는 URL 도 argv 원소 하나로 그대로 간다."""
+        url = "file:///Users/x y/.claude/hub/hub.html"
+        command = hub_daemon.browser_open_command("darwin", url)
+        self.assertEqual(len(command), 2)
+        self.assertEqual(command[1], url)
+
+
+class RestartNoteTest(unittest.TestCase):
+    """restart_server 의 stop 단계 이례를 사용자 문구로 바꾸는 순수 함수."""
+
+    def test_n1_clean_stop_has_no_note(self) -> None:
+        self.assertIsNone(hub_daemon.restart_note({"ok": True, "was_running": True}))
+
+    def test_n2_forced_kill_is_reported(self) -> None:
+        stop_result = {"ok": True, "was_running": True, "forced": True}
+        self.assertEqual(hub_daemon.restart_note(stop_result), hub_daemon.FORCED_STOP_NOTE)
+
+    def test_n3_stop_reason_is_passed_through_verbatim(self) -> None:
+        """문구를 두 곳에서 관리하지 않는다 — stop_server 가 만든 문구를 그대로 옮긴다."""
+        reason = "PID 가 재사용됐습니다 — 그 프로세스는 건드리지 않고 상태 파일만 정리했습니다"
+        stop_result = {"ok": True, "was_running": False, "reason": reason}
+        self.assertEqual(hub_daemon.restart_note(stop_result), reason)
+
+
 class HubDaemonIoScenarioTest(unittest.TestCase):
     """server_status/stop_server 의 I/O 시나리오. 실제 ~/.claude 는 건드리지 않는다."""
 
@@ -137,6 +180,154 @@ class StopServerCompareAndDeleteTest(HubDaemonIoScenarioTest):
         surviving_record = hub_collect.read_server_record()
         self.assertIsNotNone(surviving_record)
         self.assertEqual(surviving_record.pid, 222)
+
+
+class RestartServerSequenceTest(HubDaemonIoScenarioTest):
+    """restart_server 의 조합 계약(D3~D7) — stop/start 를 그대로 호출하고, stop 실패 시 start 를
+    시도하지 않으며, 고아 하트비트는 실패로 보고한다. `_wait_for_port_release` 는 실제 소켓을
+    건드리지 않도록 패치한다(테스트가 8794 포트를 폴링할 이유가 없다)."""
+
+    def setUp(self) -> None:
+        super().setUp()
+        self.wait_patcher = mock.patch.object(hub_daemon, "_wait_for_port_release")
+        self.mock_wait = self.wait_patcher.start()
+
+    def tearDown(self) -> None:
+        self.wait_patcher.stop()
+        super().tearDown()
+
+    def test_s1_stop_failure_never_starts_a_new_server(self) -> None:
+        stop_result = {"ok": False, "reason": "ps 실행 실패 — 확인할 수 없어 아무것도 하지 않았습니다"}
+        with mock.patch.object(hub_daemon, "stop_server", return_value=stop_result), \
+             mock.patch.object(hub_daemon, "start_server") as mock_start:
+            result = hub_daemon.restart_server()
+
+        mock_start.assert_not_called()
+        self.assertFalse(result["ok"])
+        self.assertEqual(result["phase"], "stop")
+        self.assertEqual(result["reason"], stop_result["reason"])
+
+    def test_s2_running_server_is_stopped_then_started(self) -> None:
+        """PRP 테스트 계획 S2 — 호출 순서가 stop → 포트대기 → start 여야 한다(GOTCHA 2 완화 회귀 보호)."""
+        stop_result = {"ok": True, "was_running": True}
+        start_result = {"ok": True, "pid": 2, "url": "http://localhost:8794/hub.html"}
+        call_order = mock.Mock()
+        with mock.patch.object(hub_daemon, "stop_server", return_value=stop_result) as mock_stop, \
+             mock.patch.object(hub_daemon, "start_server", return_value=start_result) as mock_start:
+            call_order.attach_mock(mock_stop, "stop")
+            call_order.attach_mock(self.mock_wait, "wait")
+            call_order.attach_mock(mock_start, "start")
+            result = hub_daemon.restart_server()
+
+        self.assertTrue(result["ok"])
+        self.assertTrue(result["stopped_previous"])
+        self.assertEqual(result["pid"], 2)
+        self.assertEqual(result["url"], start_result["url"])
+        self.assertNotIn("note", result)
+        default_server_port = hub_model.HubConfig().server_port
+        self.assertEqual(
+            call_order.mock_calls,
+            [mock.call.stop(), mock.call.wait(default_server_port), mock.call.start()],
+        )
+
+    def test_s2b_absent_server_is_just_started(self) -> None:
+        stop_result = {"ok": True, "was_running": False}
+        start_result = {"ok": True, "pid": 3, "url": "http://localhost:8794/hub.html"}
+        with mock.patch.object(hub_daemon, "stop_server", return_value=stop_result), \
+             mock.patch.object(hub_daemon, "start_server", return_value=start_result):
+            result = hub_daemon.restart_server()
+
+        self.assertTrue(result["ok"])
+        self.assertFalse(result["stopped_previous"])
+
+    def test_s3_already_running_after_stop_is_reported_as_failure(self) -> None:
+        stop_result = {"ok": True, "was_running": True}
+        start_result = {"ok": True, "already_running": True}
+        with mock.patch.object(hub_daemon, "stop_server", return_value=stop_result), \
+             mock.patch.object(hub_daemon, "start_server", return_value=start_result):
+            result = hub_daemon.restart_server()
+
+        self.assertFalse(result["ok"])
+        self.assertEqual(result["phase"], "start")
+        self.assertIn("orphaned_evidence", result["reason"])
+
+    def test_s4_forced_stop_surfaces_as_note(self) -> None:
+        stop_result = {"ok": True, "was_running": True, "forced": True}
+        start_result = {"ok": True, "pid": 4, "url": "http://localhost:8794/hub.html"}
+        with mock.patch.object(hub_daemon, "stop_server", return_value=stop_result), \
+             mock.patch.object(hub_daemon, "start_server", return_value=start_result):
+            result = hub_daemon.restart_server()
+
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["note"], hub_daemon.FORCED_STOP_NOTE)
+
+    def test_s5_start_failure_carries_reason_and_log_tail(self) -> None:
+        stop_result = {"ok": True, "was_running": True}
+        start_result = {
+            "ok": False,
+            "reason": "포트 8794 이 이미 사용 중입니다(다른 프로세스)",
+            "log_tail": "tail",
+        }
+        with mock.patch.object(hub_daemon, "stop_server", return_value=stop_result), \
+             mock.patch.object(hub_daemon, "start_server", return_value=start_result):
+            result = hub_daemon.restart_server()
+
+        self.assertFalse(result["ok"])
+        self.assertEqual(result["phase"], "start")
+        self.assertEqual(result["reason"], start_result["reason"])
+        self.assertEqual(result["log_tail"], start_result["log_tail"])
+
+
+class OpenBrowserFallbackTest(unittest.TestCase):
+    """D8·GOTCHA 7 — 포커스 경로 성공/실패, 미지원 플랫폼, 이중 실패를 예외 없이 흡수한다."""
+
+    URL = "http://localhost:8794/hub.html"
+
+    def test_o1_darwin_success_does_not_touch_webbrowser(self) -> None:
+        with mock.patch("subprocess.run", return_value=mock.Mock(returncode=0)) as mock_run, \
+             mock.patch("webbrowser.open") as mock_webbrowser_open:
+            result = hub_daemon.open_browser(self.URL, platform_name="darwin")
+
+        mock_run.assert_called_once()
+        mock_webbrowser_open.assert_not_called()
+        self.assertTrue(result.opened)
+        self.assertTrue(result.focus_requested)
+        self.assertIsNone(result.fallback_reason)
+
+    def test_o2_darwin_failure_falls_back_with_reason(self) -> None:
+        with mock.patch("subprocess.run", return_value=mock.Mock(returncode=1)), \
+             mock.patch("webbrowser.open", return_value=True) as mock_webbrowser_open:
+            result = hub_daemon.open_browser(self.URL, platform_name="darwin")
+
+        mock_webbrowser_open.assert_called_once()
+        self.assertTrue(result.opened)
+        self.assertFalse(result.focus_requested)
+        self.assertIsNotNone(result.fallback_reason)
+
+    def test_o3_non_darwin_uses_webbrowser_only(self) -> None:
+        with mock.patch("subprocess.run") as mock_run, \
+             mock.patch("webbrowser.open", return_value=True):
+            result = hub_daemon.open_browser(self.URL, platform_name="linux")
+
+        mock_run.assert_not_called()
+        self.assertTrue(result.opened)
+        self.assertFalse(result.focus_requested)
+
+    def test_o4_both_paths_failing_is_not_an_exception(self) -> None:
+        with mock.patch("subprocess.run", side_effect=OSError("no such file")), \
+             mock.patch("webbrowser.open", side_effect=RuntimeError("boom")):
+            result = hub_daemon.open_browser(self.URL, platform_name="darwin")
+
+        self.assertFalse(result.opened)
+
+    def test_o5_non_darwin_webbrowser_exception_still_carries_a_reason(self) -> None:
+        """검수 지적 — 포커스 경로 자체가 없는 플랫폼(fallback_reason 이 아직 None)에서
+        webbrowser.open() 마저 예외를 던지면 그 사유가 소실되지 않아야 한다."""
+        with mock.patch("webbrowser.open", side_effect=RuntimeError("boom")):
+            result = hub_daemon.open_browser(self.URL, platform_name="linux")
+
+        self.assertFalse(result.opened)
+        self.assertEqual(result.fallback_reason, "boom")
 
 
 if __name__ == "__main__":

@@ -1,6 +1,6 @@
 ---
 description: "모든 프로젝트의 세션 진행 상황을 한 페이지에서 읽기 전용으로 보는 통합 허브 — 상주 서버 제어/훅 설치"
-argument-hint: "[install|off|status|server start|server stop|server status|statusline on|statusline off]"
+argument-hint: "[install|off|status|server start|server stop|server restart|server status|statusline on|statusline off]"
 ---
 
 # Hub
@@ -41,13 +41,15 @@ argument-hint: "[install|off|status|server start|server stop|server status|statu
 /hub status               # 훅 · 이벤트 · 수집 실패 · 서버 요약 보고
 /hub server start         # 상주 서버 기동 (분리 프로세스, 세션 무관 수명). 멱등
 /hub server stop          # 상주 서버 종료 (신원 확인 → SIGTERM → 필요 시 SIGKILL)
+/hub server restart       # 상주 서버 강제 재기동 (종료 → 재기동) 후 대시보드 탭을 포커스한다. 멱등이 아니다
 /hub server status        # 프로세스 · 하트비트 · HTTP 응답 · 비정상 종료 흔적 보고
 /hub statusline on        # 터미널 상태줄에 사용량 등록 (옵트인, 다른 statusLine 있으면 거부)
 /hub statusline off       # 우리 statusLine 만 제거
 ```
 
 **`/hub` 는 어떤 경로에서도 서버를 기동하지 않는다.** 서버 기동은 언제나 사용자가
-`/hub server start` 로 직접 한다 — 자동으로 뜨지 않는다는 것이 이 개정의 핵심이다.
+`/hub server start`·`/hub server restart` 로 명시적으로 한다 — 자동으로 뜨지 않는다는 것이
+이 개정의 핵심이다.
 
 ## `/hub` (인자 없음)
 
@@ -55,12 +57,15 @@ argument-hint: "[install|off|status|server start|server stop|server status|statu
 python3 "$HOME/.claude/hub/bin/hub.py" open --json
 ```
 
-결과 JSON 의 `server_alive`·`url`·`browser_opened`·`note`(있으면)를 한 문단으로 보고한다.
+결과 JSON 의 `server_alive`·`url`·`browser_opened`·`browser_focus_requested`·`note`(있으면)를
+한 문단으로 보고한다.
 
 - `server_alive=true` — "상주 서버가 5초마다 갱신 중입니다."
 - `server_alive=false` — `note` 를 그대로 보고한다(이번 한 번만 수집했고, `/hub server start`
   로 켜면 항상 최신 상태가 유지된다는 안내가 들어 있다).
 - `browser_opened=false` — 위에 더해 "브라우저를 자동으로 열지 못했습니다. URL 을 직접 열어 주세요."
+- `browser_focus_requested=false`(이면서 `browser_opened=true`) — 탭은 열렸지만 창이 앞으로
+  오지 않았을 수 있다는 뜻이다(비-macOS 폴백 경로). `browser_fallback_reason`(있으면)을 곁들인다.
 
 ## `/hub server start` — 상주 서버 기동
 
@@ -82,6 +87,30 @@ python3 "$HOME/.claude/hub/bin/hub.py" server-stop --json
 `was_running` 여부와 (있으면) `reason`을 보고한다. `reason` 이 있는 경우는 대부분 PID
 재사용(재부팅 후 낡은 상태 파일 등)이며, **그 프로세스는 건드리지 않고 상태 파일만
 정리**했다는 뜻이다 — 실패로 취급하지 않는다.
+
+## `/hub server restart` — 상주 서버 강제 재기동 + 대시보드 포커스
+
+기존 서버를 확실히 내린 뒤 새 코드로 다시 띄운다(멱등이 아니다 — 살아 있어도 항상
+재기동한다). 두 호출을 순서대로 실행하고, **첫 호출이 `ok:false` 면 두 번째 호출을
+하지 않는다**:
+
+```bash
+python3 "$HOME/.claude/hub/bin/hub.py" server-restart --json
+```
+
+`ok:true` 면 이어서 다음을 실행하고 두 JSON 을 함께 보고한다:
+
+```bash
+python3 "$HOME/.claude/hub/bin/hub.py" open --json
+```
+
+`ok:false` 면 `open` 을 실행하지 않고 `phase`(`"stop"`|`"start"`)와 `reason` 을 그대로
+보고한다. `ok:true` 면 `stopped_previous`(원래 켜져 있었는가)·`pid`·`note`(있으면, 강제
+종료·PID 재사용 등의 이례)와, `open` 결과의 `browser_focus_requested`·`browser_opened` 를
+함께 보고한다.
+
+`server-restart` 호출이 `invalid choice: 'server-restart'` 로 **exit 2** 를 내면 설치본이
+낡았다는 뜻이다 — `hub/install.sh --force` 재실행을 안내한다.
 
 ## `/hub server status`
 

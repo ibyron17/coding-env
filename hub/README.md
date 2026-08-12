@@ -33,11 +33,16 @@ hub/install.sh              # 1. 실행 코드 설치
 
 ## 서버
 
-`/hub server start|stop|status` 로 제어하는 상주 프로세스가 포트 **8794**(고정)에서
+`/hub server start|stop|restart|status` 로 제어하는 상주 프로세스가 포트 **8794**(고정)에서
 `hub.html` 을 서빙하고, 5초마다 모든 프로젝트를 다시 수집한다.
 
 - **Claude Code 세션과 무관하게 산다.** `start_new_session=True`(POSIX `setsid`)로 띄우므로
   세션이 끝나거나 터미널이 닫혀도 서버는 계속 돈다.
+- **`/hub server restart` 는 멱등이 아니다.** `start` 와 달리 살아 있어도 항상 종료 후 다시
+  띄운다 — 코드를 고친 뒤(`hub/install.sh --force`) 새 코드로 갈아 끼우는 용도다. 종료가
+  실패하면 재기동을 시도하지 않고 그 사실을 그대로 보고한다.
+- **재기동 후에는 대시보드 탭이 포커스된다.** macOS 에서는 `/usr/bin/open` 이 브라우저를
+  포그라운드로 올린다(안 되는 환경은 기존 `webbrowser` 열기로 폴백한다).
 - **재부팅하면 사라진다.** 자동 재기동을 하지 않는다 — "상시"는 "세션이 죽여도 살아남는다"는
   뜻이지 "재부팅 후에도 뜬다"는 뜻이 아니다.
 - **크래시하면 그대로 죽는다.** 자동으로 되살리지 않는다. 대신 `/hub server status` 의

@@ -1893,10 +1893,10 @@ test_hub_unit_tests() {
   ((passed_tests++))
 }
 
-# T25: 허브 문서·상수 정합성 (하위 검증 T25-1~T25-47)
+# T25: 허브 문서·상수 정합성 (하위 검증 T25-1~T25-49)
 test_hub_docs_and_constants() {
   local test_name="T25"
-  local test_desc="허브 문서·상수 정합성 (T25-1~T25-47)"
+  local test_desc="허브 문서·상수 정합성 (T25-1~T25-49)"
   log_test_name "$test_name" "$test_desc"
 
   local hub_settings_file="$REPO_ROOT/hub/bin/hub_settings.py"
@@ -2529,6 +2529,64 @@ PYEOF
     record_failure "$test_name" "T25-47: hub_template.html 에 data:image/svg+xml 파비콘이 없음"
     return 1
   fi
+
+  # T25-48(재기동 계약 회귀): server-restart 가 CLI·데몬·커맨드 문서 세 곳에 있고,
+  # 그것을 만들면서 멱등 start 를 force 로 바꾸는 회귀(GOTCHA 1)가 없다.
+  local restart_token
+  for restart_token in "server-restart" "cmd_server_restart"; do
+    if ! grep -qF "$restart_token" "$hub_py_file"; then
+      record_failure "$test_name" "T25-48: hub.py 에 $restart_token 이 없음"
+      return 1
+    fi
+  done
+  for restart_token in "def restart_server" "def restart_note" "_wait_for_port_release"; do
+    if ! grep -qF "$restart_token" "$hub_daemon_file"; then
+      record_failure "$test_name" "T25-48: hub_daemon.py 에 $restart_token 이 없음"
+      return 1
+    fi
+  done
+  if ! grep -qF '"already_running": True' "$hub_daemon_file"; then
+    record_failure "$test_name" "T25-48: start_server 의 멱등(already_running)이 사라짐 — restart 와 별도 경로여야 한다"
+    return 1
+  fi
+  for restart_token in "server restart" "server-restart"; do
+    if ! grep -qF "$restart_token" "$hub_command_file"; then
+      record_failure "$test_name" "T25-48: commands/hub.md 에 $restart_token 이 없음"
+      return 1
+    fi
+  done
+  if ! grep -E '^argument-hint:' "$hub_command_file" | grep -qF "server restart"; then
+    record_failure "$test_name" "T25-48: argument-hint 에 'server restart' 미노출"
+    return 1
+  fi
+
+  # T25-49(브라우저 포커스 회귀): 포커스 경로가 hub_daemon 에 하나만 있고, 셸을 거치지 않으며,
+  # hub.py 에는 webbrowser 직접 호출이 남지 않는다(경로 이중화 방지).
+  local focus_token
+  for focus_token in "def browser_open_command" "/usr/bin/open" "darwin" "webbrowser"; do
+    if ! grep -qF "$focus_token" "$hub_daemon_file"; then
+      record_failure "$test_name" "T25-49: hub_daemon.py 에 $focus_token 이 없음"
+      return 1
+    fi
+  done
+  if grep -qF "shell=True" "$hub_daemon_file"; then
+    record_failure "$test_name" "T25-49: hub_daemon.py 가 shell=True 를 씀 — URL 을 셸에 넘기지 않는다"
+    return 1
+  fi
+  if grep -qF "webbrowser" "$hub_py_file"; then
+    record_failure "$test_name" "T25-49: hub.py 에 webbrowser 직접 호출이 남음 — hub_daemon.open_browser 로 단일화할 것"
+    return 1
+  fi
+  if ! grep -qF "browser_focus_requested" "$hub_command_file"; then
+    record_failure "$test_name" "T25-49: commands/hub.md 에 browser_focus_requested 보고 규칙이 없음"
+    return 1
+  fi
+  for focus_token in "restart" "포커스"; do
+    if ! grep -qF "$focus_token" "$hub_readme_file"; then
+      record_failure "$test_name" "T25-49: hub/README.md 에 서버 제어 설명($focus_token)이 없음"
+      return 1
+    fi
+  done
 
   log_ok "$test_name 통과"
   ((passed_tests++))
