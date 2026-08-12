@@ -61,6 +61,10 @@ argument-hint: "init \"<제목>\" \"<단계1|...> 또는 <그룹A:단계1,단계
 > `step` 의 네 번째 인자로 한 줄 상세를 붙이면(예: `step 3 active "폴링 스크립트 작성 중"`) 그 단계가
 > 지금 무엇을 하고 있는지가 대시보드에 바로 보인다. 생략해도 되며, 생략하면 기존 상세가 유지된다.
 
+> **`init` 은 기존 `.claude/dashboard.html` 을 보존하지 않는다.** 호출될 때마다 파일을 지우고
+> 처음부터 새로 만든다 — 이전 작업의 진행 상태도, 작업 추적 로그도 남지 않는다.
+> 전체 경로 착수 시 **1회만** 부른다.
+
 ---
 
 ## 데이터 모델 — DOM 상 표현 규격
@@ -71,20 +75,19 @@ argument-hint: "init \"<제목>\" \"<단계1|...> 또는 <그룹A:단계1,단계
 
 `<style>` 블록, `:root` 색 토큰, 카드 골격, 하단 스크립트.
 
-### 동적(치환 대상) — 7 셀렉터
+### 동적(치환 대상) — 6 셀렉터
 
 | 셀렉터 | 치환 대상 | 값 |
 |--------|----------|-----|
 | `#dz-title` | 텍스트 | 세션 제목 |
-| `#dz-subtitle` | 텍스트 | 단계 흐름 요약 · 작업 유형 |
 | `#dz-progress-bar` | inline `style="width:N%"` | 완료 단계 / 전체 단계 |
 | `#dz-progress-pct` | 텍스트 | `3/6 · 50%` |
-| `#dz-step-{n}` **(그룹 1개)** | `class` 속성 + **`data-started-at` 속성** + 자식 `.chip` 텍스트 + 자식 `.step-detail` 텍스트 | `done`\|`active`\|`wait` / **`YYYY-MM-DD HH:MM`(active 전이 시에만 각인)** / `완료`\|`진행중`\|`대기` / 한 줄 상세(빈 문자열 허용) |
+| `#dz-step-{n}` **(그룹 1개)** | `class` 속성 + 자식 `.chip` 텍스트 + 자식 `.step-detail` 텍스트 | `done`\|`active`\|`wait` / `완료`\|`진행중`\|`대기` / 한 줄 상세(빈 문자열 허용) |
 | `#dz-cell-{g}-{p}` **(그룹 2개 이상)** | `data-state` 속성 + 칸 텍스트 | `done`\|`active`\|`wait`\|`na` / `완료`\|`진행중`\|`대기`\|`–` |
-| `#dz-log` | 자식 `<li>` **prepend** + `data-current-session` 속성 + `data-server-port` 속성 | 로그 항목(최신이 위) / 현재 세션 번호 / 서빙 중인 로컬 서버 포트(없으면 빈 문자열) |
+| `#dz-log` | 자식 `<li>` **prepend** + `data-server-port` 속성 | 로그 항목(최신이 위) / 서빙 중인 로컬 서버 포트(없으면 빈 문자열) |
 | `#dz-updated` | 텍스트 | 갱신 시각 |
 
-진행 시각화 행은 **렌더링 분기에 따라 둘 중 하나**만 존재한다(셀렉터 개수는 여전히 7이며,
+진행 시각화 행은 **렌더링 분기에 따라 둘 중 하나**만 존재한다(셀렉터 개수는 여전히 6이며,
 한 파일 안에 `#dz-step-*` 과 `#dz-cell-*` 이 공존하지 않는다). 문법·모드 판정·매트릭스 마크업은
 아래 [진행 시각화 규격](#진행-시각화-규격--그룹--단계-모델) 참조.
 
@@ -103,19 +106,14 @@ argument-hint: "init \"<제목>\" \"<단계1|...> 또는 <그룹A:단계1,단계
 4. **`#dz-log-card` 는 CSS 로만 감춘다.** 스크립트가 이 id 를 `getElementById`/`querySelector` 로
    참조하지 않는다.
 
-`data-current-session` 은 새 행이 아니라 `#dz-log` 행의 하위 개념이다 — `log` 절차가
-어차피 매번 grep 하는 `#dz-log` 여는 태그에 얹혀 있어 탐색 단계를 늘리지 않는다
-(`<ul class="log" id="dz-log" data-current-session="2">`). `init` 이 세션 시작 때 갱신하고
-`log` 는 읽기만 한다. 속성이 없는 파일(세션 탭 도입 이전에 만들어진 대시보드)은 `1` 로 간주한다.
-
-`data-server-port` 도 같은 자리에 같은 이유로 얹힌다 — **`log` 절차가 어차피 매번 grep 하는 줄**에
-있어야 `log commit` 의 자동 종료가 Bash 호출을 추가하지 않는다. 「자동 발행」과 `serve` 가 쓰고,
-`log commit` 이 읽은 뒤 비운다. 값은 1024~65535 순수 숫자 또는 빈 문자열이며, **빈 문자열과 속성
-부재는 같은 뜻**(서빙 중인 서버 없음)이다.
+`data-server-port` 는 새 행이 아니라 `#dz-log` 행의 하위 개념이다 — `log` 절차가 어차피 매번
+grep 하는 `#dz-log` 여는 태그에 얹혀 있어야 `log commit` 의 자동 종료가 Bash 호출을 추가하지
+않는다. 「자동 발행」과 `serve` 가 쓰고, `log commit` 이 읽은 뒤 비운다. 값은 1024~65535 순수
+숫자 또는 빈 문자열이며, **빈 문자열과 속성 부재는 같은 뜻**(서빙 중인 서버 없음)이다.
 
 ### 구현 세부 작업 슬롯 — 동적 2 + 구조 1 (기본 상태: 비어 있음)
 
-**「동적(치환 대상) — 7 셀렉터」 표는 위 그대로 무수정이다.** 「구현」 매크로 단계 전용 고정
+**「동적(치환 대상) — 6 셀렉터」 표는 위 그대로 무수정이다.** 「구현」 매크로 단계 전용 고정
 슬롯의 셀렉터는 별도 하위 절로 둔다.
 
 | 셀렉터 | 치환 대상 | 값 | 치환 주체 |
@@ -146,7 +144,7 @@ argument-hint: "init \"<제목>\" \"<단계1|...> 또는 <그룹A:단계1,단계
 ### 로그 항목 스키마
 
 ```html
-<li class="entry" data-kind="review" data-seq="12" data-session="2">
+<li class="entry" data-kind="review" data-seq="12">
   <details open>
     <summary>
       <span class="time">17:07</span>
@@ -162,8 +160,6 @@ argument-hint: "init \"<제목>\" \"<단계1|...> 또는 <그룹A:단계1,단계
 - `data-seq` — 1부터 증가하는 정수. **필터·펼침 제어의 유일 키**이자 Edit 문자열 매칭의 앵커
 - `data-kind` — `impl` \| `review` \| `commit` \| `note` (필터 대상). `note` 는 `/dashboard log` 가 생성하지
   않는(수동 편집 전용) 예비 값이다.
-- `data-session` — 이 항목이 속한 세션 번호(**세션 탭 필터 대상**). `log` 절차가 `#dz-log` 의
-  `data-current-session` 값을 **그대로 복사**해 넣는다. 세거나 추론하는 판단이 개입하지 않는다.
 - `.badge.round` — 회차(`R1`, `R2`…). `--round` 인자가 없는 항목은 생략한다.
 - `log` 하위 명령의 결과 유형과 `data-kind`·배지의 대응:
 
@@ -204,10 +200,6 @@ UpdateMode
 | `#dz-pip-hint` | 상태·사유 한 줄. 기본 `hidden`, 스크립트가 텍스트를 넣을 때만 노출 |
 | `body.dz-pip` | PiP 창 문서의 `<body>` 에만 붙는 클래스. 좁은 창용 여백 축소 규칙의 스코프 |
 | `#dz-log-card` | 「작업 추적」 카드 `<div>`. `init`/`step`/`log` 도, 폴링도 이 요소 자체를 치환하지 않는다. PiP 압축 뷰가 CSS 로 숨기기 위한 유일한 용도이며, DOM 에서 제거하지 않는다 |
-| `#dz-now-card` | 「지금」 카드 `<div>`. 템플릿에 **항상** 존재하며, 진행중 단계가 없으면 CSS 가 통째로 숨긴다. DOM 에서 제거하지 않는다 |
-| `#dz-now-phase` | 현재 단계 `번호. 이름`. **스크립트만** 쓴다 |
-| `#dz-now-elapsed` | `42분 경과 · 마지막 기록 6분 전`. **스크립트만** 쓴다 |
-| `#dz-now-next` | `다음 → 4. 검수`. **스크립트만** 쓴다. 비면 `:empty` 가 그 줄을 숨긴다 |
 
 > **왜 `.wrap` 바깥인가**: 플로팅은 `.wrap` 서브트리를 **통째로 PiP 창으로 옮기는** 방식이다.
 > 버튼이 `.wrap` 안에 있으면 버튼도 같이 옮겨가 (a) 좁은 창을 차지하고 (b) opener 에는 창을 닫을
@@ -215,30 +207,24 @@ UpdateMode
 
 ### 불변식 추가 (기존 1~6에 이어)
 
-7. **「지금」 카드는 파생 뷰다 — `init`/`step`/`log`/`impl` 은 카드 안의 어떤 요소도 치환하지 않고,
-   폴링도 카드를 치환하지 않는다.** 카드의 입력은 `#dz-steps` 의 `li.active`(와 그
-   `data-started-at`) 및 `#dz-updated` 텍스트뿐이며, 그리는 주체는 `renderNowCard()` 하나다.
-   **카드에 직접 값을 쓰는 경로를 만드는 순간 `step` 호출 규약에 인자가 붙고**(커밋 `a6966aa` 가
-   제거한 바로 그 구조), 같은 정보의 출처가 둘로 갈라져 어느 쪽이 정답인지 알 수 없게 된다.
 8. **`data-server-port` 는 오케스트레이터만 읽고 쓴다 — 스크립트(폴링·PiP)는 이 속성을 읽지도
    쓰지도 않는다.** `syncLog` 가 `innerHTML` 만 대입하므로 라이브 DOM 의 값은 파일과 어긋날 수
    있다. 이 속성에 의존하는 JS 를 추가하는 순간 "낡은 화면 값"과 "파일의 참값"이 갈라지고,
-   같은 정보의 출처가 둘이 된다(불변식 7과 같은 실패다). 파일이 유일한 정답이다.
+   같은 정보의 출처가 둘이 된다. 파일이 유일한 정답이다.
 
 ### 폴링 동기화 계약 — 무엇을 치환하고 무엇을 보존하는가
 
-이 표가 스크립트와 DOM 사이의 계약이다. 위 「동적(치환 대상) — 7 셀렉터」 표의 **소비자 측 대응표**다.
+이 표가 스크립트와 DOM 사이의 계약이다. 위 「동적(치환 대상) — 6 셀렉터」 표의 **소비자 측 대응표**다.
 
 | 대상 | 동기화 연산 | 근거 |
 |------|------------|------|
-| `#dz-title` · `#dz-subtitle` · `#dz-progress-pct` · `#dz-updated` | `textContent` 대입 | 순수 텍스트 노드 |
+| `#dz-title` · `#dz-progress-pct` · `#dz-updated` | `textContent` 대입 | 순수 텍스트 노드 |
 | `#dz-progress-bar` | `style` 속성 대입 | 인라인 `width:N%` 만 바뀐다. 속성 대입이라 CSS transition 이 살아 있다 |
 | `#dz-steps, #dz-matrix` (둘 중 존재하는 것) | `outerHTML` 대입 | **선형/매트릭스 분기를 하나의 연산으로 흡수**한다. 한 파일에 하나만 존재한다는 불변식 1 덕분에 셀렉터 하나로 족하다 |
-| `#dz-log` | `innerHTML` 대입 | 항목 prepend·`<details open>` 회수까지 파일이 곧 정답이다. **여는 태그의 속성(`data-current-session`·`data-server-port`)은 `innerHTML` 대입 대상이 아니어서 폴링이 건드리지 않는다** — 라이브 DOM 의 값은 파일보다 낡을 수 있으며, 그래도 되는 이유는 불변식 8 이다 |
-| `input[name="dzs"]` · `input[name="dzf"]` · `label[for^="dz…"]` · `<style>` | **치환하지 않는다** | 라디오를 재삽입하면 사용자가 고른 유형 필터·세션 탭이 5초마다 초기화된다. 개수가 달라지면(=새 세션) **전체 리로드**로 처리한다 |
+| `#dz-log` | `innerHTML` 대입 | 항목 prepend·`<details open>` 회수까지 파일이 곧 정답이다. **여는 태그의 속성(`data-server-port`)은 `innerHTML` 대입 대상이 아니어서 폴링이 건드리지 않는다** — 라이브 DOM 의 값은 파일보다 낡을 수 있으며, 그래도 되는 이유는 불변식 8 이다 |
+| `input[name="dzf"]` · `label[for^="dzf-"]` · `<style>` | **치환하지 않는다** | 라디오를 재삽입하면 사용자가 고른 유형 필터가 5초마다 초기화된다 |
 | `#dz-pip-btn` · `#dz-pip-hint` | **치환하지 않는다** | `.wrap` 바깥 = 동기화 영역 밖 |
 | `#dz-impl-card` | `outerHTML` 대입 | 카드 안에 라디오·`<details>` 같은 **사용자 상태가 하나도 없어** 통째 교체가 안전하다. 항목·카운터를 따로 동기화하면 함수가 둘로 늘고, 목록 길이가 바뀌는 `impl set` 순간을 별도로 처리해야 한다 |
-| `#dz-now-card` (와 그 자식 전부) | **치환하지 않는다.** 대신 `apply()` 말미(`resizePipToFit()` **직전**)에 `renderNowCard()` 를 호출한다 | 카드 내용은 `#dz-steps`·`#dz-updated` **파생**이다. 파일에서 카드 HTML 을 가져와 대입하면 (a) 파일이 쓰인 시점의 낡은 경과 시간이 잠깐 들어왔다가 30초 틱이 덮어써 값이 깜빡이고, (b) 같은 값을 만드는 경로가 둘이 된다(불변식 7). `#dz-impl-card` 를 `outerHTML` 로 통째 교체하는 것과 **정반대 판단이며 그 이유는 파생 여부 하나**다 |
 
 **동기화 단위는 "파일 전체 문자열"이다.** 직전 폴링에서 받은 HTML 과 **문자열이 같으면 아무것도 하지
 않는다.** 라이브 DOM 과 비교하지 않는 이유: 사용자가 `<details>` 를 손으로 펼치면 라이브 DOM 은
@@ -294,7 +280,7 @@ Cell
 
 - 그룹명·단계명에 `|` `:` `,` 를 쓰지 않는다(구분자와 충돌).
 - 그룹 문법으로 그룹을 1개만 준 경우(`"worktree:설계,구현"`)도 유효하다. 렌더링은 **그룹 수**로
-  결정되므로 선형 화면이 나오고, 잃어버릴 뻔한 그룹명은 `#dz-subtitle` 앞머리에 들어간다.
+  결정되므로 선형 화면이 나오고, 그룹명은 화면에 표시되지 않는다(선형 렌더링에는 행 머리가 없다).
 
 ### 열(column) 확정 규칙
 
@@ -306,7 +292,7 @@ Cell
 - 관례(강제 아님): 게이트처럼 단계가 1개인 그룹은 인자 목록 **맨 뒤**에 둔다. 그래야 그 그룹만의
   고유 열이 표의 오른쪽 끝에 생겨 `na` 칸이 한곳에 모인다.
 
-### 매트릭스 마크업 (`init` 6단계가 생성)
+### 매트릭스 마크업 (`init` 5단계가 생성)
 
 `.card` 안, 기존 `<ol class="steps" id="dz-steps">...</ol>` 이 있던 자리를 통째로 대체한다.
 **칸은 반드시 한 줄에 하나씩** 쓴다.
@@ -368,100 +354,25 @@ Cell
 
 ## `init` — 메인 세션이 수행할 절차
 
-1. `.claude/dashboard.html` 존재 여부를 확인한다.
-   - **이미 존재하면**: 아래 a~e 를 수행해 이번 호출을 "새 작업의 시작"으로 반영한다.
-     `init` 은 전체 경로 착수 시 **한 번만** 부르는 명령이다(같은 작업을 이어가는 도중에는
-     `step`·`log` 만 쓰고 `init` 을 다시 부르지 않는다) — 그래서 파일이 이미 있는 상태에서
-     `init` 이 다시 불렸다는 사실 자체가 곧 새 작업이 시작됐다는 신호다. 로그(작업 추적)만
-     보존하고, 제목·부제·진행 시각화·진행률은 이번 인자로 새로 그린다. 안내에는 "이전 작업
-     기록은 보존하고 이번 작업 내용으로 대시보드를 새로 그렸습니다"라는 취지를 포함한다.
+> **`init` 은 언제나 대시보드를 처음부터 새로 만든다.** 기존 `.claude/dashboard.html` 이 있으면
+> 로그를 포함해 전부 버리고 이번 인자로 새로 그린다. 오케스트레이터에게는 "새 메인 세션인지 같은
+> 세션의 다음 작업인지"를 구분할 수단이 없고 — `init` 호출 자체가 유일한 신호다 — 이 파일은
+> 기능 단위로 만들고 끝나면 지우는 임시 산출물이다. 그래서 존재 여부로 분기하지 않는다.
 
-     a. **세션 번호 확정**: Bash 로 `grep -n 'id="dz-log"' .claude/dashboard.html` 을 실행해
-        `#dz-log` 여는 태그의 줄 번호와 전문을 얻는다. 그 태그의 `data-current-session="{P}"`
-        값이 직전 세션 번호다. 이번 세션 번호는 `N = P + 1`.
-        속성이 아예 없으면 세션 탭 도입 이전에 만들어진 파일이므로, 그 줄부터 `limit=60` 으로
-        Read 해 보이는 `.session-head` 의 `data-session` 최댓값을 `P` 로 삼는다(하나도 없으면 `P=1`).
+1. **자리를 비우고 템플릿을 쓴다.** 먼저 Bash 1회:
+   ```bash
+   mkdir -p .claude && rm -f .claude/dashboard.html
+   ```
+   `mkdir -p` 도 `rm -f` 도 대상이 없을 때 조용히 성공하므로 존재 확인이 필요 없다.
+   **이 제거를 생략하지 않는다** — Write 도구는 이 세션에서 읽지 않은 기존 파일을 덮어쓰지 못한다.
+   먼저 지우면 Write 는 언제나 "새 파일 생성"이 되어 절차가 결정적이다.
 
-     b. **현재 세션 번호 갱신**: `#dz-log` 여는 태그를 `data-current-session="{N}"` 으로 치환한다.
-        속성이 없었다면 `id="dz-log"` 바로 뒤에 새로 넣는다. Edit 의 `old_string` 은 a 에서 읽은
-        태그 전문을 그대로 쓴다(태그 내용이 세션마다 달라지므로 고정 문자열로 매칭하지 않는다).
+   이어서 [템플릿 전문](#템플릿-전문)을 **한 글자도 고치지 않고** 그대로 `.claude/dashboard.html`
+   로 Write 한다. 값 채우기는 2번부터의 Edit 이 한다.
 
-     c. **세션 구분 항목 prepend**: 그 태그 바로 뒤에 아래를 삽입한다. `{HH:MM}` 은 현재 시각.
-        ```html
-        <li class="session-head" data-session="{N}">세션 {N} 시작 · {HH:MM}</li>
-        ```
+   > 아래 모든 Edit 의 `old_string` 은 **방금 쓴 템플릿의 해당 줄 전문 그대로**다. 파일 내용을
+   > 우리가 직접 썼으므로 grep 으로 앵커를 찾을 필요가 없다.
 
-     d. **세션 탭 갱신**: 아래 [세션 탭 갱신](#세션-탭-갱신--init-1-d-의-하위-절차) 절차를 수행한다.
-
-     e. **현재 작업 상태를 이번 인자로 새로 그린다.** 대상 줄의 기존 내용을 모른다고
-        가정하고(파일이 방금 만들어진 게 아니라 이미 있던 것이므로), `step`·`log` 절차와
-        같은 **grep 앵커** 방식으로 찾는다.
-
-        **먼저 템플릿 세대를 확인한다**: `grep -c 'dz-now-card' .claude/dashboard.html` 가
-        0이면 이 파일은 옛 템플릿 세대다 — 「지금」 카드 등 이후 추가된 기능이 `<style>`·
-        `<script>` 에 아예 없다는 뜻이다. 이 단계는 골격·스타일·스크립트를 건드리지
-        않으므로(제목·부제·진행 상태만 새로 그린다) 그 격차는 이 절차만으로 해소되지
-        않는다. 그 사실을 한 줄로 보고한다("이 대시보드는 오래된 템플릿 버전입니다 — 최신
-        기능을 쓰려면 파일을 지우고 새로 만드는 게 낫습니다"). 로그를 버리는 결정이
-        아니므로 확인 없이 아래로 계속 진행해도 된다.
-
-        Bash 1회로 필요한 줄을 한 번에 확보한다:
-        ```bash
-        grep -n -e 'id="dz-title"' -e 'id="dz-subtitle"' -e 'id="dz-progress-bar"' \
-          -e 'id="dz-progress-pct"' -e 'id="dz-steps"' -e 'id="dz-matrix"' -e 'id="dz-updated"' \
-          -e 'id="dz-impl-tasks"' -e 'id="dz-impl-count"' -e 'id="dz-impl-1"' \
-          .claude/dashboard.html
-        ```
-        `id="dz-steps"` 와 `id="dz-matrix"` 는 한 파일에 하나만 존재한다(불변식 1) — 매칭된
-        쪽이 6단계가 다룰 대상이다. `id="dz-impl-tasks"`·`id="dz-impl-count"` 는 템플릿에
-        **항상** 있다(`impl set` 0단계의 "결과 2줄 → 정상"과 같은 전제) — 이 둘이 매칭되지
-        않는 경우는 이 기능 도입 이전 세대 파일뿐이며, 그때는 위 세대 확인에서 이미 걸렸을
-        것이다. `id="dz-impl-1"` 은 `impl set` 이 실제로 항목을 채운 적이 있을 때만
-        매칭된다(`impl set` 0단계와 같은 앵커) — 아래 구현 세부 작업 초기화의 실행 여부를
-        가른다.
-
-        이어서 3·4단계(인자 파싱·열 목록 확정, 판단만 하는 단계라 Edit 없음)를 수행한다.
-
-        **2·5·7·8단계**는 대상이 전부 **한 줄**이므로 위에서 읽은 줄 전문을 그대로
-        `old_string` 으로 삼아 Edit 으로 치환한다.
-
-        **6단계**는 대상이 **여러 줄**이라 grep 만으로는 `old_string` 을 확보할 수 없다 —
-        시작 줄부터 `limit=60` 으로 Read 해 닫는 태그(선형이면 `</ol>`, 매트릭스면
-        `</table>`)까지 요소 전체를 읽고, 그 전문을 `old_string` 으로 삼는다. `new_string`
-        은 "빈 `<ol>` 을 채운다"(6단계 본문의 표현)가 아니라 **래퍼를 포함한 요소 전체**다
-        — 선형이면 `<ol class="steps" id="dz-steps">` 여는 태그 + `<li>` N개 + `</ol>`,
-        매트릭스면 [매트릭스 마크업](#매트릭스-마크업-init-6단계가-생성)의
-        `<table>…</table>` 전체를 그대로 쓴다(폴링의 `syncVisualization()` 과 같은
-        대상·같은 치환 방식 — `wrap.querySelector('#dz-steps,#dz-matrix').outerHTML = …`
-        와 동등하다). 닫는 태그가 `limit` 안에 안 보이면(그룹·열이 많은 매트릭스) `limit`
-        을 늘려 다시 Read 한다 — 잘린 전문을 `old_string` 으로 쓰면 요소가 절반만 치환돼
-        마크업이 깨진다.
-
-        **구현 세부 작업 초기화**: `id="dz-impl-1"` 이 매칭되지 **않았으면**(옛 작업이
-        `impl set` 을 쓴 적이 없거나 이미 빈 목록) 이 단계 전체를 건너뛴다 — `<ol>` 이 이미
-        비어 있고 `#dz-impl-count` 가 이미 `0/0 · 0%` 인 상태에서 같은 값으로 다시 Edit 을
-        시도하면 `old_string` 과 `new_string` 이 같아 실패한다(「포트 각인」 2번과 같은
-        이유). `id="dz-impl-1"` 이 매칭**됐으면**(옛 작업이 실제로 항목을 채워 뒀다는 뜻)
-        같은 방식(시작 줄부터 Read 해 `</ol>` 까지 확보)으로 `id="dz-impl-tasks"` 요소
-        전체를 아래 빈 목록으로 치환하고,
-        ```html
-            <ol class="steps" id="dz-impl-tasks">
-            </ol>
-        ```
-        `#dz-impl-count` 텍스트를 `0/0 · 0%` 로 되돌린다 — 그러지 않으면 옛 작업의 세부
-        작업 목록과 진행률이 새 작업 화면에 그대로 남는다. `#dz-impl-card` 자체는 목록이
-        비면 CSS `:has()` 가 자동으로 숨기므로 손대지 않는다.
-
-        **9단계(로그 초기화)는 건너뛴다** — 로그는 a~d 가 이미 처리했고, 비우면 방금 보존한 이전 세션 기록이 사라진다.
-
-     이어서 10단계([자동 발행](#자동-발행--init-의-공통-하위-절차))를 수행하고 절차를
-     **여기서 종료**한다. **이전 작업의 단계 진행 상태·진행률·구현 세부 작업은 복원되지
-     않는다** — 안내에 이 점을 포함한다(예: "이전 작업 기록은 로그에 남고, 진행 상태는
-     이번 작업 내용으로 새로 시작합니다").
-
-   - **존재하지 않으면**: `.claude/` 디렉토리가 없으면 생성한 뒤, 아래
-     [템플릿 전문](#템플릿-전문)을 그대로 `.claude/dashboard.html` 로 Write하고
-     2번부터 계속 진행한다(템플릿은 `data-current-session="1"`, 탭 바 없음).
 2. `#dz-title` 텍스트를 `<제목>` 인자로 치환한다.
 
 3. **인자 파싱 — 그룹 목록으로 정규화한다.**
@@ -475,77 +386,38 @@ Cell
    열 목록 = 모든 그룹의 단계명을 최초 등장 순서로 중복 없이 모은 것.
    전체 칸 수 N = 각 그룹의 단계 개수의 합(열 수 × 그룹 수가 아니다).
 
-5. `#dz-subtitle` 을 아래 형식으로 치환한다. 작업 유형(예: "전체 경로")은 호출한 오케스트레이터가
-   이미 알고 있는 값을 채운다.
-   - 그룹 1개(이름 없음): `"<단계1> → <단계2> → … · <작업 유형>"`          (기존과 동일)
-   - 그룹 1개(이름 있음): `"<그룹명> · <단계1> → <단계2> → … · <작업 유형>"`
-   - 그룹 2개 이상:       `"<G>개 영역 · <열1> → <열2> → … · <작업 유형>"`
-
-6. **진행 시각화를 렌더링한다 — 분기 기준은 그룹 수 하나뿐이다.**
+5. **진행 시각화를 렌더링한다 — 분기 기준은 그룹 수 하나뿐이다.**
    - **그룹이 1개**: 템플릿의 `<ol class="steps" id="dz-steps">` 내부를 아래 `<li>` N개로 채운다
      (기존과 완전히 동일. 1번이 active, 나머지는 wait).
      ```html
-     <li id="dz-step-1" class="active" data-started-at="{YYYY-MM-DD HH:MM}"><span class="num">1</span>{단계명}<span class="chip">진행중</span><span class="step-detail"></span></li>
+     <li id="dz-step-1" class="active"><span class="num">1</span>{단계명}<span class="chip">진행중</span><span class="step-detail"></span></li>
      <li id="dz-step-{n}" class="wait"><span class="num">{n}</span>{단계명}<span class="chip">대기</span><span class="step-detail"></span></li>
      ```
-     `{YYYY-MM-DD HH:MM}` 은 8단계에서 `#dz-updated` 에 쓰는 것과 **같은 문자열**이다(새로 구할 값이
-     아니다). 그룹 2개 이상(매트릭스) 분기는 한 글자도 바뀌지 않는다 — `data-state` 에 시각을
-     붙이지 않는다.
-   - **그룹이 2개 이상**: 템플릿의 아래 두 줄(`<ol>` 요소 전체)을 [매트릭스 마크업](#매트릭스-마크업-init-6단계가-생성)의
+   - **그룹이 2개 이상**: 템플릿의 아래 두 줄(`<ol>` 요소 전체)을 [매트릭스 마크업](#매트릭스-마크업-init-5단계가-생성)의
      `<table>` 로 통째로 치환한다. 각 그룹의 **첫 단계 칸**이 active, 나머지 칸은 wait, 그룹에 없는 단계는 na 다.
      ```html
      <ol class="steps" id="dz-steps">
      </ol>
      ```
 
-7. `#dz-progress-bar` 의 `style` 을 `width:0%` 로, `#dz-progress-pct` 텍스트를 `0/N · 0%` 로 치환한다.
-8. `#dz-updated` 를 현재 시각(예: `2026-08-04 17:02`)으로 치환한다.
-9. `#dz-log` 는 템플릿 그대로 빈 목록(`<ul class="log" id="dz-log" data-current-session="1" data-server-port=""></ul>`)으로 둔다 — 아직 로그가 없다.
-10. 아래 [자동 발행](#자동-발행--init-의-공통-하위-절차) 절차를 수행한다.
-    (기존의 `file://` 안내는 자동 발행이 서버를 띄우지 못했을 때의 **폴백 티어**로 그 안에 살아 있다.)
+6. `#dz-progress-bar` 의 `style` 을 `width:0%` 로, `#dz-progress-pct` 텍스트를 `0/N · 0%` 로 치환한다.
 
-#### 세션 탭 갱신 — `init` 1-d 의 하위 절차
+7. `#dz-updated` 를 현재 시각(예: `2026-08-12 17:02`)으로 치환한다.
 
-`grep -c 'dzs-all' .claude/dashboard.html` 로 탭 바 존재 여부를 판정한다.
+8. `#dz-log` 는 템플릿 그대로 빈 목록
+   (`<ul class="log" id="dz-log" data-server-port=""></ul>`)으로 둔다 — **Edit 하지 않는다.**
 
-**결과가 0 (탭 바 없음 — 이 대시보드에 세션이 둘이 된 첫 순간)**
+9. 아래 [자동 발행](#자동-발행--init-의-공통-하위-절차) 절차를 수행한다.
+   (기존의 `file://` 안내는 자동 발행이 서버를 띄우지 못했을 때의 **폴백 티어**로 그 안에 살아 있다.)
 
-1. `<input type="radio" name="dzf" id="dzf-all" class="dzf" checked>` 줄 **앞**에
-   아래를 삽입한다. `모든 세션` 이 기본 선택이고, 세션 탭은 **큰 번호가 왼쪽**이다
-   (`{N}`, `{N-1}`, …, `1` 순으로 나열. 보통 `N=2` 이므로 탭 3개).
-   ```html
-   <input type="radio" name="dzs" id="dzs-all" class="dzs" checked><label for="dzs-all">모든 세션</label>
-   <input type="radio" name="dzs" id="dzs-{N}" class="dzs"><label for="dzs-{N}">세션 {N}</label>
-   <input type="radio" name="dzs" id="dzs-1" class="dzs"><label for="dzs-1">세션 1</label>
-   <br>
-   ```
-   `<br>` 은 세션 탭 줄과 유형 필터 줄을 분리하는 줄바꿈이다. wrapper `div` 와 달리 `<br>` 은
-   빈 요소라 `~` 형제 결합자를 끊지 않는다 — 라디오·`#dz-log` 는 여전히 `.card` 의 직계
-   형제로 남는다. 세션 1 탭은 이후 절대 삭제되지 않는 고정 앵커이므로, 세션이 늘어나도
-   이 `<br>` 의 위치(세션 탭 그룹의 맨 끝)는 항상 유지된다.
-2. `<style>` 안의 `/* DZ:SESSION-RULES */` 마커 줄 **바로 뒤**에 세션 `1`~`{N}` 각각에 대해
-   아래 규칙을 한 줄씩 추가한다.
-   ```css
-   #dzs-{n}:checked ~ #dz-log .entry:not([data-session="{n}"]){display:none}
-   ```
-
-**결과가 1 이상 (탭 바 있음)**
-
-1. `<label for="dzs-all">모든 세션</label>` **바로 뒤**에 이번 세션 탭 1개를 삽입한다.
-   ```html
-   <input type="radio" name="dzs" id="dzs-{N}" class="dzs"><label for="dzs-{N}">세션 {N}</label>
-   ```
-2. `/* DZ:SESSION-RULES */` 마커 바로 뒤에 이번 세션 규칙 1줄을 추가한다.
-
-**새 탭 라디오에 `checked` 를 넣지 않는다.** 기본 선택은 언제나 `#dzs-all` 이다. 새 탭에도
-`checked` 를 달면 같은 그룹에 `checked` 가 둘이 되어 문서 순서상 뒤엣것이 이기고, 페이지가
-새로고침될 때마다 사용자가 고른 탭이 무시된다.
+10. **보고**에 "대시보드를 새로 발행했습니다 — 이전 대시보드의 내용(작업 추적 로그 포함)은
+    남지 않습니다"를 한 줄 포함한다.
 
 ## `step` — 메인 세션이 수행할 절차 (Bash 1회 + Edit 3회, 결정적)
 
-> 기존 절차는 대상 줄의 전문을 LLM 이 "알고 있다"고 가정했다. 세션 2 가 기존 대시보드를 이어받는
-> 경우(단계명을 모른다) 이 가정이 깨진다. 칸이 16개로 늘어나면 훨씬 자주 깨진다. 그래서 `log` 가
-> 이미 검증한 **grep 앵커** 방식으로 두 분기(선형/그룹)를 통일한다.
+> 기존 절차는 대상 줄의 전문을 LLM 이 "알고 있다"고 가정했다. 칸이 16개로 늘면 줄 전문을
+> 기억한다는 가정이 자주 깨진다. 그래서 `log` 가 이미 검증한 **grep 앵커** 방식으로
+> 두 분기(선형/그룹)를 통일한다.
 
 0. **대상 줄과 진행률 줄을 한 번에 확보한다.** Bash 1회:
    ```bash
@@ -578,22 +450,6 @@ Cell
    - **매트릭스 모드(`<g>.<p>`)에서 상세 인자가 주어지면**, 상태 갱신은 정상 수행하고 **상세는
      무시했음을 한 줄 보고한다.** 중단하지 않는다 — 상태 갱신까지 막으면 부가 정보 손실이
      진행률 정지라는 더 큰 손실로 번진다.
-
-   **`data-started-at` 각인 규칙 (선형 모드 전용, 인자 없음)**
-
-   | 전이 | 동작 |
-   |------|------|
-   | 이전 상태 ≠ `active` **이고** 새 상태 = `active` | 같은 Edit 안에서 `class` 뒤에 `data-started-at="{YYYY-MM-DD HH:MM}"` 를 현재 시각으로 넣는다(이미 있으면 값만 바꾼다) |
-   | 그 외 모든 전이 | **건드리지 않는다.** 있으면 그대로 두고, 없으면 없는 대로 둔다 |
-
-   - **이전 상태는 0단계 grep 결과 줄에 그대로 적혀 있다** — 진행률 전이(±1) 산술과 **완전히 같은
-     출처**를 한 번 더 읽을 뿐이다. 새 Bash 호출도, 새 Edit 도, 새 인자도 없다.
-   - 형식은 `#dz-updated` 와 **글자 하나까지 동일**하다(`2026-08-07 09:20`). 3단계에서 어차피 만드는
-     문자열이라 오케스트레이터가 새로 배울 것이 없다.
-   - **이미 `active` 인 단계를 다시 `active` 로 부를 때(상세만 갱신하는 경우) 시각을 새로 찍지
-     않는다.** 찍으면 경과 시간이 0으로 되돌아가 이 기능의 유일한 새 정보가 파괴된다.
-   - **매트릭스 모드(`<g>.<p>`)에서는 각인하지 않는다.** `.step-detail` 미지원과 같은 경계다
-     (설계 결정 3). 보고도 하지 않는다 — 애초에 사용자가 요청한 동작이 아니기 때문이다.
 
 2. **진행률 재계산** — 0에서 읽은 `#dz-progress-pct` 텍스트가 `"M/N · P%"` 이므로 M·N 을 그대로 얻는다.
    완료 칸 수는 다시 세지 않고 **전이로 계산한다**:
@@ -699,10 +555,9 @@ grep -c 'dz-impl-[0-9].*class="done"' .claude/dashboard.html
 0. **최신 항목만 확인한다(파일 전체를 Read하지 않는다)**:
    a. Bash 로 `grep -n 'id="dz-log"' .claude/dashboard.html` 를 실행해 로그 시작 줄 번호 `L` 과
       그 줄의 전문을 얻는다. `id="dz-log"` 는 문서 내 유일 문자열이다(`<style>` 과 헤더 주석의
-      `#dz-log` 는 `id=` 형태가 아니라 매칭되지 않는다). 이 줄의 `data-current-session="{C}"`
-      값이 **이번 항목이 속할 세션 번호**다(속성이 없으면 `C=1`). 태그 전문이 세션마다
-      달라지므로 grep 은 반드시 이 부분일치 패턴을 쓴다 — 완전일치는 속성이 붙는 순간
-      영원히 매칭에 실패한다.
+      `#dz-log` 는 `id=` 형태가 아니라 매칭되지 않는다). 태그 전문은 `data-server-port` 값이
+      상황마다 달라지므로, grep 은 반드시 이 부분일치 패턴을 쓴다 — 완전일치는 속성이 붙는
+      순간 영원히 매칭에 실패한다.
    b. `Read` 도구로 `offset=L, limit=60` 만 읽어 최신 항목 몇 개(보통 3~4개)의 `data-seq` 를
       확인한다. 로그는 항상 최신순으로 prepend 되므로, 이 창(window) 안에서 처음 만나는
       `data-seq` 가 곧 전체 로그의 최댓값 `S` 다(로그가 비어 있으면 `S=0`).
@@ -718,8 +573,8 @@ grep -c 'dz-impl-[0-9].*class="done"' .claude/dashboard.html
    이 단계를 생략한다.
    → 결과적으로 **항상 최신 3건만 펼쳐진다.**
 2. **prepend**: 0-a 에서 읽은 `#dz-log` 여는 태그 **전문**을 `old_string` 앵커로 삼아 그 바로
-   뒤에 `data-seq="S+1"`, `data-session="C"` 인 새 `<li>` 를 위
-   [로그 항목 스키마](#로그-항목-스키마)대로 삽입한다(태그 텍스트가 세션마다 다르므로
+   뒤에 `data-seq="S+1"` 인 새 `<li>` 를 위
+   [로그 항목 스키마](#로그-항목-스키마)대로 삽입한다(태그 텍스트가 상황마다 다르므로
    고정 문자열을 앵커로 쓰지 않는다).
    - `data-kind` 는 위 대응표를 따른다.
    - `--round N` 이 주어졌으면 `<span class="badge round">R{N}</span>` 을 결과 배지 앞에 넣는다.
@@ -773,7 +628,7 @@ grep -c 'dz-impl-[0-9].*class="done"' .claude/dashboard.html
 
 ## 자동 발행 — `init` 의 공통 하위 절차
 
-> `init` 의 **두 분기 모두**(신규 생성 후 10단계 / 기존 파일 조기 종료)가 이 절차를 부른다.
+> `init` 의 마지막 단계(9단계)가 이 절차를 부른다.
 > **`step`·`log`·`impl` 은 이 절차를 부르지 않는다** — 서버를 띄우지도, 브라우저를 열지도 않는다.
 > 세션 중 수십 번 불리는 명령이 프로세스를 만들거나 창을 띄우면 안 된다.
 >
@@ -870,6 +725,12 @@ print(free, 'FREE') if free else print('NONE')
 1. **이 세션에 URL 을 여는 도구가 이미 있으면 그것을 쓴다.** 브라우저 pane, 브라우저 MCP 서버 등
    **지금 사용 가능한 도구 목록에 실제로 존재하는** 것만 해당한다. **없다고 새로 설치하거나
    설정하지 않는다.**
+   - 그 도구가 탭 목록 조회·탭 선택(select/activate/focus 계열) 도구를 **함께 제공하면**,
+     navigate 직후 방금 연 탭을 **전면으로 올리는 호출을 한 번만** 더 한다. navigate 만으로는
+     탭이 백그라운드에 열려 사용자가 보던 화면이 그대로일 수 있다.
+   - 그런 도구가 **없으면 navigate 로 끝낸다.** 없는 기능을 다른 수단으로 흉내 내지 않는다
+     (「없으면 설치하지 않는다」와 같은 원칙이다).
+   - 두 호출 모두 **한 번씩만** 하고, 실패는 무시하고 5번으로 간다.
 2. **없으면 OS 기본 열기 명령을 시도한다.** 아래를 모두 만족할 때만 실행한다.
    - `$SSH_CONNECTION` 이 설정돼 **있지 않다.** 설정돼 있으면 원격 세션이므로 **시도하지 않는다** —
      명령이 열어 봐야 사용자가 보는 화면이 아니고, 애초에 그 포트는 원격 머신 것이다.
@@ -877,6 +738,8 @@ print(free, 'FREE') if free else print('NONE')
    - `uname -s` 결과가 `Linux` **이고** `$DISPLAY` 또는 `$WAYLAND_DISPLAY` 중 하나가 설정돼 있다
      → `xdg-open "<URL>"`
    - 그 밖의 경우(판정 불가, 헤드리스, 컨테이너) → **시도하지 않는다.**
+   - `open`/`xdg-open` 은 **기본이 곧 포커스**다. macOS 에서 `-g`(백그라운드) 옵션을 **붙이지
+     않는다** — 붙이면 탭은 열리지만 창이 뒤에 남아 이번 요구가 무너진다.
 3. **둘 다 못 하면 아무것도 하지 않는다.** 5번의 보고에 URL 이 이미 들어 있으므로 사용자가 직접 연다.
 
 > 명령이 실패했는지 성공했는지 **깊이 판정하지 않는다.** 종료 코드가 0 이 아니면 열지 못한 것으로
@@ -908,7 +771,7 @@ print(free, 'FREE') if free else print('NONE')
    `old_string` 은 1에서 읽은 전문을 그대로 쓴다.
    - `data-server-port="…"` 가 이미 있으면 **값만** `{포트}` 로 바꾼다.
    - 없으면(이 기능 도입 이전에 만들어진 대시보드) 여는 태그의 `>` **바로 앞**에
-     ` data-server-port="{포트}"` 를 삽입한다. `data-current-session` 앞으로 끼워 넣지 않는다.
+     ` data-server-port="{포트}"` 를 삽입한다.
 3. **이 절차의 실패는 호출자를 중단시키지 않는다.** 각인이 없으면 `log commit` 이 아무것도 하지
    않을 뿐이고, 사용자는 `/dashboard serve stop {포트}` 로 언제든 직접 끌 수 있다
    (「자동 발행」의 실패 비차단 원칙과 같다).
@@ -1032,25 +895,17 @@ print(free, 'FREE') if free else print('NONE')
 ### 필터 — JS 없이 CSS 로
 
 라디오를 `#dz-log` 의 **앞 형제**(같은 부모의 직전 형제들)로 두고 `~` 결합자로 제어한다.
-래퍼 `div` 로 감싸면 `~` 결합자가 `#dz-log` 에 닿지 않으므로 감싸지 않는다. 두 개의
-독립된 라디오 그룹이 있다:
-
-| 그룹 | `name` | 항목 | 생성 시점 |
-|------|--------|------|----------|
-| 유형 필터 | `dzf` | 전체 / 구현 / 검수 | 템플릿에 고정 (3개) |
-| 세션 탭 | `dzs` | 모든 세션 / 세션 N … 세션 1 | 두 번째 세션부터 `init` 이 동적 생성 |
+래퍼 `div` 로 감싸면 `~` 결합자가 `#dz-log` 에 닿지 않으므로 감싸지 않는다. 라디오·라벨·
+`#dz-log` 는 모두 `.card` 의 직계 형제여야 하며, `display:contents` 로도 우회할 수 없다 —
+형제 결합자는 박스 트리가 아니라 DOM 트리로 판정하기 때문이다. 라디오 그룹은 유형 필터
+(`name="dzf"`, 전체/구현/검수) 하나뿐이며 템플릿에 고정 3개다.
 
 ```html
 <div class="log-title">작업 추적</div>
-<!-- 세션 탭: init 이 두 번째 세션 시작 시 이 자리에 만든다 (첫 세션에는 없음) -->
-<input type="radio" name="dzs" id="dzs-all" class="dzs" checked><label for="dzs-all">모든 세션</label>
-<input type="radio" name="dzs" id="dzs-2" class="dzs"><label for="dzs-2">세션 2</label>
-<input type="radio" name="dzs" id="dzs-1" class="dzs"><label for="dzs-1">세션 1</label>
-<br>
 <input type="radio" name="dzf" id="dzf-all" class="dzf" checked><label for="dzf-all">전체</label>
 <input type="radio" name="dzf" id="dzf-impl" class="dzf"><label for="dzf-impl">구현</label>
 <input type="radio" name="dzf" id="dzf-review" class="dzf"><label for="dzf-review">검수</label>
-<ul class="log" id="dz-log" data-current-session="2">…</ul>
+<ul class="log" id="dz-log" data-server-port="">…</ul>
 ```
 
 ```css
@@ -1058,66 +913,13 @@ print(free, 'FREE') if free else print('NONE')
 .dzf{position:absolute;opacity:0;pointer-events:none}
 #dzf-impl:checked   ~ #dz-log .entry:not([data-kind="impl"]){display:none}
 #dzf-review:checked ~ #dz-log .entry:not([data-kind="review"]){display:none}
-
-/* 세션 탭 — 스타일·구분선 숨김 규칙은 고정, 항목 필터 규칙만 세션마다 1줄씩 추가 */
-.dzs{position:absolute;opacity:0;pointer-events:none}
-label[for^="dzs-"]{display:inline-block;font-size:12px;font-weight:700;padding:5px 13px;margin:0 4px 6px 0;border-radius:8px 8px 0 0;color:var(--muted);cursor:pointer;border-bottom:2px solid transparent}
-.dzs:checked + label{color:var(--navy);background:var(--soft);border-bottom-color:var(--navy)}
-/* 모든 세션 이 아닌 특정 세션 탭에서는 구분선을 아예 숨긴다 (세션 개수와 무관한 고정 규칙) */
-input[name="dzs"]:checked:not(#dzs-all) ~ #dz-log .session-head{display:none}
-/* DZ:SESSION-RULES — 세션 탭 필터 규칙. init 이 세션마다 아래에 1줄씩 추가한다 */
-#dzs-1:checked ~ #dz-log .entry:not([data-session="1"]){display:none}
-#dzs-2:checked ~ #dz-log .entry:not([data-session="2"]){display:none}
 ```
 
 라디오는 시각적으로 숨기되 포커스는 유지한다(`display:none` 이 아니라 `opacity:0`).
-`:has()` 같은 최신 셀렉터에 의존하지 않으므로 지원 범위가 넓다.
-유형 필터는 알약(pill), 세션 탭은 밑줄 탭으로 형태를 달리해 두 줄의 역할을 구분하고,
-`<br>` 로 두 그룹을 물리적으로 다른 줄에 고정한다(카드 폭에 따라 자연 줄바꿈에 기대지 않는다).
+`:has()` 같은 최신 셀렉터에 의존하지 않으므로 지원 범위가 넓다. 유형 필터는 알약(pill)
+형태다.
 
 원본(`~/Desktop/dashboard.html`)의 골격·`:root` 색 토큰·단계 리스트 스타일은 그대로 유지한다.
-
-#### 이 구조가 성립하는 이유
-
-- **구분선은 특정 세션 탭에서 아예 숨긴다.** `input[name="dzs"]:checked:not(#dzs-all) ~ #dz-log .session-head`
-  는 세션 개수와 무관한 고정 규칙 1개다 — 어떤 `dzs-N` 이 선택되든(`dzs-all` 만 예외)
-  `.session-head` 를 전부 숨긴다. 세션이 늘어나도 이 규칙은 늘지 않는다(`:not(#dzs-all)`
-  이 "전체가 아닌 모든 세션 라디오"를 이미 포괄하므로).
-- **항목 필터는 `.entry` 만 대상으로 한다.** `#dzs-{n}:checked ~ #dz-log .entry:not([data-session="{n}"])`
-  는 유형 필터와 동일한 패턴(`.entry` 대상)이다. `.session-head` 는 위 규칙이 이미 전담하므로
-  이 규칙에서는 신경 쓰지 않는다 — 두 관심사(항목 필터링 vs 구분선 노출)가 규칙 단위로 분리된다.
-- **모든 규칙은 `display:none` 만 지정한다.** 되돌리는 규칙(`display:block` 등)을 쓰지
-  않으므로 두 그룹의 규칙이 서로의 특이도(specificity)를 다투지 않고, "둘 다 통과해야
-  보인다"는 **AND 결합이 저절로 성립**한다. 이 불변식을 깨는 규칙을 추가하지 않는다.
-- **래퍼 `div` 금지 제약은 세션 탭에도 그대로 적용된다.** 라디오·라벨·`#dz-log` 는 모두
-  `.card` 의 직계 형제여야 한다. `display:contents` 로도 우회할 수 없다 — 형제 결합자는
-  박스 트리가 아니라 DOM 트리로 판정하기 때문이다.
-- 규칙 증가량은 세션당 정확히 1줄이다(`#dz-step-{n}` 처럼 "개수만큼 생성" 하는 기존
-  패턴과 동일).
-
-#### 탭이 많아지면
-
-`label[for^="dzs-"]` 은 `inline-block` 이라 카드 폭을 넘으면 **자연히 줄바꿈**된다. 이대로 둔다.
-
-- 가로 스크롤 컨테이너는 래퍼 `div` 가 필요한데 그러면 `~` 결합자가 끊겨 필터 전체가 깨진다.
-  즉 **줄바꿈 외의 선택지가 애초에 없다.**
-- 현실적 상한도 낮다. 대시보드는 기능 단위로 만들고 끝나면 지우는 파일이라 세션 수가
-  두 자리로 가는 경우가 드물고, 그 지경이면 대시보드를 새로 만드는 편이 맞다.
-- 그러므로 접기·"더 보기"·상한 같은 장치는 만들지 않는다(YAGNI).
-
-### 세션 구분
-
-`init` 이 삽입하는 `<li class="session-head" data-session="N">` 로 세션 경계를 표시한다.
-`모든 세션` 탭에서만 경계선으로 보이고, 특정 세션 탭을 선택하면 구분선 자체가 사라진다
-(사용자 피드백 반영 — 애초에 하나의 세션만 보고 있는 화면에서는 "경계"가 무의미하다).
-
-- `.entry` 가 아니므로 **유형 필터**(`.entry:not([data-kind=...])`)의 영향을 받지 않는다 —
-  `모든 세션` 탭 안에서는 어떤 유형 필터 상태에서도 항상 보인다.
-- **세션 탭 필터**(`input[name="dzs"]:checked:not(#dzs-all) ~ #dz-log .session-head`)의
-  영향은 받는다. `dzs-all` 이 아닌 특정 세션이 선택되면 소속 세션과 무관하게 전부 숨는다.
-- 세션 탭 도입 이전에 만들어진 대시보드의 옛 로그 항목에는 `data-session` 이 없어
-  **어떤 세션 탭에서도 보이지 않는다**(`모든 세션` 탭에서만 보인다). `.claude/dashboard.html`
-  은 임시 산출물이라 이 정도 열화는 수용한다.
 
 ---
 
@@ -1134,18 +936,16 @@ input[name="dzs"]:checked:not(#dzs-all) ~ #dz-log .session-head{display:none}
 <!--
 DZ:DASHBOARD 갱신 맵 (동적 영역 — 셀렉터 기반 정밀 치환, commands/dashboard.md 참조)
   #dz-title            : 세션 제목 텍스트
-  #dz-subtitle          : 단계 흐름 요약 · 작업 유형 텍스트
   #dz-progress-bar      : inline style width:N%
   #dz-progress-pct      : 진행률 텍스트 (예: 3/6 · 50%)
   #dz-step-{n}          : [그룹 1개] 각 단계 li — class(done|active|wait) + .chip 텍스트
                           + .step-detail 텍스트(그 단계의 한 줄 상세. 비어 있으면 CSS 가 숨긴다)
-                          + data-started-at 속성(그 단계가 active 로 전이한 시각. 선형 모드 전용)
   #dz-cell-{g}-{p}      : [그룹 2+] 매트릭스 칸 td — data-state(done|active|wait|na) + 칸 텍스트
                           {g}=행(그룹) 번호, {p}=열(단계) 번호. 한 파일에 step/cell 이 공존하지 않는다
   #dz-group-{g}         : [그룹 2+] 행 머리 th — init 이 그룹명을 넣고 이후 치환하지 않는다
-  #dz-log               : 작업 추적 ul — li data-seq 앵커로 prepend / data-current-session 속성(현재 세션 번호)
-                          / data-server-port 속성(이 대시보드를 서빙 중인 로컬 서버 포트. 비어 있으면
-                            서버 없음. 오케스트레이터만 읽고 쓴다 — 스크립트는 건드리지 않는다)
+  #dz-log               : 작업 추적 ul — li data-seq 앵커로 prepend / data-server-port 속성(이
+                            대시보드를 서빙 중인 로컬 서버 포트. 비어 있으면 서버 없음. 오케스트레이터만
+                            읽고 쓴다 — 스크립트는 건드리지 않는다)
   #dz-updated           : 갱신 시각 텍스트
   #dz-impl-{k}          : [선택] 구현 세부 작업 li — class(done|active|wait) + .chip 텍스트
                           + .step-detail 텍스트. active 가 동시에 여러 개일 수 있다
@@ -1158,9 +958,6 @@ DZ:DASHBOARD 갱신 맵 (동적 영역 — 셀렉터 기반 정밀 치환, comma
                                (DOM 에서 제거하지 않는다 — 복귀 시 로그가 사라진다)
   #dz-impl-card              : 구현 세부 작업 카드 div. 목록이 비면 CSS :has() 가 통째로 숨긴다
                                (DOM 에서 제거하지 않는다 — 폴링이 outerHTML 로 동기화한다)
-  #dz-now-card               : 「지금」 카드 div. 안의 세 요소는 전부 스크립트가 그린다 —
-                               init/step/log 도, 폴링도 이 카드를 치환하지 않는다(불변식 7).
-                               진행중 단계가 없거나 매트릭스 세션이면 CSS 가 통째로 숨긴다
 -->
 <style>
   :root{--ink:#172033;--muted:#5E6B7D;--line:#D9E2EC;--soft:#F4F7FB;--blue:#1E5AA8;--navy:#12335B;--green:#1F8A70;--orange:#F59E0B;--red:#C2410C;}
@@ -1169,7 +966,6 @@ DZ:DASHBOARD 갱신 맵 (동적 영역 — 셀렉터 기반 정밀 치환, comma
   .wrap{max-width:860px;margin:32px auto;padding:0 16px}
   .card{background:#fff;border:1px solid var(--line);border-radius:14px;padding:26px 30px;box-shadow:0 8px 24px rgba(19,51,91,.07);margin-bottom:16px}
   h1{font-size:21px;margin:0 0 4px;color:var(--navy);letter-spacing:-.5px}
-  .sub{font-size:13px;color:var(--muted);margin-bottom:18px}
   .bar-outer{height:14px;background:var(--soft);border-radius:999px;overflow:hidden;border:1px solid var(--line)}
   .bar-inner{height:100%;background:linear-gradient(90deg,var(--blue),#2D78C8);border-radius:999px;transition:width .4s}
   .pct{font-size:13px;font-weight:700;color:var(--blue);margin-top:6px}
@@ -1186,12 +982,6 @@ DZ:DASHBOARD 갱신 맵 (동적 영역 — 셀렉터 기반 정밀 치환, comma
   li.active .chip{background:#EAF2FB;color:var(--blue)}
   .step-detail{flex-basis:100%;margin-left:38px;font-size:12.5px;font-weight:400;color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
   .step-detail:empty{display:none}
-  .now-line{display:flex;align-items:baseline;gap:10px;flex-wrap:wrap;row-gap:3px}
-  .now-label{font-size:11px;font-weight:800;letter-spacing:.3px;color:var(--muted);flex:none}
-  #dz-now-phase{font-size:16px;font-weight:700;color:var(--navy)}
-  #dz-now-elapsed{margin-left:auto;font-size:12px;font-weight:700;color:var(--blue);flex:none}
-  #dz-now-elapsed:empty{display:none}
-  .wrap:not(:has(#dz-steps li.active)) #dz-now-card{display:none}
   #dz-impl-card:not(:has(#dz-impl-tasks li)){display:none}
   table.matrix{width:100%;border-collapse:collapse;margin:14px 0 0;font-size:14px}
   .matrix th,.matrix td{border:1px solid var(--line);padding:9px 10px}
@@ -1213,11 +1003,6 @@ DZ:DASHBOARD 갱신 맵 (동적 영역 — 셀렉터 기반 정밀 치환, comma
   .dzf:checked + label{background:var(--blue);color:#fff;border-color:var(--blue)}
   #dzf-impl:checked   ~ #dz-log .entry:not([data-kind="impl"]){display:none}
   #dzf-review:checked ~ #dz-log .entry:not([data-kind="review"]){display:none}
-  .dzs{position:absolute;opacity:0;pointer-events:none}
-  label[for^="dzs-"]{display:inline-block;font-size:12px;font-weight:700;padding:5px 13px;margin:0 4px 6px 0;border-radius:8px 8px 0 0;color:var(--muted);cursor:pointer;border-bottom:2px solid transparent}
-  .dzs:checked + label{color:var(--navy);background:var(--soft);border-bottom-color:var(--navy)}
-  input[name="dzs"]:checked:not(#dzs-all) ~ #dz-log .session-head{display:none}
-  /* DZ:SESSION-RULES — 세션 탭 필터 규칙. init 이 세션마다 아래에 1줄씩 추가한다 */
   ul.log{list-style:none;margin:6px 0 0;padding:0;font-size:13px;color:#4B5A6D}
   .entry{border-bottom:1px solid var(--soft);padding:8px 4px}
   .entry:last-child{border-bottom:0}
@@ -1227,8 +1012,6 @@ DZ:DASHBOARD 갱신 맵 (동적 영역 — 셀렉터 기반 정밀 치환, comma
   .entry .time{font-size:11px;color:var(--muted);flex:none;width:40px}
   .entry .lead{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-weight:600;color:var(--ink)}
   .entry .detail{margin:6px 0 0 48px;font-size:12.5px;color:var(--muted);white-space:pre-wrap}
-  .session-head{margin:14px 0 6px;padding:0 4px 6px;border-bottom:2px solid var(--line);font-size:11px;font-weight:800;letter-spacing:.3px;color:var(--navy)}
-  .session-head:first-child{margin-top:0}
   .log-title,.impl-title{font-size:13px;font-weight:700;color:var(--muted);margin:0 0 10px}
   .foot{font-size:12px;color:var(--muted);text-align:right}
   #dz-pip-btn{position:fixed;top:18px;right:18px;z-index:9;font-family:inherit;font-size:12px;font-weight:700;padding:7px 14px;border-radius:999px;border:1px solid var(--line);background:#fff;color:var(--navy);cursor:pointer;box-shadow:0 2px 8px rgba(19,51,91,.10)}
@@ -1238,7 +1021,6 @@ DZ:DASHBOARD 갱신 맵 (동적 영역 — 셀렉터 기반 정밀 치환, comma
   body.dz-pip .wrap{margin:10px auto;padding:0 10px}
   body.dz-pip .card{padding:14px 16px;border-radius:10px;margin-bottom:10px}
   body.dz-pip h1{font-size:16px}
-  body.dz-pip .sub{margin-bottom:12px}
   body.dz-pip #dz-log-card{display:none}
   body.dz-pip ol.steps li{padding:9px 4px}
   body.dz-pip ol.steps li.active{background:#EAF2FB;border-radius:8px;padding-left:8px;padding-right:8px}
@@ -1249,15 +1031,10 @@ DZ:DASHBOARD 갱신 맵 (동적 영역 — 셀렉터 기반 정밀 치환, comma
 <div class="wrap">
   <div class="card">
     <h1 id="dz-title">세션 제목</h1>
-    <div class="sub" id="dz-subtitle">단계 흐름 요약 · 작업 유형</div>
     <div class="bar-outer"><div class="bar-inner" id="dz-progress-bar" style="width:0%"></div></div>
     <div class="pct" id="dz-progress-pct">0/0 · 0%</div>
     <ol class="steps" id="dz-steps">
     </ol>
-  </div>
-  <div class="card" id="dz-now-card">
-    <div class="now-line"><span class="now-label">지금</span><span id="dz-now-phase"></span><span id="dz-now-elapsed"></span></div>
-    <div class="step-detail" id="dz-now-next"></div>
   </div>
   <div class="card" id="dz-impl-card">
     <div class="impl-title">구현 세부 작업 · 디스패치와 결과 보고 시점에만 갱신</div>
@@ -1270,7 +1047,7 @@ DZ:DASHBOARD 갱신 맵 (동적 영역 — 셀렉터 기반 정밀 치환, comma
     <input type="radio" name="dzf" id="dzf-all" class="dzf" checked><label for="dzf-all">전체</label>
     <input type="radio" name="dzf" id="dzf-impl" class="dzf"><label for="dzf-impl">구현</label>
     <input type="radio" name="dzf" id="dzf-review" class="dzf"><label for="dzf-review">검수</label>
-    <ul class="log" id="dz-log" data-current-session="1" data-server-port=""></ul>
+    <ul class="log" id="dz-log" data-server-port=""></ul>
   </div>
   <div class="foot" id="dz-updated">갱신: -</div>
 </div>
@@ -1291,9 +1068,6 @@ DZ:DASHBOARD 갱신 맵 (동적 영역 — 셀렉터 기반 정밀 치환, comma
   // 콘텐츠가 잘리는 것보다 안전하다.
   var PIP_CHROME_ALLOWANCE = 100;
   var PIP_CONTENT_PADDING = 24;         // 콘텐츠 하단 여백(카드 그림자·라운딩 여유)
-  var NOW_TICK_MS = 30000;              // 「지금」 카드 경과 시간 갱신 주기
-  var MINUTES_PER_HOUR = 60;
-  var MS_PER_MINUTE = 60000;
 
   var wrap = document.querySelector('.wrap');
   var pipButton = document.getElementById('dz-pip-btn');
@@ -1304,60 +1078,9 @@ DZ:DASHBOARD 갱신 맵 (동적 영역 — 셀렉터 기반 정밀 치환, comma
   var lastHtml = '';
   var busy = false;
   var failureCount = 0;
-  var reloadPending = false;
   var reasonHint = '';            // 버튼이 비활성인 영구 사유. 해소되기 전까지 유지된다
 
   function setHint(text){ pipHint.textContent = text || ''; pipHint.hidden = !text; }
-
-  // ── 「지금」 카드: #dz-steps 와 #dz-updated 에서 파생되는 표시 전용 뷰 (불변식 7) ──
-  var nowPhase = document.getElementById('dz-now-phase');
-  var nowElapsed = document.getElementById('dz-now-elapsed');
-  var nowNext = document.getElementById('dz-now-next');
-
-  // new Date(문자열) 은 ISO 8601 이 아닌 형식에서 파싱 결과가 구현 정의다 — 필드를 직접 뽑는다.
-  function parseStamp(text){
-    var f = /(\d{4})-(\d{2})-(\d{2})[ T](\d{2}):(\d{2})/.exec(text || '');
-    return f ? new Date(+f[1], +f[2]-1, +f[3], +f[4], +f[5]) : null;
-  }
-  function formatDuration(from, now){
-    var minutes = Math.floor((now - from) / MS_PER_MINUTE);
-    if(!isFinite(minutes) || minutes < 0) return '';
-    return minutes < MINUTES_PER_HOUR ? minutes + '분'
-      : Math.floor(minutes / MINUTES_PER_HOUR) + '시간 ' + (minutes % MINUTES_PER_HOUR) + '분';
-  }
-  function phaseLabel(item){
-    if(!item) return '';
-    var number = item.querySelector('.num'), name = '';
-    // 자식 span(.num/.chip/.step-detail)을 제외한 직계 텍스트만이 단계명이다.
-    Array.prototype.forEach.call(item.childNodes, function(node){
-      if(node.nodeType === 3) name += node.textContent;
-    });
-    return (number ? number.textContent + '. ' : '') + name.trim();
-  }
-  function elapsedLabel(active, now){
-    var parts = [];
-    var startedAt = parseStamp(active.getAttribute('data-started-at'));
-    var updatedAt = parseStamp(wrap.querySelector('#dz-updated').textContent);
-    // formatDuration 은 손상/미래 타임스탬프(시계 되감김 등)에 빈 문자열을 반환한다 —
-    // 그 경우 숫자 없는 라벨(" 경과")만 남지 않도록 조각 자체를 넣지 않는다.
-    var elapsed = startedAt ? formatDuration(startedAt, now) : '';
-    if(elapsed) parts.push(elapsed + ' 경과');
-    var sinceUpdate = updatedAt ? formatDuration(updatedAt, now) : '';
-    if(sinceUpdate) parts.push('마지막 기록 ' + sinceUpdate + ' 전');
-    return parts.join(' · ');
-  }
-  function renderNowCard(){
-    // 매트릭스 세션이거나 진행중 단계가 없으면 그릴 것이 없다 — 카드는 CSS 가 숨긴다.
-    var active = wrap.querySelector('#dz-steps li.active');
-    if(!active) return;
-    var now = Date.now();
-    nowPhase.textContent = phaseLabel(active);
-    nowElapsed.textContent = elapsedLabel(active, now);
-    nowNext.textContent = active.nextElementSibling
-      ? '다음 → ' + phaseLabel(active.nextElementSibling) : '';
-  }
-  renderNowCard();
-  setInterval(renderNowCard, NOW_TICK_MS);
 
   // ── 갱신 경로 A: file:// — Phase 1 방식 그대로. 이 분기는 회귀 금지 대상이다 ──
   if(!isServed){
@@ -1393,10 +1116,6 @@ DZ:DASHBOARD 갱신 맵 (동적 영역 — 셀렉터 기반 정밀 치환, comma
     var live = wrap.querySelector('#dz-impl-card'), next = fresh.getElementById('dz-impl-card');
     if(live && next) live.outerHTML = next.outerHTML;
   }
-  function sessionTabsChanged(fresh){
-    return fresh.querySelectorAll('input[name="dzs"]').length
-        !== wrap.querySelectorAll('input[name="dzs"]').length;
-  }
   // 압축 뷰는 작업 추적 카드가 빠져 실제 콘텐츠가 훨씬 짧다 — 여는 시점의 크기를
   // measureCompactHeight() 로 미리 맞추므로(아래), 이 함수는 열린 뒤 콘텐츠 높이가
   // 바뀌었을 때(단계 상세 추가 등)의 보정 시도다. pipWindow.resizeTo() 는 Document PiP 창에서
@@ -1429,20 +1148,10 @@ DZ:DASHBOARD 갱신 맵 (동적 영역 — 셀렉터 기반 정밀 치환, comma
     if(html === lastHtml) return;
     lastHtml = html;
     var fresh = new DOMParser().parseFromString(html, 'text/html');
-    // 라디오와 <style> 은 치환 대상이 아니다(사용자가 고른 필터·탭이 날아간다).
-    // 세션 탭 개수가 달라지면 전체 리로드가 유일하게 안전한 경로다. 플로팅 중에는
-    // 리로드가 PiP 참조를 죽이므로, 창을 먼저 강제로 닫는다 — opener 쪽에서
-    // pipWindow.close() 를 호출하는 것은 Document PiP 스펙이 지원하는 정상 동작이다
-    // (사용자 제스처 요건은 '여는' 쪽에만 적용되고 닫는 쪽에는 없다).
-    if(sessionTabsChanged(fresh)){
-      if(!pipWindow){ location.reload(); return; }
-      reloadPending = true;
-      pipWindow.close();   // pagehide 핸들러가 reloadPending 을 보고 즉시 리로드한다
-    }
-    syncText(fresh,'dz-title'); syncText(fresh,'dz-subtitle');
+    // 라디오와 <style> 은 치환 대상이 아니다(사용자가 고른 필터가 날아간다).
+    syncText(fresh,'dz-title');
     syncText(fresh,'dz-progress-pct'); syncText(fresh,'dz-updated');
     syncProgressBar(fresh); syncVisualization(fresh); syncImplCard(fresh); syncLog(fresh);
-    renderNowCard();
     resizePipToFit();
   }
   function poll(){
@@ -1496,7 +1205,7 @@ DZ:DASHBOARD 갱신 맵 (동적 영역 — 셀렉터 기반 정밀 치환, comma
           document.body.insertBefore(wrap, pipButton);
           pipButton.textContent = '플로팅';
           setHint(reasonHint);
-          if(reloadPending) location.reload(); else poll();
+          poll();
         });
       })
       .catch(function(err){
