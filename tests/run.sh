@@ -996,10 +996,10 @@ test_manifest_fields_complete() {
 }
 
 # T22: dashboard 템플릿 무결성 — LLM 지시문 방식이라 런타임 Edit 결과는 검증 대상이 아니고,
-# 설치·문서 정합성만 자동 검증한다 (하위 검증 T22-1~T22-90).
+# 설치·문서 정합성만 자동 검증한다 (하위 검증 T22-1~T22-96).
 test_dashboard_template_integrity() {
   local test_name="T22"
-  local test_desc="dashboard 템플릿 무결성 (T22-1~T22-90)"
+  local test_desc="dashboard 템플릿 무결성 (T22-1~T22-96)"
   log_test_name "$test_name" "$test_desc"
 
   local sandbox
@@ -1017,9 +1017,9 @@ test_dashboard_template_integrity() {
     return 1
   fi
 
-  # T22-2: 필수 셀렉터 7종이 템플릿에 모두 존재
+  # T22-2: 필수 셀렉터 6종이 템플릿에 모두 존재
   local required_selector
-  for required_selector in dz-title dz-subtitle dz-progress-bar dz-progress-pct dz-step- \
+  for required_selector in dz-title dz-progress-bar dz-progress-pct dz-step- \
     dz-log dz-updated; do
     if ! grep -q "$required_selector" "$dashboard_command_file"; then
       record_failure "$test_name" "T22-2: 셀렉터 미발견: $required_selector"
@@ -1059,86 +1059,15 @@ test_dashboard_template_integrity() {
     return 1
   fi
 
-  # T22-6: init 절차가 기존 파일 재사용 시 로그(작업 추적)를 보존한다는 가드 — 명령
-  # ("9단계는 건너뛴다")과 그 근거 문장을 「이미 존재하면」 분기 범위 안에서 함께 확인한다.
-  # 범위를 좁히고 빈 범위를 먼저 확인하는 이유는 T22-81 라운드에서 실증된 함정("문자열
-  # 등장만 세는 테스트는 무관한 편집에 잠식된다") 때문이다 — 이 가드 문구가 다른 절로
-  # 복사되거나 명령만 뒤집혀도(9단계도 수행하도록) 이 범위 밖에서는 검출되지 않아야 한다.
-  local init_reuse_branch
-  init_reuse_branch=$(sed -n '/이미 존재하면/,/존재하지 않으면/p' "$dashboard_command_file")
-  if [[ -z "$init_reuse_branch" ]]; then
-    record_failure "$test_name" "T22-6: init 「이미 존재하면」 분기 범위 추출 실패 — 앵커가 깨졌다"
-    return 1
-  fi
-  if ! grep -qF '9단계(로그 초기화)는 건너뛴다' <<< "$init_reuse_branch"; then
-    record_failure "$test_name" "T22-6: 로그 초기화 건너뛰기 명령 미발견"
-    return 1
-  fi
-  if ! grep -qF '비우면 방금 보존한 이전 세션 기록이 사라진다' <<< "$init_reuse_branch"; then
-    record_failure "$test_name" "T22-6: 로그 보존 근거 문구 미발견"
-    return 1
-  fi
-
-  # T22-88: init 재사용 시 상태 갱신(e 단계)이 필요한 9개 앵커를 모두 grep 하는지 확인.
-  # 하나라도 빠지면 그 요소만 옛 작업 값에 고착된 채 남는다(이번 라운드의 원인 버그와
-  # 같은 클래스 — 「지금」 카드 대신 이번엔 제목/진행 시각화/구현 세부 작업 패널이었다).
-  # **범위를 e 단계의 grep 명령 블록 자체로 좁힌다** — 같은 앵커 문자열이 바로 뒤 설명
-  # 문장에도 등장해(예: "`id="dz-impl-tasks"`·`id="dz-impl-count"` 는 선택이다") 범위가
-  # 「이미 존재하면」 분기 전체였을 때는 grep -e 절을 실제로 지워도 통과해 버렸다(실측 확인).
-  local e_step_grep_block
-  e_step_grep_block=$(sed -n '/grep -n -e .*id="dz-title"/,/\.claude\/dashboard\.html$/p' "$dashboard_command_file")
-  if [[ -z "$e_step_grep_block" ]]; then
-    record_failure "$test_name" "T22-88: e 단계 grep 명령 블록 추출 실패 — 앵커가 깨졌다"
-    return 1
-  fi
-  local e_step_anchors=(
-    'id="dz-title"' 'id="dz-subtitle"' 'id="dz-progress-bar"' 'id="dz-progress-pct"'
-    'id="dz-steps"' 'id="dz-matrix"' 'id="dz-updated"' 'id="dz-impl-tasks"' 'id="dz-impl-count"'
-    'id="dz-impl-1"'
-  )
-  for anchor in "${e_step_anchors[@]}"; do
-    if ! grep -qF -- "$anchor" <<< "$e_step_grep_block"; then
-      record_failure "$test_name" "T22-88: init 재사용 분기의 grep 블록에 $anchor 앵커 없음"
-      return 1
-    fi
-  done
-
-  # T22-89(역방향 인접 검증): 재사용 분기가 여전히 10단계(자동 발행)를 호출하고 그 지점에서
-  # 절차를 종료하는지 확인한다. 자동 발행이 빠지면 재-init 세션에는 서버도 포트 각인도
-  # 없어져 log commit 의 자동 종료가 조용히 무력화된다(T22-81 이 지키는 성질이 다른
-  # 경로로 뚫린다).
-  if ! grep -qF '[자동 발행]' <<< "$init_reuse_branch"; then
-    record_failure "$test_name" "T22-89: init 재사용 분기에 [자동 발행] 호출 없음"
-    return 1
-  fi
-  if ! grep -qF '여기서 종료' <<< "$init_reuse_branch"; then
-    record_failure "$test_name" "T22-89: init 재사용 분기의 종료 지점 문구 없음"
-    return 1
-  fi
-
-  # T22-90: 구현 세부 작업 패널 초기화 지시 두 절반이 재사용 분기에 모두 있는지 확인한다
-  # — 카운터 문구(0/0 · 0%)만 검사하면 목록 자체를 비우는 <ol id="dz-impl-tasks"> 치환
-  # 지시가 삭제돼도 통과한다(둘은 서로 다른 대상이라 하나만 검사하면 다른 하나의 삭제를
-  # 놓친다).
-  if ! grep -qF '0/0 · 0%' <<< "$init_reuse_branch"; then
-    record_failure "$test_name" "T22-90: 구현 세부 작업 카운터 초기화(0/0 · 0%) 지시 없음"
-    return 1
-  fi
-  if ! grep -qF 'id="dz-impl-tasks"' <<< "$init_reuse_branch" \
-      || ! grep -qF '빈 목록으로 치환' <<< "$init_reuse_branch"; then
-    record_failure "$test_name" "T22-90: 구현 세부 작업 목록(#dz-impl-tasks) 초기화 지시 없음"
-    return 1
-  fi
-
   # T22-7: div.legend 컴포넌트가 템플릿에서 제거됐는지 확인 (사용자 요청, 회귀 방지)
   if grep -q 'class="legend"' "$dashboard_command_file"; then
     record_failure "$test_name" "T22-7: div.legend 가 여전히 템플릿에 남아있음"
     return 1
   fi
 
-  # T22-8: 세션 구분 마커(session-head) 가 템플릿/절차에 존재하는지 확인
-  if ! grep -q "session-head" "$dashboard_command_file"; then
-    record_failure "$test_name" "T22-8: session-head 세션 구분 마커 미발견"
+  # T22-8(역방향): 세션 구분 마커(session-head) 가 완전히 제거됐는지 확인 — 세션 탭 UI 전면 삭제
+  if grep -q "session-head" "$dashboard_command_file"; then
+    record_failure "$test_name" "T22-8: session-head 세션 구분 마커가 여전히 남아있음"
     return 1
   fi
 
@@ -1156,14 +1085,8 @@ test_dashboard_template_integrity() {
     return 1
   fi
 
-  # T22-11: 템플릿의 #dz-log 여는 태그에 현재 세션 번호가 박혀 있음
-  if ! grep -q 'id="dz-log" data-current-session="1"' "$dashboard_command_file"; then
-    record_failure "$test_name" "T22-11: #dz-log 의 data-current-session=\"1\" 기본값 미발견"
-    return 1
-  fi
-
   # T22-12: log 절차가 깨진 완전일치 grep 으로 퇴행하지 않았는지 확인 (이번 라운드에서 가장 중요한 테스트).
-  # #dz-log 여는 태그가 data-current-session 을 갖는 순간 완전일치는 영원히 매칭에 실패하므로
+  # #dz-log 여는 태그가 data-server-port 를 갖는 순간 완전일치는 영원히 매칭에 실패하므로
   # 옛 패턴의 부활과 새 패턴의 누락을 양방향으로 막는다.
   if grep -q "grep -n '<ul class=\"log\" id=\"dz-log\">'" "$dashboard_command_file"; then
     record_failure "$test_name" "T22-12: 깨진 완전일치 grep 패턴이 여전히 남아있음"
@@ -1174,51 +1097,23 @@ test_dashboard_template_integrity() {
     return 1
   fi
 
-  # T22-13: 로그 항목 스키마에 data-session 이 포함됨
-  if ! grep -q 'data-seq="12" data-session="2"' "$dashboard_command_file"; then
-    record_failure "$test_name" "T22-13: 로그 항목 스키마의 data-session 미발견"
+  # T22-14(역방향): 세션 탭 CSS 골격과 삽입 마커가 완전히 제거됐는지 확인
+  if grep -q 'label\[for\^="dzs-"\]' "$dashboard_command_file"; then
+    record_failure "$test_name" "T22-14: 세션 탭 라벨 CSS 골격이 여전히 남아있음"
+    return 1
+  fi
+  if grep -q 'DZ:SESSION-RULES' "$dashboard_command_file"; then
+    record_failure "$test_name" "T22-14: DZ:SESSION-RULES 삽입 마커가 여전히 남아있음"
     return 1
   fi
 
-  # T22-14: 세션 탭 CSS 골격과 삽입 마커가 템플릿에 존재
-  if ! grep -q 'label\[for\^="dzs-"\]' "$dashboard_command_file"; then
-    record_failure "$test_name" "T22-14: 세션 탭 라벨 CSS 골격 미발견"
-    return 1
-  fi
-  if ! grep -q 'DZ:SESSION-RULES' "$dashboard_command_file"; then
-    record_failure "$test_name" "T22-14: DZ:SESSION-RULES 삽입 마커 미발견"
-    return 1
-  fi
-
-  # T22-15: 새 탭에 checked 를 넣지 말라는 문구가 절차에 존재
-  # (checked 중복으로 사용자의 탭 선택이 매 새로고침마다 리셋되는 버그 방지)
-  if ! grep -q '새 탭 라디오에 `checked` 를 넣지 않는다' "$dashboard_command_file"; then
-    record_failure "$test_name" "T22-15: 새 탭 checked 금지 문구 미발견"
-    return 1
-  fi
-
-  # T22-16: 세션 탭 줄과 유형 필터 줄을 분리하는 <br> 이 절차/문서에 존재
-  # (두 라디오 그룹이 카드 폭에 따라 같은 줄에 붙어 보이던 레이아웃 문제의 회귀 방지)
-  if ! grep -q '<br>' "$dashboard_command_file"; then
-    record_failure "$test_name" "T22-16: 세션 탭/유형 필터 줄바꿈(<br>) 미발견"
-    return 1
-  fi
-
-  # T22-17: 특정 세션 탭 선택 시 session-head 구분선을 전부 숨기는 고정 규칙 존재
-  # (사용자 요청 — 모든 세션 탭이 아니면 구분선 자체를 안 보여준다)
-  if ! grep -q 'not(#dzs-all) ~ #dz-log .session-head' "$dashboard_command_file"; then
-    record_failure "$test_name" "T22-17: session-head 전체 숨김 규칙 미발견"
-    return 1
-  fi
-
-  # T22-18: 세션별 항목 필터가 .entry 를 대상으로 함 (session-head 는 T22-17 규칙이 전담하므로
-  # 이 규칙이 다시 li 전체(> li)를 대상으로 퇴행하지 않았는지 확인)
+  # T22-18(역방향): 세션별 .entry 필터 규칙(#dzs-*)이 완전히 제거됐는지 확인
   if grep -q '#dz-log > li:not(\[data-session=' "$dashboard_command_file"; then
     record_failure "$test_name" "T22-18: 세션 필터가 옛 '> li' 패턴으로 되돌아감"
     return 1
   fi
-  if ! grep -q '#dzs-1:checked ~ #dz-log .entry:not(\[data-session="1"\])' "$dashboard_command_file"; then
-    record_failure "$test_name" "T22-18: 세션별 .entry 필터 규칙 미발견"
+  if grep -q '#dzs-1:checked ~ #dz-log .entry:not(\[data-session="1"\])' "$dashboard_command_file"; then
+    record_failure "$test_name" "T22-18: 세션별 .entry 필터 규칙(#dzs-1)이 여전히 남아있음"
     return 1
   fi
 
@@ -1583,31 +1478,6 @@ test_dashboard_template_integrity() {
     return 1
   fi
 
-  # T22-59: 「지금」 카드 셀렉터 4종 존재 — 카드 자체의 유실을 막는다
-  if ! grep -qF 'id="dz-now-card"' "$dashboard_command_file"; then
-    record_failure "$test_name" "T22-59: id=\"dz-now-card\" 미발견"
-    return 1
-  fi
-  if ! grep -qF 'id="dz-now-phase"' "$dashboard_command_file"; then
-    record_failure "$test_name" "T22-59: id=\"dz-now-phase\" 미발견"
-    return 1
-  fi
-  if ! grep -qF 'id="dz-now-elapsed"' "$dashboard_command_file"; then
-    record_failure "$test_name" "T22-59: id=\"dz-now-elapsed\" 미발견"
-    return 1
-  fi
-  if ! grep -qF 'id="dz-now-next"' "$dashboard_command_file"; then
-    record_failure "$test_name" "T22-59: id=\"dz-now-next\" 미발견"
-    return 1
-  fi
-
-  # T22-60: 자동 숨김 규칙 존재 — 매트릭스 세션·진행중 없음 상태에서 빈 카드가 노출되는 회귀를
-  # 막는다(설계 결정 3·8).
-  if ! grep -qF '.wrap:not(:has(#dz-steps li.active)) #dz-now-card{display:none}' "$dashboard_command_file"; then
-    record_failure "$test_name" "T22-60: 「지금」 카드 자동 숨김 규칙 미발견"
-    return 1
-  fi
-
   # T22-61: 호출 규약 비대화 방지 (최우선, 역방향) — 커밋 a6966aa 는 "현재 위치/다음 단계" 카드를
   # 위해 step 에 선택 인자 3개를 요구했다가 그 무게 때문에 기능째 제거됐다. 「지금」 카드는 순수
   # 파생 뷰이므로 dz-current 계열 셀렉터나 규약상의 위치/다음단계 인자가 다시 나타나면 같은
@@ -1618,63 +1488,6 @@ test_dashboard_template_integrity() {
   fi
   if ! grep -qF 'step <n> <done|active|wait> ["상세"]' "$dashboard_command_file"; then
     record_failure "$test_name" "T22-61: step 호출 규약 원형 미발견"
-    return 1
-  fi
-
-  # T22-62: 자동 각인 규칙 문서화 — 각인 시점이 흐려지면 매 호출마다 시각이 리셋되는 회귀로 이어진다.
-  if ! grep -qF 'data-started-at' "$dashboard_command_file"; then
-    record_failure "$test_name" "T22-62: data-started-at 미발견"
-    return 1
-  fi
-  if ! grep -q '이전 상태 ≠ `active` \*\*이고\*\* 새 상태 = `active`' "$dashboard_command_file"; then
-    record_failure "$test_name" "T22-62: data-started-at 각인 전이 조건 문구 미발견"
-    return 1
-  fi
-
-  # T22-63: 파생 뷰 불변식 문구 — 유실되면 카드에 직접 쓰는 경로가 생기고 인자가 따라 붙는다.
-  if ! grep -q '「지금」 카드는 파생 뷰다' "$dashboard_command_file"; then
-    record_failure "$test_name" "T22-63: '「지금」 카드는 파생 뷰다' 불변식 문구 미발견"
-    return 1
-  fi
-
-  # T22-64: 렌더러 배치(줄 번호 비교) — file:// 조기 반환보다 앞에 있어야 한다. 뒤에 있으면
-  # file:// 로 연 대시보드에서 경과 시간이 영원히 갱신되지 않는데, http:// 테스트로는 정상으로
-  # 보여 발견이 가장 어렵다(설계 결정 6).
-  if ! grep -qF 'function renderNowCard(){' "$dashboard_command_file"; then
-    record_failure "$test_name" "T22-64: function renderNowCard(){ 미발견"
-    return 1
-  fi
-  local render_tick_line early_return_line
-  render_tick_line=$(grep -n 'setInterval(renderNowCard' "$dashboard_command_file" | tail -1 | cut -d: -f1)
-  early_return_line=$(grep -n 'if(!isServed){' "$dashboard_command_file" | tail -1 | cut -d: -f1)
-  if [[ -z "$render_tick_line" || -z "$early_return_line" || "$render_tick_line" -gt "$early_return_line" ]]; then
-    record_failure "$test_name" "T22-64: renderNowCard 틱이 file:// 조기 반환 뒤에 있음"
-    return 1
-  fi
-
-  # T22-65: 폴링이 카드를 치환하지 않음(역방향) — 파생 뷰를 파일 문자열로도 동기화하면 값 출처가
-  # 둘로 갈라진다(불변식 7). 검사 범위를 <script> 블록으로 한정한다 — 데이터 모델 절의 폴링 계약
-  # 표는 대조를 위해 #dz-impl-card 의 outerHTML 치환을 같은 줄에서 설명하므로, 파일 전체를 훑으면
-  # 그 문서 프로즈에서 오탐이 발생한다.
-  if sed -n '/^<script>/,/<\/script>/p' "$dashboard_command_file" | grep -n 'dz-now-card' | grep -qE 'outerHTML|innerHTML'; then
-    record_failure "$test_name" "T22-65: dz-now-card 가 outerHTML/innerHTML 로 치환됨"
-    return 1
-  fi
-  if ! grep -qF 'renderNowCard();' "$dashboard_command_file"; then
-    record_failure "$test_name" "T22-65: apply() 안 renderNowCard() 호출 미발견"
-    return 1
-  fi
-
-  # T22-66: 매트릭스 방침 문구 — 매트릭스에서 <td> 에 각인하는 범용화 유혹을 막는다.
-  if ! grep -q '매트릭스 모드(`<g>.<p>`)에서는 각인하지 않는다' "$dashboard_command_file"; then
-    record_failure "$test_name" "T22-66: 매트릭스 모드 각인 배제 문구 미발견"
-    return 1
-  fi
-
-  # T22-67: PiP 미숨김(역방향) — 곁눈질 화면에서 가장 값진 카드를 숨기는 규칙의 몰래 추가를
-  # 막는다(설계 결정 7).
-  if grep -qF 'body.dz-pip #dz-now-card{display:none}' "$dashboard_command_file"; then
-    record_failure "$test_name" "T22-67: PiP 에서 「지금」 카드를 숨기는 규칙이 추가됨"
     return 1
   fi
 
@@ -1695,12 +1508,12 @@ test_dashboard_template_integrity() {
     return 1
   fi
 
-  # T22-70: init 의 두 분기 모두 자동 발행을 참조 — 한 분기만 발행하면 세션 2 가 방치된다
-  # (설계 결정 3). 범위를 init 절로 좁히는 이유는 자동 발행 절 자신의 산문에서 오탐이 나기 때문이다.
+  # T22-70: init 이 마지막 단계에서 자동 발행을 참조 — 링크가 없으면 발행 없이 절차가 끝난다.
+  # 범위를 init 절로 좁히는 이유는 자동 발행 절 자신의 산문에서 오탐이 나기 때문이다.
   local init_section_autopublish_count
-  init_section_autopublish_count=$(sed -n '/^## `init`/,/^## `step`/p' "$dashboard_command_file" | grep -c '자동 발행')
-  if [[ "$init_section_autopublish_count" -lt 2 ]]; then
-    record_failure "$test_name" "T22-70: init 절 범위에서 '자동 발행' 참조가 2회 미만"
+  init_section_autopublish_count=$(sed -n '/^## `init`/,/^## `step`/p' "$dashboard_command_file" | grep -cF '[자동 발행]')
+  if [[ "$init_section_autopublish_count" -lt 1 ]]; then
+    record_failure "$test_name" "T22-70: init 절 범위에서 '[자동 발행]' 링크 미발견"
     return 1
   fi
 
@@ -1770,10 +1583,10 @@ test_dashboard_template_integrity() {
     return 1
   fi
 
-  # T22-80: #dz-log 여는 태그의 각인 슬롯과 속성 순서 — data-server-port 가 유실되거나
-  # data-current-session 앞으로 끼어들면(T22-11 파손) 이 한 줄이 동시에 잡아낸다.
-  if ! grep -qF 'id="dz-log" data-current-session="1" data-server-port=""' "$dashboard_command_file"; then
-    record_failure "$test_name" "T22-80: #dz-log 각인 슬롯(data-server-port) 미발견 또는 속성 순서 위반"
+  # T22-80: 템플릿의 #dz-log 여는 태그에 포트 각인 슬롯이 비어 있는 상태로 존재하는지 확인 —
+  # data-server-port 가 유실되면 이 한 줄이 잡아낸다.
+  if ! grep -qF 'id="dz-log" data-server-port=""' "$dashboard_command_file"; then
+    record_failure "$test_name" "T22-80: #dz-log 각인 슬롯(data-server-port) 미발견"
     return 1
   fi
 
@@ -1884,6 +1697,79 @@ test_dashboard_template_integrity() {
     record_failure "$test_name" "T22-87: log 절 범위에서 '종료 코드 1' 또는 '에러가 아니다' 문구 미발견"
     return 1
   fi
+
+  # T22-91(역방향): 세션 탭 UI 잔재 전무 확인 — data-current-session·data-session=·
+  # sessionTabsChanged·dzs- 중 어느 문자열도 파일에 남아있지 않아야 한다.
+  local session_relic
+  for session_relic in 'data-current-session' 'data-session=' 'sessionTabsChanged' 'dzs-'; do
+    if grep -qF -- "$session_relic" "$dashboard_command_file"; then
+      record_failure "$test_name" "T22-91: 세션 탭 잔재 발견: $session_relic"
+      return 1
+    fi
+  done
+
+  # T22-92(역방향+정방향): 부제(#dz-subtitle) 잔재 전무 확인 — 셀렉터·마크업이 모두 사라지고
+  # 동적 셀렉터 표 제목이 6종으로 갱신됐는지 함께 본다.
+  if grep -qF 'dz-subtitle' "$dashboard_command_file"; then
+    record_failure "$test_name" "T22-92: dz-subtitle 잔재 발견"
+    return 1
+  fi
+  if grep -qF 'class="sub"' "$dashboard_command_file"; then
+    record_failure "$test_name" "T22-92: class=\"sub\" 잔재 발견"
+    return 1
+  fi
+  if ! grep -qF '동적(치환 대상) — 6 셀렉터' "$dashboard_command_file"; then
+    record_failure "$test_name" "T22-92: 동적 셀렉터 표 제목이 6 셀렉터로 갱신되지 않음"
+    return 1
+  fi
+
+  # T22-93(정방향+역방향): init 이 단일 분기인지 확인 — 「이미 존재하면」 분기가 없고,
+  # rm -f 로 항상 새로 시작한다는 근거가 init 절 범위 안에 있어야 한다.
+  local init_section
+  init_section=$(sed -n '/^## `init`/,/^## `step`/p' "$dashboard_command_file")
+  if [[ -z "$init_section" ]]; then
+    record_failure "$test_name" "T22-93: init 절 범위 추출 실패 — 앵커가 깨졌다"
+    return 1
+  fi
+  if grep -qF '이미 존재하면' <<< "$init_section"; then
+    record_failure "$test_name" "T22-93: init 절에 '이미 존재하면' 분기가 남아있음"
+    return 1
+  fi
+  if ! grep -qF 'rm -f .claude/dashboard.html' <<< "$init_section"; then
+    record_failure "$test_name" "T22-93: init 절에 rm -f .claude/dashboard.html 미발견"
+    return 1
+  fi
+  if ! grep -qF '읽지 않은 기존 파일을 덮어쓰지 못한다' <<< "$init_section"; then
+    record_failure "$test_name" "T22-93: Write 도구 제약 근거 문구 미발견"
+    return 1
+  fi
+
+  # T22-94(정방향+역방향): 브라우저 열기 개정 — 자동 발행 4번 범위에 탭 활성화(전면) 지시가
+  # 있고, open -g(백그라운드) 옵션이 어디에도 없어야 한다.
+  local browser_open_section
+  browser_open_section=$(sed -n '/^### 4\. 브라우저 열기/,/^### 5\./p' "$dashboard_command_file")
+  if [[ -z "$browser_open_section" ]]; then
+    record_failure "$test_name" "T22-94: 브라우저 열기 절 범위 추출 실패 — 앵커가 깨졌다"
+    return 1
+  fi
+  if ! grep -qF '전면으로 올리는' <<< "$browser_open_section"; then
+    record_failure "$test_name" "T22-94: 탭 활성화(전면) 지시 미발견"
+    return 1
+  fi
+  if grep -qF 'open -g' "$dashboard_command_file"; then
+    record_failure "$test_name" "T22-94: open -g(백그라운드) 옵션 문자열 발견"
+    return 1
+  fi
+
+  # T22-96(역방향): 「지금」 카드 잔재 전무 확인 — dz-now-card·renderNowCard·data-started-at·
+  # now-row 중 어느 문자열도 파일에 남아있지 않아야 한다(카드 자체를 제거하기로 한 결정).
+  local now_card_relic
+  for now_card_relic in 'dz-now-card' 'dz-now-elapsed' 'dz-now-since' 'dz-now-next' 'renderNowCard' 'data-started-at' 'now-row' 'now-label' 'now-value' 'now-title'; do
+    if grep -qF -- "$now_card_relic" "$dashboard_command_file"; then
+      record_failure "$test_name" "T22-96: 「지금」 카드 잔재 발견: $now_card_relic"
+      return 1
+    fi
+  done
 
   log_ok "$test_name 통과"
   ((passed_tests++))
