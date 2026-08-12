@@ -8,14 +8,19 @@
 DZH:HUB 데이터 계약
   #dzh-data : application/json 스크립트. HubSnapshot 을 그대로 담는다(snake_case 그대로).
               hub_model.render_hub_html 이 이 블록 하나만 치환한다. 나머지는 정적이다.
-  갱신 모드는 /dashboard 와 같은 판정이다: location.protocol 이 http(s) 면 5초 폴링
-  (자기 URL 을 받아 문자열 전체 비교), 아니면 포커스 복귀 시 location.reload().
+  갱신 모드는 /dashboard 와 같은 판정이다: location.protocol 이 http(s) 면 1분 폴링
+  (자기 URL 을 받아 문자열 전체 비교), 아니면 포커스 복귀 시 location.reload(). 두 모드
+  모두 #dzh-refresh 버튼과 포커스 복귀 시에도 같은 즉시 갱신 경로를 탄다.
   폴링이 내용을 갱신하는 요소는 #dzh-app · #dzh-collected-at · #dzh-usage-body ·
   #dzh-usage-summary 네 개뿐이다(불변식 H1′, docs/prps/hub-usage-collapse-and-grid.md).
   #dzh-usage 와 그 안의 #dzh-usage-toggle 은 정적 노드이며 class·aria-expanded 속성만
   갱신한다(노드 교체 금지). 테마 토글 버튼은 이 넷 바깥의 정적 마크업이라 폴링과 무관하게
   DOM 이 그대로 유지된다. rate_limit_resets(있으면)는 펼침 본문에 초기화 예정 시각 줄로
   더해진다(docs/prps/hub-usage-reset-time-and-refresh.md).
+  #dzh-tooltip 은 전역 커스텀 툴팁의 정적 싱글턴이다(위 네 요소 바깥, docs/prps/
+  hub-session-activity-and-tooltip.md). 폴링 대상이 아니다 — 사용자 상호작용(hover·focus)만
+  내용을 바꾼다. 트리거는 data-tooltip="…" 속성을 가진 임의의 요소이며, 리스너는 재렌더로
+  죽지 않도록 document 에 위임한다.
 -->
 <style>
   :root{
@@ -48,38 +53,63 @@ DZH:HUB 데이터 계약
   body{margin:0;font-family:"Pretendard","Apple SD Gothic Neo","Malgun Gothic",sans-serif;color:var(--ink);background:var(--bg);line-height:1.5}
   .wrap{max-width:1440px;margin:32px auto;padding:0 16px}
   #dzh-app{display:grid;grid-template-columns:repeat(auto-fill,minmax(320px,1fr));gap:12px;align-items:start}
-  #dzh-app>.empty,#dzh-app>.unresolved,#dzh-app>.warnings{grid-column:1/-1}
-  h1{font-size:20px;margin:0 0 4px;color:var(--head);letter-spacing:-.4px}
-  .sub{font-size:12.5px;color:var(--muted);margin-bottom:18px}
-  .card{background:var(--surface);border:1px solid var(--line);border-radius:14px;padding:16px 20px;box-shadow:var(--shadow)}
-  .project-head{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
-  .project-name{font-size:15px;font-weight:800;color:var(--head)}
-  .badge{display:inline-block;font-size:11px;font-weight:800;padding:2px 9px;border-radius:999px}
+  #dzh-app>.empty,#dzh-app>.warnings{grid-column:1/-1}
+  .head-row{display:flex;align-items:baseline;justify-content:space-between;flex-wrap:wrap;gap:8px 16px;margin-bottom:18px}
+  .head-actions{display:flex;align-items:baseline;gap:12px;flex-wrap:wrap}
+  h1{font-size:20px;margin:0;color:var(--head);letter-spacing:-.4px}
+  /* 340px 는 헤더 블록(project-head+path+tier1) + 세션 약 3개가 스크롤 없이 들어가도록 고른
+     값이다 — 넘치는 세션은 .sessions 만 내부 스크롤된다. 카드 높이를 프로젝트마다 다르게
+     만들지 않기 위한 고정값이라 근거 없이 바꾸지 마라. */
+  .card{background:var(--surface);border:1px solid var(--line);border-radius:14px;padding:16px 20px;box-shadow:var(--shadow);height:340px;display:flex;flex-direction:column;overflow:hidden}
+  .project-head{display:flex;align-items:center;gap:10px;flex-wrap:nowrap}
+  .project-name{font-size:15px;font-weight:800;color:var(--head);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0;flex:1 1 auto}
+  /* inline-block 이던 시절엔 line-height 가 body(1.5)를 물려받아 패딩 위아래가 비대칭으로
+     보였다(글리프·텍스트가 위로 치우침) — inline-flex+align-items:center 로 박스 기준
+     중앙정렷하고 line-height:1 로 그 여백 자체를 없앤다. */
+  .badge{display:inline-flex;align-items:center;line-height:1;font-size:11px;font-weight:800;padding:4px 9px;border-radius:999px}
   .badge .glyph{margin-right:3px}
+  .project-head .badge{flex:0 0 auto}
   .badge.tier{background:var(--soft);color:var(--muted)}
-  .badge.state-working{background:var(--accent-soft);color:var(--accent-ink);box-shadow:inset 3px 0 0 var(--accent)}
+  /* 상태 배지: box-shadow 왼쪽 바 대신 배경/테두리 형태로 상태를 구분한다(색맹 안전 색상+글리프는
+     renderStateBadge 가 담당, 검수 M6). working 은 지금 진행 중이라 가장 눈에 띄어야 해서 채움
+     배지로, stale 은 경고성이라 점선 테두리로, idle·done 은 평상시라 플랫/윤곽선으로 낮춘다.
+     배경은 --accent-ink 를 쓴다 — 라이트 테마의 --accent(#0072B2)는 --bg 글자색과 대비가
+     4.6:1 로 WCAG AA(4.5:1) 여유가 거의 없다. --accent-ink 는 두 테마 모두 --bg 와의 대비를
+     넉넉히 확보하도록 이미 정의돼 있어(호버 텍스트용) 새 토큰 없이 재사용한다. */
+  .badge.state-working{background:var(--accent-ink);color:var(--bg)}
   .badge.state-idle{background:var(--soft);color:var(--muted)}
-  .badge.state-stale{background:var(--attention-soft);color:var(--attention);box-shadow:inset 3px 0 0 var(--attention)}
+  .badge.state-stale{background:var(--attention-soft);color:var(--attention);border:1px dashed var(--attention)}
   .badge.state-done{background:transparent;color:var(--muted);border:1px solid var(--line)}
-  .last-activity{margin-left:auto;font-size:11.5px;color:var(--muted)}
+  .last-activity{margin-left:auto;font-size:11.5px;color:var(--muted);flex:0 0 auto;white-space:nowrap}
   .path{font-size:11.5px;color:var(--muted);margin-top:2px;word-break:break-all}
   .tier1-pct{font-size:12px;font-weight:700;color:var(--accent-ink);margin-top:8px}
   .tier1-active{font-size:12px;color:var(--head);margin-top:3px;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
   .tier1-impl{font-size:11.5px;color:var(--muted);margin-top:2px}
-  .sessions{list-style:none;margin:10px 0 0;padding:0;font-size:13px}
+  .sessions{list-style:none;margin:10px 0 0;padding:0;font-size:13px;flex:1 1 auto;min-height:0;overflow-y:auto}
   .sessions li{padding:7px 0;border-top:1px solid var(--soft)}
   .session-line{display:flex;align-items:baseline;gap:8px;flex-wrap:wrap}
-  .short-id{font-family:ui-monospace,monospace;font-size:11px;color:var(--muted)}
-  .phase{font-size:11px;font-weight:800;color:var(--accent-ink)}
-  .phase.running::after{content:" · 진행중"}
+  .session-time{font-size:11px;color:var(--muted)}
+  .agent-runs{display:inline-flex;flex-wrap:wrap;gap:4px}
+  .agent-chip{font-family:ui-monospace,monospace;font-size:11px;font-weight:700;line-height:1.3;
+              color:var(--muted);background:var(--soft);border-radius:6px;padding:2px 6px}
+  .agent-chip-running{color:var(--accent-ink);background:var(--accent-soft)}
+  .agent-chip-more{background:transparent;border:1px solid var(--line)}
+  .agent-chip .glyph{margin-right:2px}
+  .sr-only{position:absolute;width:1px;height:1px;margin:-1px;padding:0;overflow:hidden;
+           clip:rect(0,0,0,1px);white-space:nowrap;border:0}
   .excerpt{color:var(--muted);font-size:12.5px;flex-basis:100%}
   .empty{color:var(--muted);font-size:13px;padding:20px 4px;text-align:center}
-  .unresolved{font-size:12px;color:var(--muted);margin-top:6px}
   .warnings{font-size:12px;color:var(--attention);margin-top:6px;border-left:3px solid var(--attention);padding-left:8px}
   .warnings::before{content:"⚠ "}
-  .foot{font-size:11.5px;color:var(--muted);text-align:right;margin-top:6px}
+  .foot{font-size:11.5px;color:var(--muted)}
   .theme-toggle{position:fixed;top:16px;right:16px;z-index:30;font-size:11.5px;font-weight:700;color:var(--muted);background:var(--surface);border:1px solid var(--line);border-radius:999px;padding:6px 12px;cursor:pointer;box-shadow:var(--shadow)}
   .theme-toggle:hover{color:var(--accent-ink);border-color:var(--accent)}
+  /* 아이콘 전용 버튼 — 텍스트가 없어 aria-label 로 접근성 이름을 준다(마크업 참고). 정사각형
+     크기를 고정해 원형 배지처럼 보이게 한다(글자 수에 따라 늘어나던 이전 텍스트 버튼과 다름).
+     32px 는 유니코드 글리프(26px)가 너무 작다는 피드백을 반영해 키운 값이다. */
+  .refresh-btn{width:32px;height:32px;padding:0;color:var(--muted);background:var(--surface);border:1px solid var(--line);border-radius:999px;cursor:pointer;display:inline-flex;align-items:center;justify-content:center}
+  .refresh-btn:hover{color:var(--accent-ink);border-color:var(--accent)}
+  .refresh-btn svg{width:18px;height:18px}
   /* 218px 은 JS 가 못 도는 경우에만 쓰이는 fallback 이다(펼침 실측 186 + 여유 32,
      .usage-toggle 의 line-height:1 적용 이후 재실측 — 검수 LOW). 평소에는
      applyUsageClearance() 가 --usage-clearance 를 실측값으로 덮어쓴다 —
@@ -108,6 +138,11 @@ DZH:HUB 데이터 계약
   .usage-bar>span{display:block;height:100%;background:var(--accent);border-radius:999px}
   .usage-reset{font-size:11px;color:var(--muted);margin-top:3px;text-align:right}
   .usage-meta{font-size:11px;color:var(--muted);margin-top:10px;text-align:right}
+  .tooltip{position:fixed;left:0;top:0;z-index:40;max-width:min(280px,calc(100vw - 32px));
+           padding:6px 9px;border-radius:8px;font-size:11.5px;line-height:1.45;font-weight:600;
+           color:var(--bg);background:var(--ink);box-shadow:var(--shadow);
+           overflow-wrap:anywhere;visibility:hidden}
+  .tooltip.tooltip-visible{visibility:visible}
 </style>
 <script>
 /* body 파싱 전에 실행돼 첫 페인트부터 확정 테마로 그린다(FOUC 방지, 결정 T3).
@@ -119,10 +154,21 @@ try{var m=localStorage.getItem('dzh-theme');
 <body>
 <button id="dzh-theme-toggle" class="theme-toggle" type="button">테마: 시스템</button>
 <div class="wrap">
-  <h1>통합 허브 대시보드</h1>
-  <div class="sub">모든 프로젝트의 진행 상황 · 읽기 전용 · <code>/hub</code> 로 갱신</div>
+  <div class="head-row">
+    <h1>Claude Agents Manager</h1>
+    <div class="head-actions">
+      <span class="foot" id="dzh-collected-at"></span>
+      <button id="dzh-refresh" class="refresh-btn" type="button" aria-label="새로고침" data-tooltip="새로고침">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">
+          <path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8"/>
+          <path d="M21 3v5h-5"/>
+          <path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16"/>
+          <path d="M8 16H3v5"/>
+        </svg>
+      </button>
+    </div>
+  </div>
   <div id="dzh-app"><div class="empty">불러오는 중…</div></div>
-  <div class="foot" id="dzh-collected-at"></div>
 </div>
 <aside id="dzh-usage" class="usage" hidden>
   <button id="dzh-usage-toggle" class="usage-toggle" type="button"
@@ -133,11 +179,12 @@ try{var m=localStorage.getItem('dzh-theme');
   </button>
   <div id="dzh-usage-body" class="usage-body"></div>
 </aside>
+<div id="dzh-tooltip" class="tooltip" role="tooltip"></div>
 <script type="application/json" id="dzh-data">{}</script>
 <script>
 (function(){
   // 테마 토글 — 3상태 순환(시스템 → 라이트 → 다크 → 시스템, 결정 T2). 버튼은 #dzh-app 밖의
-  // 정적 마크업이라 5초 폴링(불변식 H1)과 무관하게 이 IIFE 하나로 수명이 끝난다.
+  // 정적 마크업이라 1분 폴링(불변식 H1)과 무관하게 이 IIFE 하나로 수명이 끝난다.
   var THEME_STORAGE_KEY = 'dzh-theme';
   var THEME_CYCLE = ['system', 'light', 'dark'];
   var THEME_BUTTON_LABEL = {system:'테마: 시스템', light:'테마: 라이트', dark:'테마: 다크'};
@@ -171,12 +218,134 @@ try{var m=localStorage.getItem('dzh-theme');
 })();
 
 (function(){
-  var POLL_INTERVAL_MS = 5000;
+  // 전역 커스텀 툴팁 — data-tooltip 트리거 전체가 공유하는 position:fixed 싱글턴(결정 T1).
+  // 네이티브 title 은 지연·스타일·위치를 제어할 수 없고 .card{overflow:hidden} 안에서 잘리므로
+  // 이 파일 안의 바닐라 CSS/JS 로 대체한다(요구 2). 스냅샷 렌더와 무관한 범용 UI 컴포넌트라
+  // 테마 토글과 같은 층위의 독립 IIFE 로 둔다.
+  var TOOLTIP_SHOW_DELAY_MS = 120;          // 마우스 hover-intent (결정 T3)
+  var TOOLTIP_GAP_PX = 8;                   // 트리거와 툴팁 사이 간격
+  var TOOLTIP_VIEWPORT_MARGIN_PX = 8;       // 뷰포트 경계 최소 여백
+  var TOOLTIP_VISIBLE_CLASS = 'tooltip-visible';
+  var TOOLTIP_ELEMENT_ID = 'dzh-tooltip';
+  var TOOLTIP_TRIGGER_SELECTOR = '[data-tooltip]';
+
+  var tooltipEl = document.getElementById(TOOLTIP_ELEMENT_ID);
+  if(!tooltipEl) return;
+  var currentTrigger = null;                // 표시 중인 트리거(없으면 null)
+  var showTimerId = null;
+
+  // 트리거 사각형·툴팁 크기·뷰포트로 {left, top} 을 계산한다. 순수 함수 — DOM 에 닿지 않는다.
+  function tooltipPosition(triggerRect, tooltipWidth, tooltipHeight, viewportWidth, viewportHeight){
+    var left = triggerRect.left + triggerRect.width / 2 - tooltipWidth / 2;
+    left = Math.max(TOOLTIP_VIEWPORT_MARGIN_PX, Math.min(left, viewportWidth - tooltipWidth - TOOLTIP_VIEWPORT_MARGIN_PX));
+    var below = triggerRect.bottom + TOOLTIP_GAP_PX;
+    var above = triggerRect.top - tooltipHeight - TOOLTIP_GAP_PX;
+    var top = (below + tooltipHeight + TOOLTIP_VIEWPORT_MARGIN_PX <= viewportHeight) ? below : above;
+    top = Math.max(TOOLTIP_VIEWPORT_MARGIN_PX, Math.min(top, viewportHeight - tooltipHeight - TOOLTIP_VIEWPORT_MARGIN_PX));
+    return {left: left, top: top};
+  }
+
+  // 트리거의 접근성 이름 근사값. aria-label 이 있으면 그것, 없으면 textContent 를 다듬는다.
+  function accessibleNameOf(element){
+    var ariaLabel = element.getAttribute('aria-label');
+    if(ariaLabel) return ariaLabel.trim();
+    return (element.textContent || '').replace(/\s+/g, ' ').trim();
+  }
+
+  // 툴팁 문구가 접근성 이름과 다를 때만 true — 같으면 aria-describedby 가 이중 낭독이 된다.
+  function shouldDescribe(trigger, text){
+    return accessibleNameOf(trigger) !== text;
+  }
+
+  // 표시를 끄고 지연 타이머를 취소하고 aria-describedby 를 되돌린다. 언제 불려도 안전하다.
+  function hideTooltip(){
+    if(showTimerId !== null){ clearTimeout(showTimerId); showTimerId = null; }
+    tooltipEl.classList.remove(TOOLTIP_VISIBLE_CLASS);
+    if(currentTrigger && currentTrigger.getAttribute('aria-describedby') === TOOLTIP_ELEMENT_ID){
+      currentTrigger.removeAttribute('aria-describedby');
+    }
+    currentTrigger = null;
+  }
+
+  // 문구를 채우고 위치를 잡아 표시하고, 필요하면 aria-describedby 를 연결한다(표시 순서 GOTCHA).
+  function showTooltip(trigger){
+    if(showTimerId !== null){ clearTimeout(showTimerId); showTimerId = null; }
+    var text = trigger.getAttribute('data-tooltip') || '';
+    tooltipEl.textContent = text;                  // innerHTML 이 아니다 — 문구가 그대로 텍스트가 된다
+    tooltipEl.style.left = '0px';
+    tooltipEl.style.top = '0px';                    // GOTCHA 3 — 측정 전 좌표 리셋
+    var tooltipWidth = tooltipEl.offsetWidth;
+    var tooltipHeight = tooltipEl.offsetHeight;
+    var position = tooltipPosition(
+      trigger.getBoundingClientRect(), tooltipWidth, tooltipHeight,
+      window.innerWidth, window.innerHeight
+    );
+    tooltipEl.style.left = position.left + 'px';
+    tooltipEl.style.top = position.top + 'px';
+    tooltipEl.classList.add(TOOLTIP_VISIBLE_CLASS);
+    currentTrigger = trigger;
+    if(shouldDescribe(trigger, text)) trigger.setAttribute('aria-describedby', TOOLTIP_ELEMENT_ID);
+  }
+
+  // 표시 요청. 이미 다른 트리거를 보여주는 중이면 지연 없이 즉시 교체한다(결정 T3).
+  function requestTooltip(trigger, isImmediate){
+    if(trigger === currentTrigger) return;
+    if(showTimerId !== null){ clearTimeout(showTimerId); showTimerId = null; }
+    if(isImmediate || currentTrigger){ showTooltip(trigger); return; }
+    showTimerId = setTimeout(function(){ showTimerId = null; showTooltip(trigger); }, TOOLTIP_SHOW_DELAY_MS);
+  }
+
+  // 이벤트 배선 — 전부 document 위임이다(결정 T2). 폴링이 #dzh-app.innerHTML 을 통째로
+  // 교체하므로 개별 요소에 리스너를 붙이면 재렌더 후 전부 죽는다.
+  document.addEventListener('mouseover', function(event){
+    var trigger = event.target.closest(TOOLTIP_TRIGGER_SELECTOR);
+    if(trigger){ requestTooltip(trigger, false); return; }
+    if(event.target.closest('#' + TOOLTIP_ELEMENT_ID)) return;   // hoverable(WCAG 1.4.13)
+    hideTooltip();
+  });
+  document.addEventListener('mouseleave', function(){ hideTooltip(); });   // 포인터가 창 밖으로 나가면 mouseover 가 더 안 온다
+  document.addEventListener('focusin', function(event){
+    var trigger = event.target.closest(TOOLTIP_TRIGGER_SELECTOR);
+    if(trigger) requestTooltip(trigger, true);   // 포커스 이동은 의도적 행위다 — 지연 0
+  });
+  document.addEventListener('focusout', function(){ hideTooltip(); });
+  document.addEventListener('keydown', function(event){
+    if(event.key === 'Escape') hideTooltip();
+  });
+  document.addEventListener('click', function(){ hideTooltip(); });
+  document.addEventListener('scroll', function(){ hideTooltip(); }, {capture: true, passive: true});
+  window.addEventListener('resize', function(){ hideTooltip(); });
+
+  // 30초 틱이 트리거 노드를 파괴하는데 포인터가 멈춰 있으면 마우스 이벤트가 안 와 낡은 문구가
+  // 남는다(결정 T6) — #dzh-app·#dzh-usage-body 의 자식 교체(렌더의 innerHTML 통째 교체)를
+  // 감시해 고아 툴팁을 막는다.
+  var appElForTooltipObserver = document.getElementById('dzh-app');
+  var usageBodyElForTooltipObserver = document.getElementById('dzh-usage-body');
+  var tooltipDismissObserver = new MutationObserver(function(){ hideTooltip(); });
+  if(appElForTooltipObserver) tooltipDismissObserver.observe(appElForTooltipObserver, {childList: true});
+  if(usageBodyElForTooltipObserver) tooltipDismissObserver.observe(usageBodyElForTooltipObserver, {childList: true});
+})();
+
+(function(){
+  var POLL_INTERVAL_MS = 60000;
   var TICK_MS = 30000;
   var MS_PER_MINUTE = 60000;
   var MINUTES_PER_HOUR = 60;
   var STATE_LABEL = {working:'작업중', idle:'대기', stale:'소식 없음', done:'완료'};
   var STATE_GLYPH = {working:'●', idle:'○', stale:'▲', done:'✓'};
+  var MAX_VISIBLE_AGENT_CHIPS = 2;            // 초과분은 "+N" 칩 하나로 접는다(결정 D4)
+  var AGENT_RUN_RUNNING_GLYPH = '●';          // 상태 배지의 working 글리프와 의도적으로 같은 모양
+  var AGENT_RUN_RUNNING_LABEL = '진행 중';
+  var AGENT_RUN_ENDED_LABEL = '종료';
+  var AGENT_RUN_NO_PHASE_LABEL = '워크플로우 단계 매핑 없음';
+  // "티어 N" 만으로는 의미가 안 드러나 사용자가 두 번 물었다 — 뱃지 텍스트 자체를 설명형으로
+  // 바꾼다. data-tooltip 으로 추가 설명을 보완한다(전역 커스텀 툴팁, 결정 T1).
+  var TIER_LABEL = {1: '대시보드 추적', 2: '세션 활동', 3: '세션 없음'};
+  var TIER_DESCRIPTION = {
+    1: '/dashboard 로 진행상황을 기록 중인 프로젝트',
+    2: '세션 활동은 있지만 /dashboard 기록은 없는 프로젝트',
+    3: '파일시스템에서만 발견됨 — 세션 활동 없음'
+  };
   var USAGE_SESSION_LABEL = '세션 (5시간)';
   var USAGE_WEEKLY_LABEL = '주간 (7일)';
   var USAGE_CYCLE_NOTE = '· 약 15분 주기';
@@ -189,6 +358,7 @@ try{var m=localStorage.getItem('dzh-theme');
 
   var app = document.getElementById('dzh-app');
   var collectedAtLabel = document.getElementById('dzh-collected-at');
+  var refreshButton = document.getElementById('dzh-refresh');
   var usageEl = document.getElementById('dzh-usage');
   var usageToggleButton = document.getElementById('dzh-usage-toggle');
   var usageBodyEl = document.getElementById('dzh-usage-body');
@@ -199,6 +369,10 @@ try{var m=localStorage.getItem('dzh-theme');
   var snapshot = initialDataParse.snapshot;
   var initialParseError = initialDataParse.error;
   var lastHtml = '';
+  // 서버(hub_model.build_project_views)는 매 수집마다 last_activity_at_ms 내림차순으로
+  // 재정렬한다 — 클라이언트는 그 순서를 그대로 쓰지 않고 path 기준 최초 등장 순서를
+  // 기억해 카드 위치를 고정한다(카드가 갱신마다 자리를 옮기면 읽기 흐름이 끊긴다).
+  var projectDisplayOrder = [];
 
   // 데이터 블록이 깨지면(수동 편집·render_hub_html 결함 등) JSON.parse 가 던지고, try/catch 가
   // 없으면 이 IIFE 전체가 죽어 render() 가 한 번도 안 불려 "불러오는 중…" 이 영구 고정된다(검수 n4).
@@ -236,17 +410,46 @@ try{var m=localStorage.getItem('dzh-theme');
          + label + '</span>';
   }
 
-  function renderSession(session){
-    var phaseText = '';
-    if(session.inferred_phase){
-      phaseText = '<span class="phase' + (session.inferred_phase_running ? ' running' : '') + '">'
-        + escapeHtml(session.inferred_phase) + ' 추정</span>';
+  // 칩 툴팁 문구. 순수 함수 — DOM 에 닿지 않는다. 예: "구현 단계 · 진행 중"
+  function agentRunTooltipText(run){
+    var phaseLabel = run.phase ? (run.phase + ' 단계') : AGENT_RUN_NO_PHASE_LABEL;
+    var statusLabel = run.is_running ? AGENT_RUN_RUNNING_LABEL : AGENT_RUN_ENDED_LABEL;
+    return phaseLabel + ' · ' + statusLabel;
+  }
+
+  // 서브에이전트 타입 칩 하나. 실행 중이면 글리프 + 보조기술용 텍스트가 붙는다(GOTCHA 2).
+  function renderAgentChip(run){
+    var runningClass = run.is_running ? ' agent-chip-running' : '';
+    var runningGlyph = run.is_running
+      ? '<span class="glyph" aria-hidden="true">' + AGENT_RUN_RUNNING_GLYPH + '</span>' : '';
+    var runningSrText = run.is_running
+      ? '<span class="sr-only"> ' + AGENT_RUN_RUNNING_LABEL + '</span>' : '';
+    return '<span class="agent-chip' + runningClass + '" data-tooltip="'
+      + escapeHtml(agentRunTooltipText(run)) + '">'
+      + runningGlyph + escapeHtml(run.agent_type) + runningSrText + '</span>';
+  }
+
+  // 칩 목록. 상한을 넘는 타입은 "+N" 칩 하나로 접고 전체 목록을 그 툴팁에 담는다(결정 D4·D5).
+  function renderAgentRuns(runs){
+    if(!runs || !runs.length) return '';
+    var visibleRuns = runs.slice(0, MAX_VISIBLE_AGENT_CHIPS);
+    var overflowRuns = runs.slice(MAX_VISIBLE_AGENT_CHIPS);
+    var chipsHtml = visibleRuns.map(renderAgentChip).join('');
+    if(overflowRuns.length){
+      var overflowTooltip = overflowRuns.map(function(run){ return run.agent_type; }).join(', ');
+      chipsHtml += '<span class="agent-chip agent-chip-more" data-tooltip="'
+        + escapeHtml(overflowTooltip) + '">+' + overflowRuns.length + '</span>';
     }
+    return '<span class="agent-runs">' + chipsHtml + '</span>';
+  }
+
+  function renderSession(session){
     var excerpt = session.task_excerpt
       ? '<span class="excerpt">' + escapeHtml(session.task_excerpt) + '</span>' : '';
     return '<li><div class="session-line">'
       + renderStateBadge(session.state, session.base_state)
-      + '<span class="short-id">' + escapeHtml(session.short_id) + '</span>' + phaseText
+      + '<span class="session-time">' + elapsedLabel(session.last_event_at_ms) + '</span>'
+      + renderAgentRuns(session.agent_runs)
       + '</div>' + excerpt + '</li>';
   }
 
@@ -278,8 +481,8 @@ try{var m=localStorage.getItem('dzh-theme');
       ? '<ul class="sessions">' + project.sessions.map(renderSession).join('') + '</ul>' : '';
     return '<div class="card">'
       + '<div class="project-head">'
-      + '<span class="project-name">' + escapeHtml(project.display_name) + '</span>'
-      + '<span class="badge tier">티어 ' + project.tier + '</span>'
+      + '<span class="project-name" data-tooltip="' + escapeHtml(project.display_name) + '">' + escapeHtml(project.display_name) + '</span>'
+      + '<span class="badge tier" data-tooltip="' + escapeHtml(TIER_DESCRIPTION[project.tier] || '') + '">' + escapeHtml(TIER_LABEL[project.tier] || ('티어 ' + project.tier)) + '</span>'
       + renderStateBadge(project.state)
       + '<span class="last-activity">' + elapsedLabel(project.last_activity_at_ms) + '</span>'
       + '</div>'
@@ -287,8 +490,9 @@ try{var m=localStorage.getItem('dzh-theme');
       + renderTier1(project.tier1) + sessionsHtml + '</div>';
   }
 
-  // 따옴표도 이스케이프한다 — usage-meta 의 title="..." 이 이 함수의 첫 속성 자리 사용처다
-  // (검수 m3). 텍스트 자리에서는 무해하고, 속성 자리로 재사용될 다음 호출부를 미리 방어한다.
+  // 따옴표도 이스케이프한다 — usage-meta 의 data-tooltip="..." 이 이 함수의 첫 속성 자리
+  // 사용처다(검수 m3). 텍스트 자리에서는 무해하고, 속성 자리로 재사용될 다음 호출부를 미리
+  // 방어한다.
   function escapeHtml(text){
     return String(text).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')
       .replace(/"/g,'&quot;').replace(/'/g,'&#39;');
@@ -356,17 +560,19 @@ try{var m=localStorage.getItem('dzh-theme');
     return USAGE_RESET_LABEL + ' ' + absolutePart + ' · ' + remaining;
   }
 
-  // 초기화 예정 시각 한 줄의 HTML. 그릴 값이 없으면 빈 문자열. capturedAtMs 는 title 툴팁의
+  // 초기화 예정 시각 한 줄의 HTML. 그릴 값이 없으면 빈 문자열. capturedAtMs 는 툴팁의
   // '이 정보를 확인한 시각'에 쓰인다(표시 규칙 표) — formatTimestamp 는 usage-meta 와 같은
   // 기존 함수를 재사용한다(새 날짜 포맷 도입 없음).
+  // 네이티브 title 이 아니라 data-tooltip 을 쓴다 — 대시보드의 모든 툴팁은 #dzh-tooltip
+  // 커스텀 컴포넌트 하나로 통일한다(T25-39 가 title 속성 0건을 강제한다).
   function renderUsageResetRow(resetsAtMs, capturedAtMs){
     var text = usageResetText(resetsAtMs, Date.now());
     if(text === null) return '';
     var capturedAtNumber = Number(capturedAtMs);
-    var titleAttr = isFinite(capturedAtNumber)
-      ? ' title="' + escapeHtml('이 정보를 확인한 시각: ' + formatTimestamp(capturedAtNumber)) + '"'
+    var tooltipAttr = isFinite(capturedAtNumber)
+      ? ' data-tooltip="' + escapeHtml('이 정보를 확인한 시각: ' + formatTimestamp(capturedAtNumber)) + '"'
       : '';
-    return '<div class="usage-reset"' + titleAttr + '>' + escapeHtml(text) + '</div>';
+    return '<div class="usage-reset"' + tooltipAttr + '>' + escapeHtml(text) + '</div>';
   }
 
   function hideUsagePanel(){
@@ -425,7 +631,7 @@ try{var m=localStorage.getItem('dzh-theme');
     var meta = '마지막 갱신 ' + elapsedLabel(usage.sampled_at_ms) + ' ' + USAGE_CYCLE_NOTE;
     usageSummaryEl.textContent = usageSummaryText(usage);
     usageBodyEl.innerHTML = sessionBar + sessionResetRow + weeklyBar + weeklyResetRow
-      + '<div class="usage-meta" title="' + escapeHtml(formatTimestamp(usage.sampled_at_ms)) + '">' + meta + '</div>';
+      + '<div class="usage-meta" data-tooltip="' + escapeHtml(formatTimestamp(usage.sampled_at_ms)) + '">' + meta + '</div>';
     usageEl.hidden = false;
     document.body.classList.add('has-usage');
     applyUsageCollapsedState();
@@ -446,6 +652,20 @@ try{var m=localStorage.getItem('dzh-theme');
     collectedAtLabel.textContent = '마지막 변화: ' + lastChange + ' · 서버 연결됨 (' + secondsSincePoll + '초 전 확인)';
   }
 
+  // projectDisplayOrder 를 IIFE 최상위에서 계속 갱신해 카드 순서를 고정한다 — render() 안에서
+  // 초기화하면 매 폴링마다 서버 정렬을 그대로 다시 따르게 되어 고정 효과가 사라진다.
+  function stableSortedProjects(projects){
+    var presentPaths = {};
+    for(var i = 0; i < projects.length; i++) presentPaths[projects[i].path] = true;
+    for(var j = 0; j < projects.length; j++){
+      if(projectDisplayOrder.indexOf(projects[j].path) === -1) projectDisplayOrder.push(projects[j].path);
+    }
+    projectDisplayOrder = projectDisplayOrder.filter(function(path){ return presentPaths[path]; });
+    var byPath = {};
+    for(var k = 0; k < projects.length; k++) byPath[projects[k].path] = projects[k];
+    return projectDisplayOrder.map(function(path){ return byPath[path]; });
+  }
+
   function render(){
     if(initialParseError){
       app.innerHTML = '<div class="empty">데이터를 읽지 못했습니다 ('
@@ -457,12 +677,9 @@ try{var m=localStorage.getItem('dzh-theme');
     if(!snapshot.projects || !snapshot.projects.length){
       app.innerHTML = '<div class="empty">아직 프로젝트가 없습니다. 훅을 설치했나요? — /hub install</div>';
     } else {
-      app.innerHTML = snapshot.projects.map(renderProject).join('');
+      app.innerHTML = stableSortedProjects(snapshot.projects).map(renderProject).join('');
     }
     var extra = '';
-    if(snapshot.unresolved_dir_names && snapshot.unresolved_dir_names.length){
-      extra += '<div class="unresolved">미확인 프로젝트 ' + snapshot.unresolved_dir_names.length + '개</div>';
-    }
     if(snapshot.warnings && snapshot.warnings.length){
       extra += '<div class="warnings">' + snapshot.warnings.map(escapeHtml).join('<br>') + '</div>';
     }
@@ -492,6 +709,7 @@ try{var m=localStorage.getItem('dzh-theme');
     var reloadOnce = function(){ if(reloading) return; reloading = true; location.reload(); };
     document.addEventListener('visibilitychange', function(){ if(document.visibilityState==='visible') reloadOnce(); });
     window.addEventListener('focus', reloadOnce);
+    refreshButton.addEventListener('click', reloadOnce);
     return;
   }
 
@@ -522,6 +740,7 @@ try{var m=localStorage.getItem('dzh-theme');
   setInterval(poll, POLL_INTERVAL_MS);
   document.addEventListener('visibilitychange', function(){ if(document.visibilityState==='visible') poll(); });
   window.addEventListener('focus', poll);
+  refreshButton.addEventListener('click', poll);
 })();
 </script>
 </body>

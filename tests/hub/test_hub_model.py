@@ -103,25 +103,118 @@ class SubagentTrackingTest(unittest.TestCase):
         self.assertIsNone(by_id["agt-2"].ended_at_ms)
 
 
-class InferPhaseTest(unittest.TestCase):
-    """M9~M10 — 단계 추정."""
+class SummarizeAgentRunsTest(unittest.TestCase):
+    """A1~A9 — 세션의 서브에이전트 요약(요구 1). infer_phase 를 대체한다."""
 
-    def test_m9_latest_mapped_subagent_wins(self) -> None:
+    def test_a1_all_started_types_survive_after_completion(self) -> None:
         events = [
             _event("SubagentStart", 0, agent_id="agt-1", agent_type="design-architect"),
             _event("SubagentStop", 100, agent_id="agt-1", agent_type="design-architect"),
             _event("SubagentStart", 200, agent_id="agt-2", agent_type="implementer"),
+            _event("SubagentStop", 300, agent_id="agt-2", agent_type="implementer"),
+            _event("SubagentStart", 400, agent_id="agt-3", agent_type="code-reviewer"),
+            _event("SubagentStop", 500, agent_id="agt-3", agent_type="code-reviewer"),
         ]
         facts = _facts_from(events)
-        phase, running = hub_model.infer_phase(facts)
-        self.assertEqual(phase, "구현")
-        self.assertTrue(running)
+        runs = hub_model.summarize_agent_runs(facts)
+        self.assertEqual(
+            [run.agent_type for run in runs], ["code-reviewer", "implementer", "design-architect"]
+        )
+        self.assertTrue(all(not run.is_running for run in runs))
+        self.assertEqual([run.phase for run in runs], ["검수", "구현", "설계"])
 
-    def test_m10_unmapped_agent_type_infers_nothing(self) -> None:
-        facts = _facts_from([_event("SubagentStart", 0, agent_id="agt-1", agent_type="Explore")])
-        phase, running = hub_model.infer_phase(facts)
-        self.assertIsNone(phase)
-        self.assertFalse(running)
+    def test_a2_same_type_is_merged_and_running_wins(self) -> None:
+        events = [
+            _event("SubagentStart", 0, agent_id="agt-1", agent_type="implementer"),
+            _event("SubagentStop", 100, agent_id="agt-1", agent_type="implementer"),
+            _event("SubagentStart", 200, agent_id="agt-2", agent_type="implementer"),
+        ]
+        facts = _facts_from(events)
+        runs = hub_model.summarize_agent_runs(facts)
+        self.assertEqual(len(runs), 1)
+        self.assertTrue(runs[0].is_running)
+
+    def test_a3_empty_agent_type_is_excluded(self) -> None:
+        facts = _facts_from([_event("SubagentStart", 0, agent_id="agt-1", agent_type="")])
+        self.assertEqual(hub_model.summarize_agent_runs(facts), ())
+
+    def test_a4_unmapped_type_has_no_phase(self) -> None:
+        facts = _facts_from(
+            [_event("SubagentStart", 0, agent_id="agt-1", agent_type="workflow-subagent")]
+        )
+        runs = hub_model.summarize_agent_runs(facts)
+        self.assertEqual(len(runs), 1)
+        self.assertIsNone(runs[0].phase)
+        self.assertTrue(runs[0].is_running)
+
+    def test_a5_no_subagent_yields_empty_tuple(self) -> None:
+        facts = _facts_from([_event("UserPromptSubmit")])
+        self.assertEqual(hub_model.summarize_agent_runs(facts), ())
+
+    def test_a6_same_start_time_breaks_tie_by_type_name(self) -> None:
+        events = [
+            _event("SubagentStart", 0, agent_id="agt-1", agent_type="implementer"),
+            _event("SubagentStart", 0, agent_id="agt-2", agent_type="design-architect"),
+        ]
+        facts = _facts_from(events)
+        runs = hub_model.summarize_agent_runs(facts)
+        self.assertEqual([run.agent_type for run in runs], ["design-architect", "implementer"])
+
+    def test_a7_done_session_still_exposes_agent_runs(self) -> None:
+        """이 PRP 가 고치는 결함의 직접 회귀 테스트 — 완료된 세션도 agent_runs 를 잃지 않는다."""
+        events = [
+            _event("SubagentStart", 0, agent_id="agt-1", agent_type="implementer"),
+            _event("SubagentStop", 100, agent_id="agt-1", agent_type="implementer"),
+            _event("SessionEnd", 200),
+        ]
+        facts = _facts_from(events)
+        view = hub_model.compute_session_view(facts, now_ms=facts.last_event_at_ms, stale_after_ms=STALE_AFTER_MS)
+        self.assertEqual(view.state, "done")
+        self.assertEqual(len(view.agent_runs), 1)
+        self.assertFalse(view.agent_runs[0].is_running)
+
+    def test_a8_agent_runs_reaches_json_contract(self) -> None:
+        events = [
+            _event("SubagentStart", 0, agent_id="agt-1", agent_type="implementer"),
+            _event("SubagentStop", 100, agent_id="agt-1", agent_type="implementer"),
+        ]
+        facts = _facts_from(events)
+        view = hub_model.compute_session_view(facts, now_ms=facts.last_event_at_ms, stale_after_ms=STALE_AFTER_MS)
+        project = hub_model.ProjectView(
+            display_name="coding-env", path="/repo", tier=2, state="working",
+            last_activity_at_ms=BASE_TIME_MS, sessions=(view,), tier1=None, note=None,
+        )
+        snapshot = hub_model.HubSnapshot(
+            collected_at_ms=BASE_TIME_MS, projects=(project,), unresolved_dir_names=(), warnings=(),
+        )
+        template = '<html><body><script type="application/json" id="dzh-data">{}</script></body></html>'
+        rendered = hub_model.render_hub_html(template, snapshot)
+        payload = rendered.split('id="dzh-data">', 1)[1].rsplit("</script>", 1)[0]
+        parsed = json.loads(payload)
+        session_json = parsed["projects"][0]["sessions"][0]
+        self.assertEqual(session_json["agent_runs"][0]["agent_type"], "implementer")
+        self.assertNotIn("active_agent_types", session_json)
+        self.assertNotIn("inferred_phase", session_json)
+
+    def test_a9_agent_runs_difference_changes_content_key(self) -> None:
+        def _snapshot(agent_runs):
+            session = hub_model.SessionView(
+                session_id="s1", short_id="s1", state="working", base_state="working",
+                last_event_at_ms=BASE_TIME_MS, task_excerpt=None, agent_runs=agent_runs,
+            )
+            project = hub_model.ProjectView(
+                display_name="coding-env", path="/repo", tier=2, state="working",
+                last_activity_at_ms=BASE_TIME_MS, sessions=(session,), tier1=None, note=None,
+            )
+            return hub_model.HubSnapshot(
+                collected_at_ms=BASE_TIME_MS, projects=(project,), unresolved_dir_names=(), warnings=(),
+            )
+
+        key_without_runs = hub_model.snapshot_content_key(_snapshot(()))
+        key_with_runs = hub_model.snapshot_content_key(
+            _snapshot((hub_model.SubagentRunView(agent_type="implementer", phase="구현", is_running=True),))
+        )
+        self.assertNotEqual(key_without_runs, key_with_runs)
 
 
 class ParseEventLineTest(unittest.TestCase):
@@ -254,8 +347,7 @@ class RenderHubHtmlTest(unittest.TestCase):
     def _minimal_snapshot(self, prompt_excerpt="</script> 공격 시도"):
         session = hub_model.SessionView(
             session_id="s1", short_id="s1", state="working", base_state="working",
-            last_event_at_ms=BASE_TIME_MS, task_excerpt=prompt_excerpt,
-            inferred_phase=None, inferred_phase_running=False, active_agent_types=(),
+            last_event_at_ms=BASE_TIME_MS, task_excerpt=prompt_excerpt, agent_runs=(),
         )
         project = hub_model.ProjectView(
             display_name="coding-env", path="/repo", tier=2, state="working",
@@ -415,8 +507,7 @@ class SnapshotContentKeyTest(unittest.TestCase):
     def _session(self, state="working", base_state="working"):
         return hub_model.SessionView(
             session_id="s1", short_id="s1", state=state, base_state=base_state,
-            last_event_at_ms=BASE_TIME_MS, task_excerpt=None,
-            inferred_phase=None, inferred_phase_running=False, active_agent_types=(),
+            last_event_at_ms=BASE_TIME_MS, task_excerpt=None, agent_runs=(),
         )
 
     def _snapshot(self, collected_at_ms=BASE_TIME_MS, session_state="working", warnings=()):

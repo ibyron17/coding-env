@@ -1893,10 +1893,10 @@ test_hub_unit_tests() {
   ((passed_tests++))
 }
 
-# T25: 허브 문서·상수 정합성 (하위 검증 T25-1~T25-42)
+# T25: 허브 문서·상수 정합성 (하위 검증 T25-1~T25-45)
 test_hub_docs_and_constants() {
   local test_name="T25"
-  local test_desc="허브 문서·상수 정합성 (T25-1~T25-42)"
+  local test_desc="허브 문서·상수 정합성 (T25-1~T25-45)"
   log_test_name "$test_name" "$test_desc"
 
   local hub_settings_file="$REPO_ROOT/hub/bin/hub_settings.py"
@@ -2008,13 +2008,17 @@ test_hub_docs_and_constants() {
 
   local hub_template_file="$REPO_ROOT/hub/bin/hub_template.html"
 
-  # T25-11(검수 m9 회귀): session.short_id 가 escapeHtml 없이 그대로 innerHTML 에 꽂히지 않는다
+  # T25-11(수정 — 세션 줄 재구성 반영): 세션 줄의 동적 값은 반드시 escapeHtml 을 통과한다.
+  # 기존 부정 검사(`+ session.short_id +` 리터럴 금지)는 그대로 둔다 — short_id 렌더가
+  # 폐기됐어도 되살아나는 것을 막는 값이 있다. 아래 긍정 검사만 새 렌더 대상으로 교체했다:
+  # session.short_id 는 더 이상 렌더되지 않고(세션 줄이 agent_runs 로 재구성됨), 대신 세션
+  # 줄이 실제로 넣는 동적 값(run.agent_type)이 escapeHtml 을 통과하는지 확인한다.
   if grep -qF "+ session.short_id +" "$hub_template_file"; then
     record_failure "$test_name" "T25-11: session.short_id 가 escapeHtml 없이 삽입됨(m9 회귀)"
     return 1
   fi
-  if ! grep -qF "escapeHtml(session.short_id)" "$hub_template_file"; then
-    record_failure "$test_name" "T25-11: escapeHtml(session.short_id) 미발견"
+  if ! grep -qF "escapeHtml(run.agent_type)" "$hub_template_file"; then
+    record_failure "$test_name" "T25-11: 서브에이전트 타입명이 escapeHtml 없이 삽입됨"
     return 1
   fi
 
@@ -2429,6 +2433,25 @@ PYEOF
     fi
   done
 
+  # T25-43(세션 활동 노출 회귀): 세션 표시가 '실행 중인 것만' 으로 되돌아가지 않는다.
+  if grep -qF "active_agent_types" "$hub_template_file" "$hub_model_file"; then
+    record_failure "$test_name" "T25-43: active_agent_types 가 부활함 — 완료 세션이 다시 빈 목록이 된다"
+    return 1
+  fi
+  local session_activity_token
+  for session_activity_token in "summarize_agent_runs" "agent_runs"; do
+    if ! grep -qF "$session_activity_token" "$hub_model_file"; then
+      record_failure "$test_name" "T25-43: hub_model.py 에 $session_activity_token 이 없음"
+      return 1
+    fi
+  done
+  for session_activity_token in "renderAgentRuns" "agent-chip" "MAX_VISIBLE_AGENT_CHIPS"; do
+    if ! grep -qF "$session_activity_token" "$hub_template_file"; then
+      record_failure "$test_name" "T25-43: hub_template.html 에 $session_activity_token 이 없음"
+      return 1
+    fi
+  done
+
   # T25-41(요구 "주기는 유지"의 회귀 방지): 초기화 예정 시각 표시에 필요한 토큰이 전부
   # hub_template.html 에 있고, 폴링 주기·사용량 갱신 주기 문구는 바뀌지 않았다.
   local reset_time_token
@@ -2438,8 +2461,11 @@ PYEOF
       return 1
     fi
   done
-  if ! grep -qF "POLL_INTERVAL_MS = 5000" "$hub_template_file"; then
-    record_failure "$test_name" "T25-41: POLL_INTERVAL_MS = 5000 회귀(폴링 주기가 바뀜)"
+  # 폴링 주기는 5초에서 1분으로 바뀌었다(사용자 요청 — 5초는 너무 짧다). 이 검사는 원래
+  # 5000 을 고정했는데, 그 커밋은 주기 변경을 모르는 상태에서 작성됐다. 값만 갱신하고
+  # "주기가 임의로 바뀌지 않는다"는 검사의 의도는 그대로 유지한다.
+  if ! grep -qF "POLL_INTERVAL_MS = 60000" "$hub_template_file"; then
+    record_failure "$test_name" "T25-41: POLL_INTERVAL_MS = 60000 회귀(폴링 주기가 바뀜)"
     return 1
   fi
   if ! grep -qF "약 15분 주기" "$hub_template_file"; then
@@ -2464,6 +2490,29 @@ PYEOF
     record_failure "$test_name" "T25-42: commands/hub.md 에 uninstall-statusline 이 없음"
     return 1
   fi
+
+  # T25-44(커스텀 툴팁 회귀): 네이티브 title 툴팁이 하나도 남지 않고, 커스텀 툴팁이 위임·
+  # 접근성·해제 경로를 모두 갖는다. (<title> 요소는 속성 형태가 아니라 이 검사에 걸리지 않는다)
+  if grep -qF 'title="' "$hub_template_file"; then
+    record_failure "$test_name" "T25-44: 네이티브 title 속성이 남아 있음 — data-tooltip 을 쓸 것"
+    return 1
+  fi
+  local tooltip_token
+  for tooltip_token in 'id="dzh-tooltip"' 'role="tooltip"' 'data-tooltip' 'aria-describedby' \
+                       "'mouseover'" "'focusin'" "Escape" "MutationObserver"; do
+    if ! grep -qF -- "$tooltip_token" "$hub_template_file"; then
+      record_failure "$test_name" "T25-44: hub_template.html 에 툴팁 계약($tooltip_token)이 없음"
+      return 1
+    fi
+  done
+
+  # T25-45(문서 정합): 세션 줄 구성과 툴팁 거동이 hub/README.md 에 반영돼 있다.
+  for doc_token in "서브에이전트" "툴팁"; do
+    if ! grep -qF "$doc_token" "$hub_readme_file"; then
+      record_failure "$test_name" "T25-45: hub/README.md 에 화면 설명($doc_token)이 없음"
+      return 1
+    fi
+  done
 
   log_ok "$test_name 통과"
   ((passed_tests++))

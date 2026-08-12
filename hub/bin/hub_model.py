@@ -94,6 +94,15 @@ class SessionFacts:
 
 # ---- 표시(view) ----
 @dataclass(frozen=True)
+class SubagentRunView:
+    """세션에서 실행된 서브에이전트 타입 1종의 표시 상태(같은 타입의 여러 실행을 하나로 합친 것)."""
+
+    agent_type: str            # 훅이 준 원문 그대로. 예: "implementer", "workflow-subagent"
+    phase: Phase | None        # PHASE_BY_AGENT_TYPE 에 없으면 None
+    is_running: bool           # 같은 타입 실행 중 하나라도 진행 중이면 True
+
+
+@dataclass(frozen=True)
 class SessionView:
     """세션 사실로부터 판정한 화면 표시 상태."""
 
@@ -103,9 +112,7 @@ class SessionView:
     base_state: Literal["working", "idle", "done"]
     last_event_at_ms: int
     task_excerpt: str | None
-    inferred_phase: Phase | None
-    inferred_phase_running: bool
-    active_agent_types: tuple[str, ...]
+    agent_runs: tuple[SubagentRunView, ...]
 
 
 @dataclass(frozen=True)
@@ -338,10 +345,7 @@ def compute_session_view(facts: SessionFacts, now_ms: int, stale_after_ms: int) 
     """우선순위 사다리(done > working > idle) + stale 오버레이로 표시 상태를 정한다."""
     base_state = _compute_base_state(facts)
     is_stale = base_state != "done" and (now_ms - facts.last_event_at_ms) >= stale_after_ms
-    inferred_phase, inferred_phase_running = infer_phase(facts)
-    active_agent_types = tuple(
-        sub.agent_type for sub in facts.subagents if sub.ended_at_ms is None
-    )
+    agent_runs = summarize_agent_runs(facts)
     return SessionView(
         session_id=facts.session_id,
         short_id=facts.session_id[:SHORT_ID_LENGTH],
@@ -349,20 +353,35 @@ def compute_session_view(facts: SessionFacts, now_ms: int, stale_after_ms: int) 
         base_state=base_state,
         last_event_at_ms=facts.last_event_at_ms,
         task_excerpt=facts.task_excerpt,
-        inferred_phase=inferred_phase,
-        inferred_phase_running=inferred_phase_running,
-        active_agent_types=active_agent_types,
+        agent_runs=agent_runs,
     )
 
 
-# ---- 4. 단계 추정 ----
-def infer_phase(facts: SessionFacts) -> tuple[Phase | None, bool]:
-    """가장 최근에 시작된 '매핑된' 서브에이전트의 단계와 그 실행 여부를 돌려준다."""
-    candidates = [sub for sub in facts.subagents if sub.agent_type in PHASE_BY_AGENT_TYPE]
-    if not candidates:
-        return None, False
-    latest = max(candidates, key=lambda sub: sub.started_at_ms)
-    return PHASE_BY_AGENT_TYPE[latest.agent_type], latest.ended_at_ms is None
+# ---- 4. 서브에이전트 요약 ----
+def summarize_agent_runs(facts: SessionFacts) -> tuple[SubagentRunView, ...]:
+    """세션의 모든 서브에이전트를 타입별로 합쳐 최근 시작 순으로 돌려준다(종료된 것도 포함)."""
+    latest_started_at_ms: dict[str, int] = {}
+    is_running_by_type: dict[str, bool] = {}
+    for sub in facts.subagents:
+        if not sub.agent_type:
+            continue
+        latest_started_at_ms[sub.agent_type] = max(
+            latest_started_at_ms.get(sub.agent_type, sub.started_at_ms), sub.started_at_ms
+        )
+        is_running_by_type[sub.agent_type] = (
+            is_running_by_type.get(sub.agent_type, False) or sub.ended_at_ms is None
+        )
+    ordered_types = sorted(
+        latest_started_at_ms, key=lambda agent_type: (-latest_started_at_ms[agent_type], agent_type)
+    )
+    return tuple(
+        SubagentRunView(
+            agent_type=agent_type,
+            phase=PHASE_BY_AGENT_TYPE.get(agent_type),
+            is_running=is_running_by_type[agent_type],
+        )
+        for agent_type in ordered_types
+    )
 
 
 # ---- 5. 프로젝트 발견 — 정방향 인코딩 전용 ----

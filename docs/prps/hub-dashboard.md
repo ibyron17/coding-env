@@ -216,7 +216,13 @@ class SessionView:
     inferred_phase: Phase | None
     inferred_phase_running: bool
     active_agent_types: tuple[str, ...]
+```
 
+> **개정됨.** `inferred_phase`·`inferred_phase_running`·`active_agent_types` 세 필드는
+> [`hub-session-activity-and-tooltip.md`](./hub-session-activity-and-tooltip.md) 의
+> `agent_runs: tuple[SubagentRunView, ...]` 로 대체됐다(결정 D1·D3).
+
+```python
 @dataclass(frozen=True)
 class StepView:                                      # 티어 1
     index: int
@@ -310,6 +316,11 @@ overlay:
   그 상태를 만들면 **영원히 켜지지 않는 등불**이 된다(쟁점 2의 결론과 같은 근거).
 
 ### 3. 단계 추정 — 서브에이전트 타입 → 단계
+
+> **개정됨.** `infer_phase()` 는 삭제되고 `summarize_agent_runs()` 가 각 서브에이전트 타입에
+> `phase` 를 붙인다. "티어 1 이 이긴다"·"매핑되지 않은 타입은 단계로 승격하지 않는다"
+> (→ `phase=None`)는 그대로다. **"추정" 라벨 규칙**은 세션 단위 단계를 화면에 띄우는 경우에만
+> 적용된다.
 
 ```python
 PHASE_BY_AGENT_TYPE: dict[str, Phase] = {
@@ -753,8 +764,8 @@ python3 -m unittest discover -s tests/hub -t "$REPO_ROOT" -v
 | M6 | `SubagentStop(agent_type="")` + 대응 Start 없음 | **서브에이전트를 만들지 않는다** |
 | M7 | `SubagentStop(agent_type="")` + 같은 `agent_id` 의 Start 관측됨 | 정상 종료 처리(안전판) |
 | M8 | 같은 `agent_type` 두 개 동시(`agent_id` 다름) | 둘 다 추적, 하나만 끝나도 다른 하나는 running |
-| M9 | `design-architect` → 종료 → `implementer` 시작 | `inferred_phase="구현"`, `running=True` |
-| M10 | `Explore` 만 실행 | `inferred_phase is None` |
+| M9 | `design-architect` → 종료 → `implementer` 시작 | `inferred_phase="구현"`, `running=True` → 대체됨(hub-session-activity-and-tooltip.md A1·A4) |
+| M10 | `Explore` 만 실행 | `inferred_phase is None` → 대체됨(hub-session-activity-and-tooltip.md A1·A4) |
 | M11 | 깨진 JSON 줄 · 필드 누락 줄 | 건너뛰고 나머지로 상태를 만든다 |
 | M12 | `encode_project_dir_name("/Users/b/private/project/claude-agents-manager")` | `-Users-b-private-project-claude-agents-manager` |
 | M13 | `encode_project_dir_name("/Users/b/.claude/projects/x")` | `-Users-b--claude-projects-x`(`.` → `-`) |
