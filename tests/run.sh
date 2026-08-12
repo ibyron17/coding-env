@@ -1893,10 +1893,10 @@ test_hub_unit_tests() {
   ((passed_tests++))
 }
 
-# T25: 허브 문서·상수 정합성 (하위 검증 T25-1~T25-45)
+# T25: 허브 문서·상수 정합성 (하위 검증 T25-1~T25-47)
 test_hub_docs_and_constants() {
   local test_name="T25"
-  local test_desc="허브 문서·상수 정합성 (T25-1~T25-45)"
+  local test_desc="허브 문서·상수 정합성 (T25-1~T25-47)"
   log_test_name "$test_name" "$test_desc"
 
   local hub_settings_file="$REPO_ROOT/hub/bin/hub_settings.py"
@@ -2513,6 +2513,22 @@ PYEOF
       return 1
     fi
   done
+
+  # T25-46(브라우저 타이틀 회귀): 탭 제목이 "Claude Agents Manager" 로 고정돼 있다.
+  if ! grep -qF '<title>Claude Agents Manager</title>' "$hub_template_file"; then
+    record_failure "$test_name" "T25-46: hub_template.html 에 <title>Claude Agents Manager</title> 가 없음"
+    return 1
+  fi
+
+  # T25-47(파비콘 회귀): 인라인 SVG data: URI 파비콘 링크가 유지돼 있다.
+  if ! grep -qF 'rel="icon"' "$hub_template_file"; then
+    record_failure "$test_name" "T25-47: hub_template.html 에 rel=\"icon\" 이 없음"
+    return 1
+  fi
+  if ! grep -qF 'data:image/svg+xml' "$hub_template_file"; then
+    record_failure "$test_name" "T25-47: hub_template.html 에 data:image/svg+xml 파비콘이 없음"
+    return 1
+  fi
 
   log_ok "$test_name 통과"
   ((passed_tests++))

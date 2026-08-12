@@ -3,7 +3,12 @@
 <head>
 <meta charset="utf-8">
 <meta name="color-scheme" content="light dark">
-<title>통합 허브 대시보드</title>
+<title>Claude Agents Manager</title>
+<!-- 파비콘은 허브 서버가 /, /hub.html 외 경로를 서빙하지 않고 file:// 로도 열려야 해서 인라인 data: URI 로 넣는다.
+     SVG 색은 data: URI 프래그먼트 구분자(#)로 오인되지 않게 rgb() 표기를 쓰고, 속성 인용은
+     바깥 href 의 큰따옴표와 겹치지 않도록 홑따옴표를 쓴다(둘 다 안전해 추가 퍼센트 인코딩은 불필요).
+     연결선은 넣지 않는다: 16px 실측 렌더에서 중앙 원과 겹쳐 "Y자/뿔" 모양으로 뭉개짐이 확인됐다. -->
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='6' fill='rgb(0,114,178)'/><circle cx='16' cy='16' r='4.6' fill='white'/><circle cx='16.0' cy='6.8' r='3.0' fill='white'/><circle cx='24.0' cy='20.6' r='3.0' fill='white'/><circle cx='8.0' cy='20.6' r='3.0' fill='white'/></svg>">
 <!--
 DZH:HUB 데이터 계약
   #dzh-data : application/json 스크립트. HubSnapshot 을 그대로 담는다(snake_case 그대로).
