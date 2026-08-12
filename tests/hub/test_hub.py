@@ -17,6 +17,7 @@ import hub  # noqa: E402
 import hub_collect  # noqa: E402
 import hub_daemon  # noqa: E402
 import hub_model  # noqa: E402
+import hub_settings  # noqa: E402
 
 
 class _Args:
@@ -155,6 +156,10 @@ class CmdStatusServerSummaryTest(unittest.TestCase):
 
     LAST_COLLECT_ERROR_PATH 도 격리한다(검수 R2-n1) — cmd_status 는 read_last_collect_failure()
     도 부르는데, 그 상수는 HUB_HOME 과 별개로 임포트 시점에 확정되므로 직접 바꿔야 한다.
+    RATE_LIMITS_PATH·SETTINGS_PATH 도 같은 이유로 격리한다 — cmd_status 가
+    hub_settings.statusline_install_status()·hub_collect.read_rate_limit_capture() 를
+    새로 호출하게 되면서(docs/prps/hub-usage-reset-time-and-refresh.md) 실제 개발자 머신의
+    ~/.claude/settings.json·~/.claude/hub/rate_limits.json 을 읽던 회귀가 생길 수 있었다.
     이 클래스의 "실제 ~/.claude 를 건드리지 않는다"는 주장이 문자 그대로 참이 되는 조건이다."""
 
     def setUp(self) -> None:
@@ -163,16 +168,22 @@ class CmdStatusServerSummaryTest(unittest.TestCase):
         self.original_config_path = hub_collect.CONFIG_PATH
         self.original_usage_path = hub_collect.PLAN_USAGE_HISTORY_PATH
         self.original_error_path = hub_collect.LAST_COLLECT_ERROR_PATH
+        self.original_rate_limits_path = hub_collect.RATE_LIMITS_PATH
+        self.original_settings_path = hub_settings.SETTINGS_PATH
         hub_collect.HUB_HTML_PATH = self.temp_dir / "hub.html"  # 존재하지 않는 경로 — 실제 파일 미접근
         hub_collect.CONFIG_PATH = self.temp_dir / "config.json"  # 존재하지 않으면 기본값
         hub_collect.PLAN_USAGE_HISTORY_PATH = self.temp_dir / "plan-usage-history.json"  # 실제 사용량 파일 미접근
         hub_collect.LAST_COLLECT_ERROR_PATH = self.temp_dir / "last_collect_error.json"
+        hub_collect.RATE_LIMITS_PATH = self.temp_dir / "rate_limits.json"  # 존재하지 않으면 None
+        hub_settings.SETTINGS_PATH = self.temp_dir / "settings.json"  # 존재하지 않으면 미설치로 판정
 
     def tearDown(self) -> None:
         hub_collect.HUB_HTML_PATH = self.original_html_path
         hub_collect.CONFIG_PATH = self.original_config_path
         hub_collect.PLAN_USAGE_HISTORY_PATH = self.original_usage_path
         hub_collect.LAST_COLLECT_ERROR_PATH = self.original_error_path
+        hub_collect.RATE_LIMITS_PATH = self.original_rate_limits_path
+        hub_settings.SETTINGS_PATH = self.original_settings_path
         shutil.rmtree(self.temp_dir, ignore_errors=True)
 
     def _make_status(self, collect_stalled: bool) -> hub_model.ServerStatus:
@@ -226,6 +237,27 @@ class CmdStatusServerSummaryTest(unittest.TestCase):
         payload = self._run_cmd_status(collect_stalled=False)
         self.assertTrue(payload["usage_panel_enabled"])
         self.assertIsInstance(payload["usage_sample_age_ms"], int)
+
+    def test_rate_limit_diagnostic_fields_are_null_when_capture_and_statusline_are_absent(self) -> None:
+        """docs/prps/hub-usage-reset-time-and-refresh.md 「hub.py」 절 — statusline_installed·
+        rate_limit_capture_age_ms·rate_limit_resets_remaining_ms 3필드가 새로 추가된다."""
+        payload = self._run_cmd_status(collect_stalled=False)
+        self.assertFalse(payload["statusline_installed"])
+        self.assertIsNone(payload["rate_limit_capture_age_ms"])
+        self.assertIsNone(payload["rate_limit_resets_remaining_ms"])
+
+    def test_rate_limit_diagnostic_fields_are_null_when_switch_is_off_even_if_capture_exists(self) -> None:
+        """검수 MEDIUM 1 회귀 방지 — PRP 「확정된 전제」4: show_usage_panel:false 는 usage 파일뿐
+        아니라 rate_limits 캡처 파일도 읽지 않는다. 캡처가 있어도 스위치가 꺼져 있으면 두
+        진단 필드는 null 이어야 한다(캡처 부재와 스위치 off 를 구분 못 하는 회귀를 잡는다)."""
+        hub_collect.CONFIG_PATH.write_text(json.dumps({"show_usage_panel": False}))
+        hub_collect.RATE_LIMITS_PATH.write_text(
+            json.dumps({"captured_at_ms": 1, "session_resets_at_ms": 2, "weekly_resets_at_ms": 3})
+        )
+        payload = self._run_cmd_status(collect_stalled=False)
+        self.assertFalse(payload["usage_panel_enabled"])
+        self.assertIsNone(payload["rate_limit_capture_age_ms"])
+        self.assertIsNone(payload["rate_limit_resets_remaining_ms"])
 
 
 if __name__ == "__main__":

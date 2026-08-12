@@ -39,6 +39,8 @@
 3. **패널 내용은 세션·주간 막대 2개 + 마지막 갱신 시각까지다.** `u.xu` 필드와 추이
    스파크라인은 범위 밖이다.
 
+> **확장됨.** 이 범위는 [`hub-usage-reset-time-and-refresh.md`](./hub-usage-reset-time-and-refresh.md) 가 넓혔다 — 펼침 상태에 창별 **초기화 예정 시각** 한 줄이 추가된다. `u.xu`·스파크라인은 여전히 범위 밖이다.
+
 ### 사용량 데이터 출처 (실측 완료 — 재조사 대상 아님)
 
 `~/Library/Application Support/Claude/plan-usage-history.json` (`-rw-------`, 116KB)
@@ -63,6 +65,8 @@
 **대안이 없음은 확인됐다**: `~/.claude/projects/*/*.jsonl` 의 `message.usage` 에는 분모(한도)가
 없고, `policy-limits.json` 은 정책 제약이며, 트랜스크립트의 `error.rateLimits` 는 전부 `null`,
 `metrics/costs.jsonl` 은 0만 든 유물이다.
+
+> **개정됨.** 이 조사는 `plan-usage-history.json` 을 **퍼센트의 출처**로 볼 때만 유효하다. **초기화 예정 시각**의 공식 출처는 Claude Code 의 statusLine 입력 JSON(`rate_limits.*.resets_at`)이며, [`hub-usage-reset-time-and-refresh.md`](./hub-usage-reset-time-and-refresh.md) 가 이를 쓴다.
 
 ---
 
@@ -523,6 +527,7 @@ YAGNI.
 | 시각 | `elapsedLabel(usage.sampled_at_ms)` 재사용, `title` 에 `formatTimestamp()` 절대시각 |
 | 주기 고지 | `· 약 15분 주기` 정적 문구 — 5초 폴링과 갱신 주기가 다름을 사용자가 오해하지 않게 한다(리스크 3) |
 | 갱신 | `render()` 말미에서 `renderUsagePanel(snapshot.usage)` 호출. 30초 틱이 경과 라벨을 갱신한다 |
+| 초기화 예정 시각 | 창별로 한 줄(현행: hub-usage-reset-time-and-refresh.md 결정 R2·R4) |
 
 **JS 방어 규칙**: `#dzh-data` 는 신뢰 가능한 서버 생성물이지만 템플릿의 관행대로 방어한다 —
 `Number()` 로 강제 변환 후 `isFinite` 가 아니면 패널을 그리지 않고, 막대 폭은

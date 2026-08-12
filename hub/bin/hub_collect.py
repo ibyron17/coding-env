@@ -42,6 +42,9 @@ SPAWN_STAMP_PATH = HUB_HOME / ".collect_spawn_stamp"
 SERVER_RECORD_PATH = HUB_HOME / "server.json"
 SERVER_HEARTBEAT_PATH = HUB_HOME / "server_heartbeat"
 SERVER_LOG_PATH = HUB_HOME / "server.log"
+# hub_statusline.py 가 statusLine stdin 에서 캡처한 한도 초기화 예정 시각
+# (docs/prps/hub-usage-reset-time-and-refresh.md 결정 S2·S5).
+RATE_LIMITS_PATH = HUB_HOME / "rate_limits.json"
 
 
 class HubCollectError(Exception):
@@ -321,6 +324,50 @@ def _usage_for_snapshot(
     return sample, warnings
 
 
+# ---- 한도 초기화 예정 시각 (docs/prps/hub-usage-reset-time-and-refresh.md) ----
+def read_rate_limit_capture() -> tuple[hub_usage.RateLimitResets | None, tuple[str, ...]]:
+    """캡처 파일을 읽어 판다. 이 함수는 절대 예외를 던지지 않는다.
+
+    반환 계약은 read_latest_usage_sample 과 같은 격이다(PRP 「반환 계약」 표) — 파일 부재는
+    statusLine 미설치·미실행의 정상 상태라 경고를 내지 않는다. 읽기 실패·계약 불일치만
+    경고 1건을 남긴다.
+    """
+    if not RATE_LIMITS_PATH.is_file():
+        return None, ()
+    try:
+        text = RATE_LIMITS_PATH.read_text(encoding="utf-8")
+    except OSError as error:
+        return None, (f"{RATE_LIMITS_PATH}: 한도 초기화 시각 캡처 파일 읽기 실패 ({error})",)
+    resets = hub_usage.parse_rate_limit_capture(text)
+    if resets is None:
+        return None, (f"{RATE_LIMITS_PATH}: 캡처 파일 계약 불일치 — 초기화 예정 시각을 표시하지 않습니다",)
+    return resets, ()
+
+
+def write_rate_limit_capture(resets: hub_usage.RateLimitResets) -> None:
+    """캡처를 원자적으로 쓴다(hub_statusline.py 전용 쓰기 경로). _atomic_write_text 재사용."""
+    HUB_HOME.mkdir(parents=True, exist_ok=True)
+    payload = json.dumps(dataclasses.asdict(resets), ensure_ascii=False)
+    _atomic_write_text(RATE_LIMITS_PATH, HUB_HOME, "rate_limits.json.", payload)
+
+
+def _rate_limit_resets_for_snapshot(
+    now_ms: int, config: hub_model.HubConfig
+) -> tuple[hub_usage.RateLimitResets | None, tuple[str, ...]]:
+    """스위치 · 만료(지난 값)까지 적용해 화면에 실을 리셋 시각을 고른다(사설).
+
+    `show_usage_panel` 이 꺼져 있으면 캡처 파일을 열지도 않는다(U4 와 동일한 프라이버시 제어).
+    지난 리셋 시각은 여기(서버 쪽 1차 필터, 결정 R5)에서 걷어낸다 — 클라이언트 쪽 2차 필터는
+    템플릿이 30초 틱마다 담당한다(탭이 몇 시간 열려 있을 수 있어서다).
+    """
+    if not config.show_usage_panel:
+        return None, ()
+    resets, warnings = read_rate_limit_capture()
+    if resets is None:
+        return None, warnings
+    return hub_usage.drop_passed_resets(resets, now_ms), warnings
+
+
 # ---- 합성 ----
 def collect_snapshot(now_ms: int) -> hub_model.HubSnapshot:
     """3티어를 전부 읽어 하나의 HubSnapshot 으로 합성한다. 실패는 warnings 로 드러난다."""
@@ -359,12 +406,15 @@ def collect_snapshot(now_ms: int) -> hub_model.HubSnapshot:
     )
     usage, usage_warnings = _usage_for_snapshot(now_ms, config)
     warnings.extend(usage_warnings)
+    rate_limit_resets, rate_limit_warnings = _rate_limit_resets_for_snapshot(now_ms, config)
+    warnings.extend(rate_limit_warnings)
     return hub_model.HubSnapshot(
         collected_at_ms=now_ms,
         projects=projects,
         unresolved_dir_names=unresolved,
         warnings=tuple(warnings),
         usage=usage,
+        rate_limit_resets=rate_limit_resets,
     )
 
 

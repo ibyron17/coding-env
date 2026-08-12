@@ -14,7 +14,8 @@ DZH:HUB 데이터 계약
   #dzh-usage-summary 네 개뿐이다(불변식 H1′, docs/prps/hub-usage-collapse-and-grid.md).
   #dzh-usage 와 그 안의 #dzh-usage-toggle 은 정적 노드이며 class·aria-expanded 속성만
   갱신한다(노드 교체 금지). 테마 토글 버튼은 이 넷 바깥의 정적 마크업이라 폴링과 무관하게
-  DOM 이 그대로 유지된다.
+  DOM 이 그대로 유지된다. rate_limit_resets(있으면)는 펼침 본문에 초기화 예정 시각 줄로
+  더해진다(docs/prps/hub-usage-reset-time-and-refresh.md).
 -->
 <style>
   :root{
@@ -79,13 +80,17 @@ DZH:HUB 데이터 계약
   .foot{font-size:11.5px;color:var(--muted);text-align:right;margin-top:6px}
   .theme-toggle{position:fixed;top:16px;right:16px;z-index:30;font-size:11.5px;font-weight:700;color:var(--muted);background:var(--surface);border:1px solid var(--line);border-radius:999px;padding:6px 12px;cursor:pointer;box-shadow:var(--shadow)}
   .theme-toggle:hover{color:var(--accent-ink);border-color:var(--accent)}
-  /* 184px 은 JS 가 못 도는 경우에만 쓰이는 fallback 이다(펼침 실측 153 + 여유 32 ≈ 185).
-     평소에는 applyUsageClearance() 가 --usage-clearance 를 실측값으로 덮어쓴다 —
-     USAGE_CLEARANCE_MARGIN_PX 를 고치면 이 숫자도 같이 봐야 한다(검수 LOW). */
-  body.has-usage .wrap{padding-bottom:var(--usage-clearance,184px)}
+  /* 218px 은 JS 가 못 도는 경우에만 쓰이는 fallback 이다(펼침 실측 186 + 여유 32,
+     .usage-toggle 의 line-height:1 적용 이후 재실측 — 검수 LOW). 평소에는
+     applyUsageClearance() 가 --usage-clearance 를 실측값으로 덮어쓴다 —
+     USAGE_CLEARANCE_MARGIN_PX 를 고치면 이 숫자도 같이 봐야 한다. */
+  body.has-usage .wrap{padding-bottom:var(--usage-clearance,218px)}
   .usage{position:fixed;right:16px;bottom:16px;width:min(420px, calc(100vw - 32px));z-index:20;background:var(--surface);border:1px solid var(--line);border-radius:14px;padding:14px 18px;box-shadow:var(--shadow)}
   .usage.usage-collapsed{width:auto;max-width:calc(100vw - 32px);padding:10px 14px}
-  .usage-toggle{display:flex;align-items:center;gap:8px;width:100%;padding:0;border:0;background:none;font:inherit;color:inherit;text-align:left;cursor:pointer}
+  /* line-height:1 — font:inherit 가 body 의 1.5 를 그대로 물려받아 텍스트 줄상자에 여백(leading)이
+     남는다. 접힘 알약처럼 이 여백이 곧 버튼 높이가 되는 상황에서는 그 여백이 위아래로 고르게
+     안 나뉘어(글꼴 자체의 ascent/descent 비대칭) 아래쪽이 더 비어 보인다 — 실측 확인함. */
+  .usage-toggle{display:flex;align-items:center;gap:8px;width:100%;padding:0;border:0;background:none;font:inherit;line-height:1;color:inherit;text-align:left;cursor:pointer}
   .usage-toggle:hover .usage-title{color:var(--accent-ink)}
   .usage-toggle:focus-visible{outline:2px solid var(--accent);outline-offset:3px}
   .usage-title{font-size:12.5px;font-weight:800;color:var(--head)}
@@ -101,6 +106,7 @@ DZH:HUB 데이터 계약
   .usage-pct{font-weight:700;color:var(--accent-ink)}
   .usage-bar{height:8px;border-radius:999px;background:var(--soft);margin-top:4px;overflow:hidden}
   .usage-bar>span{display:block;height:100%;background:var(--accent);border-radius:999px}
+  .usage-reset{font-size:11px;color:var(--muted);margin-top:3px;text-align:right}
   .usage-meta{font-size:11px;color:var(--muted);margin-top:10px;text-align:right}
 </style>
 <script>
@@ -177,6 +183,9 @@ try{var m=localStorage.getItem('dzh-theme');
   var USAGE_COLLAPSE_STORAGE_KEY = 'dzh-usage-collapsed';
   var USAGE_COLLAPSED_FLAG = '1';
   var USAGE_CLEARANCE_MARGIN_PX = 32;   // 패널 bottom 오프셋 16 + 여유 16
+  var USAGE_RESET_LABEL = '초기화';
+  var MS_PER_HOUR = 3600000;
+  var MS_PER_DAY = 86400000;
 
   var app = document.getElementById('dzh-app');
   var collectedAtLabel = document.getElementById('dzh-collected-at');
@@ -314,6 +323,52 @@ try{var m=localStorage.getItem('dzh-theme');
       + '<div class="usage-bar" role="progressbar" aria-valuenow="' + clamped + '" aria-valuemin="0" aria-valuemax="100" aria-label="' + label + ' 사용률"><span style="width:' + clamped + '%"></span></div>';
   }
 
+  // 남은 시간을 사람이 읽는 문자열로. 이미 지났으면(diffMs<=0) null — 호출자가 줄을 그리지
+  // 않는다(결정 R5 의 클라이언트 쪽 2차 필터가 바로 이 판정이다).
+  function remainingLabel(untilMs, nowMs){
+    var diffMs = untilMs - nowMs;
+    if(!isFinite(diffMs) || diffMs <= 0) return null;
+    if(diffMs < MS_PER_MINUTE) return '곧';
+    if(diffMs < MS_PER_HOUR) return Math.floor(diffMs / MS_PER_MINUTE) + '분 뒤';
+    if(diffMs < MS_PER_DAY){
+      var hours = Math.floor(diffMs / MS_PER_HOUR);
+      var minutes = Math.floor((diffMs % MS_PER_HOUR) / MS_PER_MINUTE);
+      return hours + '시간 ' + minutes + '분 뒤';
+    }
+    return Math.floor(diffMs / MS_PER_DAY) + '일 뒤';
+  }
+
+  // '초기화 18:32 · 2시간 12분 뒤'. 값이 없거나 이미 지났으면 null. 순수 — DOM 에 닿지 않는다.
+  function usageResetText(resetsAtMs, nowMs){
+    if(resetsAtMs === null || resetsAtMs === undefined) return null;
+    var value = Number(resetsAtMs);
+    if(!isFinite(value)) return null;
+    var remaining = remainingLabel(value, nowMs);
+    if(remaining === null) return null;
+    var resetDate = new Date(value);
+    var nowDate = new Date(nowMs);
+    var sameDay = resetDate.getFullYear() === nowDate.getFullYear()
+      && resetDate.getMonth() === nowDate.getMonth()
+      && resetDate.getDate() === nowDate.getDate();
+    var pad2 = function(n){ return (n < 10 ? '0' : '') + n; };
+    var timePart = pad2(resetDate.getHours()) + ':' + pad2(resetDate.getMinutes());
+    var absolutePart = sameDay ? timePart : (resetDate.getMonth() + 1) + '/' + resetDate.getDate() + ' ' + timePart;
+    return USAGE_RESET_LABEL + ' ' + absolutePart + ' · ' + remaining;
+  }
+
+  // 초기화 예정 시각 한 줄의 HTML. 그릴 값이 없으면 빈 문자열. capturedAtMs 는 title 툴팁의
+  // '이 정보를 확인한 시각'에 쓰인다(표시 규칙 표) — formatTimestamp 는 usage-meta 와 같은
+  // 기존 함수를 재사용한다(새 날짜 포맷 도입 없음).
+  function renderUsageResetRow(resetsAtMs, capturedAtMs){
+    var text = usageResetText(resetsAtMs, Date.now());
+    if(text === null) return '';
+    var capturedAtNumber = Number(capturedAtMs);
+    var titleAttr = isFinite(capturedAtNumber)
+      ? ' title="' + escapeHtml('이 정보를 확인한 시각: ' + formatTimestamp(capturedAtNumber)) + '"'
+      : '';
+    return '<div class="usage-reset"' + titleAttr + '>' + escapeHtml(text) + '</div>';
+  }
+
   function hideUsagePanel(){
     usageEl.hidden = true;
     document.body.classList.remove('has-usage');
@@ -357,15 +412,19 @@ try{var m=localStorage.getItem('dzh-theme');
 
   // 컨테이너(#dzh-usage)와 토글 버튼(#dzh-usage-toggle)은 정적, 내용(#dzh-usage-body ·
   // #dzh-usage-summary)만 파생이다(불변식 H1′, 결정 C1). usage 가 없으면(스위치 off·파일
-  // 없음·계약 불일치·만료, 결정 U3·U4) 조용히 숨긴다 — 경고를 띄우지 않는다.
-  function renderUsagePanel(usage){
+  // 없음·계약 불일치·만료, 결정 U3·U4) 조용히 숨긴다 — 경고를 띄우지 않는다. resets 는 장식이다
+  // (결정 R3) — 없어도 usage 만 있으면 패널은 그려진다.
+  function renderUsagePanel(usage, resets){
     if(!usage){ hideUsagePanel(); return; }
     var sessionBar = renderUsageBar(USAGE_SESSION_LABEL, usage.session_percent);
     var weeklyBar = renderUsageBar(USAGE_WEEKLY_LABEL, usage.weekly_percent);
     if(!sessionBar || !weeklyBar){ hideUsagePanel(); return; }
+    var capturedAtMs = resets && resets.captured_at_ms;
+    var sessionResetRow = renderUsageResetRow(resets && resets.session_resets_at_ms, capturedAtMs);
+    var weeklyResetRow = renderUsageResetRow(resets && resets.weekly_resets_at_ms, capturedAtMs);
     var meta = '마지막 갱신 ' + elapsedLabel(usage.sampled_at_ms) + ' ' + USAGE_CYCLE_NOTE;
     usageSummaryEl.textContent = usageSummaryText(usage);
-    usageBodyEl.innerHTML = sessionBar + weeklyBar
+    usageBodyEl.innerHTML = sessionBar + sessionResetRow + weeklyBar + weeklyResetRow
       + '<div class="usage-meta" title="' + escapeHtml(formatTimestamp(usage.sampled_at_ms)) + '">' + meta + '</div>';
     usageEl.hidden = false;
     document.body.classList.add('has-usage');
@@ -409,12 +468,20 @@ try{var m=localStorage.getItem('dzh-theme');
     }
     app.insertAdjacentHTML('beforeend', extra);
     renderConnectionStatus();
-    renderUsagePanel(snapshot.usage);
+    renderUsagePanel(snapshot.usage, snapshot.rate_limit_resets);
   }
+  // 펼치는 순간 다음 폴링(최대 5초)을 기다리지 않고 그 자리에서 한 번 더 갱신한다(요구 2).
+  // ①은 file:// 모드에서도 동작하는 로컬 재계산, ②는 서버 모드에서만 가능한 즉시 fetch 다.
+  // 이 리스너는 반드시 아래 `if(!isServed){ … return; }` 앞에 등록돼야 한다 — 뒤로 옮기면
+  // file:// 모드에서 접기 기능 자체가 사라진다(GOTCHA 4). `poll` 을 여기서 참조할 수 있는
+  // 것은 `function poll(){}` 이 호이스팅되는 함수 선언이기 때문이다.
   usageToggleButton.addEventListener('click', function(){
     isUsageCollapsed = !isUsageCollapsed;
     persistUsageCollapsed(isUsageCollapsed);
     applyUsageCollapsedState();
+    if(isUsageCollapsed) return;
+    renderUsagePanel(snapshot.usage, snapshot.rate_limit_resets);  // ① 라벨을 지금 시각으로 다시 계산
+    if(isServed) poll();                                           // ② 서버에 최신 스냅샷을 즉시 요청
   });
 
   render();

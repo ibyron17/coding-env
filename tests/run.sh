@@ -1893,10 +1893,10 @@ test_hub_unit_tests() {
   ((passed_tests++))
 }
 
-# T25: 허브 문서·상수 정합성 (하위 검증 T25-1~T25-37)
+# T25: 허브 문서·상수 정합성 (하위 검증 T25-1~T25-42)
 test_hub_docs_and_constants() {
   local test_name="T25"
-  local test_desc="허브 문서·상수 정합성 (T25-1~T25-37)"
+  local test_desc="허브 문서·상수 정합성 (T25-1~T25-42)"
   log_test_name "$test_name" "$test_desc"
 
   local hub_settings_file="$REPO_ROOT/hub/bin/hub_settings.py"
@@ -2383,6 +2383,85 @@ PYEOF
   fi
   if ! grep -qF ".replace(/'/g" "$hub_template_file"; then
     record_failure "$test_name" "T25-37: escapeHtml 에 작은따옴표 이스케이프가 없음"
+    return 1
+  fi
+
+  # T25-38(GOTCHA 1 회귀): statusLine 커맨드 줄이 stdout 을 리다이렉트하지 않는다.
+  # `2>/dev/null` 은 `>/dev/null` 을 부분 문자열로 포함하므로 grep -F '>/dev/null' 로는
+  # 검사할 수 없다(정상 커맨드가 항상 걸린다) — `>` 앞 문자가 숫자가 아닌 경우만 잡는다(GOTCHA 6).
+  if grep -F 'hub_statusline.py' "$hub_settings_file" | grep -qE '(^|[^0-9])>/dev/null'; then
+    record_failure "$test_name" "T25-38: statusLine 커맨드가 stdout 을 리다이렉트함 — 상태줄이 사라진다"
+    return 1
+  fi
+  if ! grep -F 'hub_statusline.py' "$hub_settings_file" | grep -qF '2>/dev/null'; then
+    record_failure "$test_name" "T25-38: statusLine 커맨드 줄에 2>/dev/null 이 없음"
+    return 1
+  fi
+  if ! grep -F 'hub_statusline.py' "$hub_settings_file" | grep -qF '|| true'; then
+    record_failure "$test_name" "T25-38: statusLine 커맨드 줄에 || true 가 없음"
+    return 1
+  fi
+  # 마커(# DZH_HUB_STATUSLINE)는 STATUSLINE_MARKER 변수 참조로 이어붙는다(HOOK_MARKER 와
+  # 같은 관행) — 소스상 같은 줄에 리터럴로 나타나지 않는다. 마커 존재 자체는 T25-40 이
+  # 파일 전체를 대상으로 검사한다(T25-3 과 같은 방식).
+
+  # T25-39(T25-23 과 같은 방식): hub/install.sh --uninstall 에서 uninstall-statusline 이
+  # rm -rf "$TARGET_BIN_DIR" 보다 앞에 온다 — 없는 스크립트를 부르는 무성음 상태를 막는다.
+  local uninstall_statusline_line rm_rf_line_t39
+  uninstall_statusline_line=$(grep -n "uninstall-statusline" "$hub_install_file" | head -1 | cut -d: -f1)
+  rm_rf_line_t39=$(grep -n 'rm -rf "\$TARGET_BIN_DIR"' "$hub_install_file" | head -1 | cut -d: -f1)
+  if [[ -z "$uninstall_statusline_line" || -z "$rm_rf_line_t39" ]]; then
+    record_failure "$test_name" "T25-39: uninstall-statusline/rm -rf 중 하나를 hub/install.sh 에서 찾지 못함"
+    return 1
+  fi
+  if [[ "$uninstall_statusline_line" -ge "$rm_rf_line_t39" ]]; then
+    record_failure "$test_name" "T25-39: uninstall-statusline 이 rm -rf 보다 앞에 있지 않음(순서 위반)"
+    return 1
+  fi
+
+  # T25-40(T25-3 선례): statusLine 마커 문서화가 hub_settings.py·commands/hub.md·hub/README.md
+  # 세 곳에 존재한다.
+  local statusline_marker="# DZH_HUB_STATUSLINE"
+  for doc_file in "$hub_settings_file" "$hub_command_file" "$hub_readme_file"; do
+    if ! grep -qF "$statusline_marker" "$doc_file"; then
+      record_failure "$test_name" "T25-40: $statusline_marker 마커 미발견: $doc_file"
+      return 1
+    fi
+  done
+
+  # T25-41(요구 "주기는 유지"의 회귀 방지): 초기화 예정 시각 표시에 필요한 토큰이 전부
+  # hub_template.html 에 있고, 폴링 주기·사용량 갱신 주기 문구는 바뀌지 않았다.
+  local reset_time_token
+  for reset_time_token in "usage-reset" "rate_limit_resets" "초기화 " "renderUsageResetRow"; do
+    if ! grep -qF "$reset_time_token" "$hub_template_file"; then
+      record_failure "$test_name" "T25-41: hub_template.html 에 초기화 예정 시각 토큰($reset_time_token)이 없음"
+      return 1
+    fi
+  done
+  if ! grep -qF "POLL_INTERVAL_MS = 5000" "$hub_template_file"; then
+    record_failure "$test_name" "T25-41: POLL_INTERVAL_MS = 5000 회귀(폴링 주기가 바뀜)"
+    return 1
+  fi
+  if ! grep -qF "약 15분 주기" "$hub_template_file"; then
+    record_failure "$test_name" "T25-41: '약 15분 주기' 문구 회귀(사용량 갱신 주기 고지 유실)"
+    return 1
+  fi
+
+  # T25-42(문서 정합): hub/README.md·commands/hub.md 에 새 파일·서브커맨드가 문서화돼 있다.
+  if ! grep -qF "rate_limits.json" "$hub_readme_file"; then
+    record_failure "$test_name" "T25-42: hub/README.md 에 rate_limits.json 언급이 없음"
+    return 1
+  fi
+  if ! grep -qiF "statusline" "$hub_readme_file"; then
+    record_failure "$test_name" "T25-42: hub/README.md 에 statusline 언급이 없음"
+    return 1
+  fi
+  if ! grep -qF "install-statusline" "$hub_command_file"; then
+    record_failure "$test_name" "T25-42: commands/hub.md 에 install-statusline 이 없음"
+    return 1
+  fi
+  if ! grep -qF "uninstall-statusline" "$hub_command_file"; then
+    record_failure "$test_name" "T25-42: commands/hub.md 에 uninstall-statusline 이 없음"
     return 1
   fi
 

@@ -18,6 +18,7 @@ import hub_daemon
 import hub_model
 import hub_server
 import hub_settings
+import hub_usage
 
 
 def _now_ms() -> int:
@@ -120,6 +121,41 @@ def cmd_open(args: argparse.Namespace) -> int:
     return 0
 
 
+def _rate_limit_capture_age_ms(now_ms: int, config: hub_model.HubConfig) -> int | None:
+    """진단용 — 한도 초기화 시각 캡처의 나이(ms). 스위치 off·캡처 부재·계약 불일치면 None.
+
+    리셋 줄이 안 보이는 이유(①statusLine 미설치 ②세션 미실행 ③리셋 시각이 이미 지남
+    ④show_usage_panel:false)는 화면상 전부 "줄 없음"으로 똑같이 보인다 — 이 필드와
+    아래 rate_limit_resets_remaining_ms 가 원인을 구분하는 유일한 창구다.
+    스위치가 꺼져 있으면 캡처 파일을 열지도 않는다(PRP 「확정된 전제」4 — show_usage_panel:false
+    는 usage 파일뿐 아니라 rate_limits 캡처 파일도 읽지 않는다).
+    """
+    if not config.show_usage_panel:
+        return None
+    resets, _warnings = hub_collect.read_rate_limit_capture()
+    if resets is None:
+        return None
+    return now_ms - resets.captured_at_ms
+
+
+def _rate_limit_resets_remaining_ms(now_ms: int, config: hub_model.HubConfig) -> dict | None:
+    """진단용 — 아직 지나지 않은 리셋까지 남은 시간(ms). 스위치 off·캡처 없음이면 None."""
+    if not config.show_usage_panel:
+        return None
+    resets, _warnings = hub_collect.read_rate_limit_capture()
+    if resets is None:
+        return None
+    remaining = hub_usage.drop_passed_resets(resets, now_ms)
+    session_remaining_ms = None
+    weekly_remaining_ms = None
+    if remaining is not None:
+        if remaining.session_resets_at_ms is not None:
+            session_remaining_ms = remaining.session_resets_at_ms - now_ms
+        if remaining.weekly_resets_at_ms is not None:
+            weekly_remaining_ms = remaining.weekly_resets_at_ms - now_ms
+    return {"session": session_remaining_ms, "weekly": weekly_remaining_ms}
+
+
 def _usage_sample_age_ms(now_ms: int, config: hub_model.HubConfig) -> int | None:
     """진단용 — 사용량 샘플의 나이(ms). 스위치 off·파일 없음·계약 불일치면 None.
 
@@ -159,6 +195,9 @@ def cmd_status(args: argparse.Namespace) -> int:
             "server_collect_stalled": server.collect_stalled,
             "usage_panel_enabled": config.show_usage_panel,
             "usage_sample_age_ms": _usage_sample_age_ms(now_ms, config),
+            "statusline_installed": hub_settings.statusline_install_status(),
+            "rate_limit_capture_age_ms": _rate_limit_capture_age_ms(now_ms, config),
+            "rate_limit_resets_remaining_ms": _rate_limit_resets_remaining_ms(now_ms, config),
         },
         args.json,
     )
@@ -175,6 +214,20 @@ def cmd_install_hooks(args: argparse.Namespace) -> int:
 def cmd_uninstall_hooks(args: argparse.Namespace) -> int:
     """`/hub off` — 마커가 붙은 우리 훅 엔트리만 제거한다."""
     result = hub_settings.uninstall_hooks()
+    _report(result, args.json)
+    return 0 if result.get("ok") else 1
+
+
+def cmd_install_statusline(args: argparse.Namespace) -> int:
+    """`/hub statusline on` — settings.json 에 우리 statusLine 을 넣는다(멱등, 충돌 시 거부)."""
+    result = hub_settings.install_statusline()
+    _report(result, args.json)
+    return 0 if result.get("ok") else 1
+
+
+def cmd_uninstall_statusline(args: argparse.Namespace) -> int:
+    """`/hub statusline off` — 우리 statusLine 만 제거한다."""
+    result = hub_settings.uninstall_statusline()
     _report(result, args.json)
     return 0 if result.get("ok") else 1
 
@@ -213,6 +266,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     subcommand_names = (
         "collect", "open", "status", "install-hooks", "uninstall-hooks",
+        "install-statusline", "uninstall-statusline",
         "server-start", "server-stop", "server-status", "server-run",
     )
     for name in subcommand_names:
@@ -227,6 +281,8 @@ COMMAND_HANDLERS = {
     "status": cmd_status,
     "install-hooks": cmd_install_hooks,
     "uninstall-hooks": cmd_uninstall_hooks,
+    "install-statusline": cmd_install_statusline,
+    "uninstall-statusline": cmd_uninstall_statusline,
     "server-start": cmd_server_start,
     "server-stop": cmd_server_stop,
     "server-status": cmd_server_status,

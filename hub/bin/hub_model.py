@@ -11,7 +11,7 @@ from dataclasses import asdict, dataclass
 from typing import Literal, Sequence
 
 from hub_parse import Tier1Snapshot
-from hub_usage import UsageSample
+from hub_usage import RateLimitResets, UsageSample
 
 SessionState = Literal["working", "idle", "stale", "done"]
 Phase = Literal["설계", "구현", "검수"]
@@ -131,6 +131,7 @@ class HubSnapshot:
     unresolved_dir_names: tuple[str, ...]
     warnings: tuple[str, ...]
     usage: UsageSample | None = None    # 없으면 패널을 그리지 않는다(요구 2). 마지막 필드 — 기본값 순서 제약
+    rate_limit_resets: RateLimitResets | None = None    # 없으면 초기화 예정 시각 줄을 그리지 않는다
 
 
 # ---- 상주 서버 (개정 1 rev2) ----

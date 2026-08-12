@@ -15,7 +15,7 @@
 hub/install.sh
 ```
 
-`~/.claude/hub/bin/` 에 10개 파일을 설치한다. `--scope` 인자가 없다 — 설치 위치는 이 하나뿐이며,
+`~/.claude/hub/bin/` 에 11개 파일을 설치한다. `--scope` 인자가 없다 — 설치 위치는 이 하나뿐이며,
 머신 전역 자산이라 프로젝트마다 사본을 두지 않는다.
 
 - `--force` — 수정된 파일이 있어도 덮어쓴다
@@ -67,6 +67,9 @@ hub/install.sh              # 1. 실행 코드 설치
   와 `/hub server stop`.
 - 아래 「사용량 패널」의 계정 단위 사용률도 같은 방식으로 `hub.html` 에 인라인된다. 끄는
   수단은 `config.json` 의 `show_usage_panel: false` — 이 경우 사용량 파일 자체를 읽지 않는다.
+- `/hub statusline on` 을 켜면 세션·주간 사용률 한 줄(`세션 23% · 주간 41%`)이 **터미널
+  상태줄**에도 상시 표시된다 — 화면을 함께 보는 사람에게도 보이는 위치라는 점에 유의한다.
+  끄는 수단은 `/hub statusline off`.
 
 ## 화면 배치
 
@@ -100,6 +103,29 @@ Claude 데스크톱 앱이 남기는 비공개 파일 `~/Library/Application Sup
 - 실측 환경은 조직(org) 1종뿐이라 여러 조직을 오가는 계정에서는 마지막 샘플이 어느
   조직 것인지 필터하지 않는다 — 표시가 어색하면 `show_usage_panel:false` 로 끈다.
 
+## 한도 초기화 예정 시각
+
+사용량 패널을 **펼치면** 세션·주간 막대 각각 아래에 `초기화 18:32 · 2시간 12분 뒤` 형태의 줄이
+더해진다. 출처는 Claude 데스크톱 앱의 히스토리 파일이 아니라 **Claude Code CLI 가 statusLine
+명령에 stdin 으로 주는 공식 입력 JSON**(`rate_limits.*.resets_at`)이다 — macOS 가 아니어도,
+터미널 전용 환경에서도 동작한다.
+
+- 설치: `/hub statusline on` — `~/.claude/settings.json` 의 `statusLine` 에 우리 커맨드를
+  등록한다(`# DZH_HUB_STATUSLINE` 마커로 식별). 이미 다른 `statusLine` 이 설정돼 있으면
+  **설치를 거부**하고 기존 값을 그대로 둔다 — `hooks` 와 달리 `statusLine` 은 배열이 아니라
+  단일 값이라 병합할 수 없기 때문이다. 제거는 `/hub statusline off`.
+- 설치 후에는 터미널 상태줄에도 `세션 23% · 주간 41%` 한 줄이 함께 표시된다(위 프라이버시
+  고지 참조).
+- 값은 Claude Code 세션이 한 번이라도 진행돼야 생긴다(`~/.claude/hub/rate_limits.json` 에
+  캡처된다). 세션을 안 돌리면 캡처가 없거나 낡을 수 있다 — 리셋 시각이 **아직 지나지
+  않았다면** 캡처가 며칠 묵어도 여전히 표시된다(절대 시각이라 지나기 전까지는 참이다).
+  리셋 시각이 지나면 그 줄은 자동으로 사라진다. 캡처가 실제로 확인된 시각은 줄에 마우스를
+  올리면 툴팁으로 보인다.
+- 퍼센트(데스크톱 앱)가 없으면 패널 자체가 뜨지 않으므로, 이 기능도 함께 보이지 않는다 —
+  초기화 시각은 기존 패널의 장식이지 별도 표시 조건이 아니다.
+- `/hub status` 의 `statusline_installed`·`rate_limit_capture_age_ms`·
+  `rate_limit_resets_remaining_ms` 로 설치·캡처 상태를 진단할 수 있다.
+
 ## 티어 한계 — 프로젝트마다 "가진 것 중 가장 높은 티어"로 표시한다
 
 | 티어 | 출처 | 얻는 것 | 없으면 |
@@ -131,15 +157,17 @@ Claude 데스크톱 앱이 남기는 비공개 파일 `~/Library/Application Sup
 hub/install.sh --uninstall
 ```
 
-순서가 고정돼 있다: **서버 정지 → 훅 제거 → `bin/` 삭제.** `events/`·`hub.html`·`config.json`
+순서가 고정돼 있다: **서버 정지 → 훅 제거 → statusLine 제거 → `bin/` 삭제.**
+`events/`·`hub.html`·`config.json`·`rate_limits.json`
 은 지우지 않는다 — 사용자 데이터이며, 지울지는 직접 결정한다(경로는 완료 메시지에 안내된다).
 
 ## 파일 배치
 
 ```
 ~/.claude/hub/
-├── bin/                     # hub/install.sh 가 배포. 10개 파일
+├── bin/                     # hub/install.sh 가 배포. 11개 파일
 ├── config.json              # 선택
+├── rate_limits.json          # /hub statusline on 이 캡처한 한도 초기화 예정 시각
 ├── server.json               # 서버 자신이 bind 직후 1회 쓴다(PID·포트·기동 시각)
 ├── server_heartbeat          # 수집 루프가 매 사이클 touch — 생존 판정의 정본
 ├── server.log                # 서버의 stderr. 크래시 원인 규명 창구

@@ -9,7 +9,7 @@ set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 readonly REPO_ROOT
-readonly HUB_FILE_COUNT=10
+readonly HUB_FILE_COUNT=11
 readonly MAX_DIFF_LINES=20
 readonly TARGET_HUB_DIR="$HOME/.claude/hub"
 readonly TARGET_BIN_DIR="$TARGET_HUB_DIR/bin"
@@ -33,7 +33,7 @@ Usage: hub/install.sh [--force] [--dry-run] [--uninstall] [--help]
 Options:
   --force        수정된 hub/bin 파일 강제 덮어쓰기
   --dry-run      계획만 출력 (파일시스템 변경 없음)
-  --uninstall    서버 정지 → 훅 제거 → hub/bin 삭제 (순서 고정. events/·hub.html·config.json 은 보존)
+  --uninstall    서버 정지 → 훅 제거 → statusLine 제거 → hub/bin 삭제 (순서 고정. events/·hub.html·config.json 은 보존)
   --help         이 메시지 표시
 EOF
 }
@@ -167,6 +167,8 @@ perform_uninstall() {
     stop_server_or_abort "$hub_py" || return 1
     log_info "훅 제거 중..."
     python3 "$hub_py" uninstall-hooks --json || true
+    log_info "statusLine 제거 중..."
+    python3 "$hub_py" uninstall-statusline --json || true
   else
     log_warn "$hub_py 가 없어 서버 정지·훅 제거를 건너뜁니다"
   fi
@@ -184,6 +186,7 @@ perform_uninstall() {
   log_info "  $TARGET_HUB_DIR/server.json, server_heartbeat  (정지 실패로 남아 있을 수 있음)"
   log_info "  $TARGET_HUB_DIR/server.log  (서버 로그)"
   log_info "  $TARGET_HUB_DIR/.collect_spawn_stamp  (훅 디바운스 스탬프)"
+  log_info "  $TARGET_HUB_DIR/rate_limits.json  (한도 초기화 예정 시각 캡처, 있는 경우)"
   return 0
 }
 

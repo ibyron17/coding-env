@@ -142,6 +142,142 @@ class EntryHasHubMarkerRobustnessTest(unittest.TestCase):
         self.assertFalse(hub_settings._entry_has_hub_marker({"hooks": ["not-a-dict"]}))
 
 
+class StatuslineOwnerTest(unittest.TestCase):
+    """케이스 R15 — 소유자 판정표(결정 S4 의 전부)."""
+
+    def test_r15_key_missing_is_none(self) -> None:
+        self.assertEqual(hub_settings.statusline_owner({}), "none")
+
+    def test_r15_null_value_is_none(self) -> None:
+        self.assertEqual(hub_settings.statusline_owner({"statusLine": None}), "none")
+
+    def test_r15_our_marker_is_hub(self) -> None:
+        settings = {"statusLine": {"type": "command", "command": hub_settings.STATUSLINE_COMMAND}}
+        self.assertEqual(hub_settings.statusline_owner(settings), "hub")
+
+    def test_r15_foreign_command_dict_is_foreign(self) -> None:
+        settings = {"statusLine": {"type": "command", "command": "python3 my_own_statusline.py"}}
+        self.assertEqual(hub_settings.statusline_owner(settings), "foreign")
+
+    def test_r15_string_value_is_foreign(self) -> None:
+        self.assertEqual(hub_settings.statusline_owner({"statusLine": "not-a-dict"}), "foreign")
+
+
+class MergeHubStatuslineTest(unittest.TestCase):
+    """케이스 R16~R17."""
+
+    def test_r16_installs_from_none_and_is_idempotent(self) -> None:
+        merged_once = hub_settings.merge_hub_statusline({})
+        self.assertEqual(hub_settings.statusline_owner(merged_once), "hub")
+
+        merged_twice = hub_settings.merge_hub_statusline(merged_once)
+        self.assertEqual(merged_once, merged_twice)
+
+    def test_r16_input_settings_is_not_mutated(self) -> None:
+        settings = {"hooks": {}}
+        original = copy.deepcopy(settings)
+        hub_settings.merge_hub_statusline(settings)
+        self.assertEqual(settings, original)
+
+    def test_r17_foreign_statusline_raises_and_original_value_survives(self) -> None:
+        foreign_command = {"type": "command", "command": "python3 my_own_statusline.py"}
+        settings = {"statusLine": foreign_command}
+        with self.assertRaises(hub_settings.HubStatusLineConflictError):
+            hub_settings.merge_hub_statusline(settings)
+        self.assertEqual(settings["statusLine"], foreign_command)
+
+
+class StripHubStatuslineTest(unittest.TestCase):
+    """케이스 R18 — hooks 키는 어느 경우에도 손대지 않는다."""
+
+    def test_r18_our_statusline_is_removed(self) -> None:
+        settings = {
+            "hooks": {"Stop": [hub_settings._hub_hook_entry()]},
+            "statusLine": {"type": "command", "command": hub_settings.STATUSLINE_COMMAND},
+        }
+        stripped = hub_settings.strip_hub_statusline(settings)
+        self.assertNotIn("statusLine", stripped)
+        self.assertEqual(stripped["hooks"], settings["hooks"])
+
+    def test_r18_foreign_statusline_is_preserved(self) -> None:
+        foreign_command = {"type": "command", "command": "python3 my_own_statusline.py"}
+        settings = {"hooks": {}, "statusLine": foreign_command}
+        stripped = hub_settings.strip_hub_statusline(settings)
+        self.assertEqual(stripped["statusLine"], foreign_command)
+
+    def test_r18_no_key_is_a_no_op(self) -> None:
+        settings = {"hooks": {}}
+        stripped = hub_settings.strip_hub_statusline(settings)
+        self.assertEqual(stripped, settings)
+
+
+class InstallStatuslineMissingEntrypointTest(unittest.TestCase):
+    """케이스 R18b — hub_statusline.py 가 없으면 settings.json 을 건드리지 않고 거부한다."""
+
+    def setUp(self) -> None:
+        self.temp_dir = Path(tempfile.mkdtemp())
+        self.original_settings_path = hub_settings.SETTINGS_PATH
+        self.original_entrypoint_path = hub_settings.HUB_STATUSLINE_ENTRYPOINT_PATH
+        hub_settings.SETTINGS_PATH = self.temp_dir / "settings.json"
+        hub_settings.SETTINGS_PATH.write_text(json.dumps({"model": "opus"}))
+        hub_settings.HUB_STATUSLINE_ENTRYPOINT_PATH = self.temp_dir / "missing_hub_statusline.py"
+
+    def tearDown(self) -> None:
+        hub_settings.SETTINGS_PATH = self.original_settings_path
+        hub_settings.HUB_STATUSLINE_ENTRYPOINT_PATH = self.original_entrypoint_path
+        shutil.rmtree(self.temp_dir, ignore_errors=True)
+
+    def test_r18b_missing_entrypoint_is_rejected_without_touching_settings(self) -> None:
+        before = hub_settings.SETTINGS_PATH.read_text()
+        result = hub_settings.install_statusline()
+        self.assertFalse(result["ok"])
+        self.assertIn(str(hub_settings.HUB_STATUSLINE_ENTRYPOINT_PATH), result["reason"])
+        self.assertEqual(hub_settings.SETTINGS_PATH.read_text(), before)
+
+
+class InstallStatuslineForeignConflictIoTest(unittest.TestCase):
+    """검수 MEDIUM 3 — install_statusline()/uninstall_statusline() 는 merge_hub_statusline·
+    strip_hub_statusline(R17·R18) 를 거치지 않고 자체 statusline_owner 검사로 단락하므로,
+    이 기능의 최대 안전 주장("남의 statusLine 을 절대 건드리지 않는다")을 순수 함수 테스트만으로는
+    보증하지 못한다. I/O 진입점 자체가 foreign 값을 만나면 파일 바이트가 한 글자도 안 바뀌는지
+    직접 확인한다."""
+
+    def setUp(self) -> None:
+        self.temp_dir = Path(tempfile.mkdtemp())
+        self.original_settings_path = hub_settings.SETTINGS_PATH
+        self.original_entrypoint_path = hub_settings.HUB_STATUSLINE_ENTRYPOINT_PATH
+        hub_settings.SETTINGS_PATH = self.temp_dir / "settings.json"
+        hub_settings.HUB_STATUSLINE_ENTRYPOINT_PATH = self.temp_dir / "hub_statusline.py"
+        hub_settings.HUB_STATUSLINE_ENTRYPOINT_PATH.write_text("# stub")
+
+    def tearDown(self) -> None:
+        hub_settings.SETTINGS_PATH = self.original_settings_path
+        hub_settings.HUB_STATUSLINE_ENTRYPOINT_PATH = self.original_entrypoint_path
+        shutil.rmtree(self.temp_dir, ignore_errors=True)
+
+    def test_install_rejects_foreign_statusline_without_touching_settings(self) -> None:
+        foreign_settings = {"model": "opus", "statusLine": {"type": "command", "command": "my-own-script.sh"}}
+        hub_settings.SETTINGS_PATH.write_text(json.dumps(foreign_settings))
+        before = hub_settings.SETTINGS_PATH.read_text()
+
+        result = hub_settings.install_statusline()
+
+        self.assertFalse(result["ok"])
+        self.assertEqual(result["current_command"], foreign_settings["statusLine"])
+        self.assertEqual(hub_settings.SETTINGS_PATH.read_text(), before)
+
+    def test_uninstall_preserves_foreign_statusline_without_touching_settings(self) -> None:
+        foreign_settings = {"model": "opus", "statusLine": {"type": "command", "command": "my-own-script.sh"}}
+        hub_settings.SETTINGS_PATH.write_text(json.dumps(foreign_settings))
+        before = hub_settings.SETTINGS_PATH.read_text()
+
+        result = hub_settings.uninstall_statusline()
+
+        self.assertTrue(result["ok"])
+        self.assertFalse(result["removed"])
+        self.assertEqual(hub_settings.SETTINGS_PATH.read_text(), before)
+
+
 class WriteSettingsAtomicallyModePreservationTest(unittest.TestCase):
     """검수 n1 — mkstemp 는 새 파일을 0600 으로 만든다. 기존 파일 모드(보통 0644)를
     조용히 바꾸면 안 된다 — 교체 전에 기존 모드를 그대로 옮긴다."""

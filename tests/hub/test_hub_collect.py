@@ -516,5 +516,113 @@ class CollectSnapshotUsageIsolationTest(unittest.TestCase):
         self.assertTrue(any("사용량 파일 계약 불일치" in warning for warning in snapshot.warnings))
 
 
+class RateLimitCaptureTest(unittest.TestCase):
+    """케이스 R19~R22, R23b — read/write_rate_limit_capture · _rate_limit_resets_for_snapshot
+    (docs/prps/hub-usage-reset-time-and-refresh.md 「반환 계약」 표)."""
+
+    def setUp(self) -> None:
+        self.temp_dir = Path(tempfile.mkdtemp())
+        self.original_hub_home = hub_collect.HUB_HOME
+        self.original_rate_limits_path = hub_collect.RATE_LIMITS_PATH
+        hub_collect.HUB_HOME = self.temp_dir
+        hub_collect.RATE_LIMITS_PATH = self.temp_dir / "rate_limits.json"
+        self.now_ms = 1786433123899
+
+    def tearDown(self) -> None:
+        for path in self.temp_dir.glob("*"):
+            path.chmod(0o644)
+        hub_collect.HUB_HOME = self.original_hub_home
+        hub_collect.RATE_LIMITS_PATH = self.original_rate_limits_path
+        shutil.rmtree(self.temp_dir, ignore_errors=True)
+
+    def _resets(self, session_resets_at_ms=None, weekly_resets_at_ms=None) -> hub_usage.RateLimitResets:
+        return hub_usage.RateLimitResets(
+            captured_at_ms=self.now_ms,
+            session_resets_at_ms=session_resets_at_ms,
+            weekly_resets_at_ms=weekly_resets_at_ms,
+        )
+
+    def test_r19_missing_capture_file_returns_none_without_warnings(self) -> None:
+        resets, warnings = hub_collect.read_rate_limit_capture()
+        self.assertIsNone(resets)
+        self.assertEqual(warnings, ())
+
+    def test_r20_broken_json_returns_none_with_one_warning(self) -> None:
+        hub_collect.RATE_LIMITS_PATH.write_text("{not valid json")
+        resets, warnings = hub_collect.read_rate_limit_capture()
+        self.assertIsNone(resets)
+        self.assertEqual(len(warnings), 1)
+
+    def test_r20_unreadable_file_returns_none_with_one_warning(self) -> None:
+        hub_collect.write_rate_limit_capture(self._resets(session_resets_at_ms=self.now_ms + 10_000))
+        hub_collect.RATE_LIMITS_PATH.chmod(0o000)
+        resets, warnings = hub_collect.read_rate_limit_capture()
+        self.assertIsNone(resets)
+        self.assertEqual(len(warnings), 1)
+
+    def test_r21_switch_off_never_reads_the_file(self) -> None:
+        """검수 m6 과 같은 이유 — 래퍼가 아니라 I/O 경계(Path.read_text)에서 직접 확인한다."""
+        hub_collect.write_rate_limit_capture(self._resets(session_resets_at_ms=self.now_ms + 10_000))
+        config = hub_model.HubConfig(show_usage_panel=False)
+        with mock.patch.object(hub_collect.Path, "read_text") as mocked_read_text:
+            resets, warnings = hub_collect._rate_limit_resets_for_snapshot(self.now_ms, config)
+        self.assertIsNone(resets)
+        self.assertEqual(warnings, ())
+        mocked_read_text.assert_not_called()
+
+    def test_r22_both_resets_in_the_past_returns_none_without_warnings(self) -> None:
+        hub_collect.write_rate_limit_capture(
+            self._resets(session_resets_at_ms=self.now_ms - 1000, weekly_resets_at_ms=self.now_ms - 2000)
+        )
+        config = hub_model.HubConfig()
+        resets, warnings = hub_collect._rate_limit_resets_for_snapshot(self.now_ms, config)
+        self.assertIsNone(resets)
+        self.assertEqual(warnings, ())
+
+    def test_r23b_write_then_read_round_trip_is_atomic(self) -> None:
+        original = self._resets(
+            session_resets_at_ms=self.now_ms + 10_000, weekly_resets_at_ms=self.now_ms + 20_000
+        )
+        hub_collect.write_rate_limit_capture(original)
+        resets, warnings = hub_collect.read_rate_limit_capture()
+        self.assertEqual(resets, original)
+        self.assertEqual(warnings, ())
+        leftover = list(self.temp_dir.glob("rate_limits.json.*.tmp"))
+        self.assertEqual(leftover, [])
+
+
+class CollectSnapshotRateLimitIsolationTest(unittest.TestCase):
+    """케이스 R23 — 캡처 파일 계약 불일치가 collect_snapshot() 전체를 죽이지 않는다(실패 격리 회귀 방지)."""
+
+    def setUp(self) -> None:
+        self.temp_dir = Path(tempfile.mkdtemp())
+        self.original_events_dir = hub_collect.EVENTS_DIR
+        self.original_projects_dir = hub_collect.PROJECTS_DIR
+        self.original_config_path = hub_collect.CONFIG_PATH
+        self.original_usage_path = hub_collect.PLAN_USAGE_HISTORY_PATH
+        self.original_rate_limits_path = hub_collect.RATE_LIMITS_PATH
+        hub_collect.EVENTS_DIR = self.temp_dir / "events"
+        hub_collect.PROJECTS_DIR = self.temp_dir / "projects"
+        hub_collect.CONFIG_PATH = self.temp_dir / "config.json"
+        hub_collect.PLAN_USAGE_HISTORY_PATH = self.temp_dir / "plan-usage-history.json"
+        hub_collect.RATE_LIMITS_PATH = self.temp_dir / "rate_limits.json"
+        hub_collect.RATE_LIMITS_PATH.write_text("{not valid json")
+
+    def tearDown(self) -> None:
+        hub_collect.EVENTS_DIR = self.original_events_dir
+        hub_collect.PROJECTS_DIR = self.original_projects_dir
+        hub_collect.CONFIG_PATH = self.original_config_path
+        hub_collect.PLAN_USAGE_HISTORY_PATH = self.original_usage_path
+        hub_collect.RATE_LIMITS_PATH = self.original_rate_limits_path
+        shutil.rmtree(self.temp_dir, ignore_errors=True)
+
+    def test_r23_broken_capture_does_not_abort_project_collection(self) -> None:
+        snapshot = hub_collect.collect_snapshot(1786433123899)
+        self.assertEqual(snapshot.projects, ())
+        self.assertIsNone(snapshot.usage)
+        self.assertIsNone(snapshot.rate_limit_resets)
+        self.assertTrue(any("캡처 파일 계약 불일치" in warning for warning in snapshot.warnings))
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -1,6 +1,6 @@
 ---
 description: "모든 프로젝트의 세션 진행 상황을 한 페이지에서 읽기 전용으로 보는 통합 허브 — 상주 서버 제어/훅 설치"
-argument-hint: "[install|off|status|server start|server stop|server status]"
+argument-hint: "[install|off|status|server start|server stop|server status|statusline on|statusline off]"
 ---
 
 # Hub
@@ -42,6 +42,8 @@ argument-hint: "[install|off|status|server start|server stop|server status]"
 /hub server start         # 상주 서버 기동 (분리 프로세스, 세션 무관 수명). 멱등
 /hub server stop          # 상주 서버 종료 (신원 확인 → SIGTERM → 필요 시 SIGKILL)
 /hub server status        # 프로세스 · 하트비트 · HTTP 응답 · 비정상 종료 흔적 보고
+/hub statusline on        # 터미널 상태줄에 사용량 등록 (옵트인, 다른 statusLine 있으면 거부)
+/hub statusline off       # 우리 statusLine 만 제거
 ```
 
 **`/hub` 는 어떤 경로에서도 서버를 기동하지 않는다.** 서버 기동은 언제나 사용자가
@@ -118,6 +120,34 @@ python3 "$HOME/.claude/hub/bin/hub.py" uninstall-hooks --json
 
 `removed` 목록을 보고한다. 서버가 켜져 있으면 계속 돈다 — 이 명령은 훅만 건드린다.
 
+## `/hub statusline on` — 한도 초기화 예정 시각 캡처 등록 (옵트인)
+
+```bash
+python3 "$HOME/.claude/hub/bin/hub.py" install-statusline --json
+```
+
+**실행 전 반드시 아래 고지를 사용자에게 보여주고 진행 여부를 확인한다** (최초 1회, 이미
+설치돼 있으면 건너뜀 — `already_installed` 로 판단):
+
+> 이 명령은 `~/.claude/settings.json` 의 `statusLine` 에 우리 커맨드를 등록합니다 — **모든
+> 프로젝트의 터미널 상태줄**에 영향을 줍니다. 등록 후에는 상태줄에 `세션 23% · 주간 41%` 가
+> 상시 표시되고, 한도 초기화 예정 시각이 `~/.claude/hub/rate_limits.json` 에 캡처돼 사용량
+> 패널을 펼쳤을 때 보입니다. 이미 다른 `statusLine` 이 설정돼 있으면 **덮어쓰지 않고
+> 거부**합니다.
+
+결과의 `installed`·`already_installed` 를 보고한다. `ok=false` 면 `reason` 을 그대로 보고하고
+**재시도하지 않는다** — 다른 `statusLine` 과의 충돌(`current_command` 동봉)이거나
+`hub_statusline.py` 가 배포되지 않은 상태(`hub/install.sh` 재실행 필요)다.
+
+## `/hub statusline off` — 캡처 중단
+
+```bash
+python3 "$HOME/.claude/hub/bin/hub.py" uninstall-statusline --json
+```
+
+`removed` 여부를 보고한다. 우리 것이 아닌 `statusLine` 은 건드리지 않는다 — 그 경우
+`removed:false` 로 보고하고 no-op 임을 알린다.
+
 ## `/hub status`
 
 ```bash
@@ -137,6 +167,12 @@ python3 "$HOME/.claude/hub/bin/hub.py" status --json
 않는 것이다 — 패널이 안 보이는 네 이유(스위치 off·파일 없음·계약 불일치·만료)를 이 두
 필드로 구분한다.
 
+`statusline_installed`(우리 statusLine 설치 여부) · `rate_limit_capture_age_ms`(한도
+초기화 시각 캡처를 처음 관측한 뒤 지난 시간, ms) · `rate_limit_resets_remaining_ms`
+(`{"session": ms|null, "weekly": ms|null}` — 아직 지나지 않은 리셋까지 남은 시간)도 같은
+표에 곁들인다. 초기화 예정 시각 줄이 안 보이는 이유(①statusLine 미설치 ②세션 미실행
+③리셋 시각이 이미 지남 ④`show_usage_panel:false`)를 이 세 필드로 구분한다.
+
 ---
 
 ## 구현 노트 (사람이 읽는 참고용 — 이 절은 실행하지 않는다)
@@ -154,6 +190,15 @@ python3 "$HOME/.claude/hub/bin/hub.py" status --json
   `# DZH_HUB_HOOK` 마커는 설치·제거의 유일한 판정 키다.
 - `Notification` 훅은 설치하지 않는다 — Desktop·Cursor 의 GUI 승인 카드는 이 이벤트를 발화하지
   않는다(CAM 실측 2026-08-04).
+- statusLine 커맨드 문자열은 항상 아래와 **글자 하나까지 동일**해야 한다:
+
+  ```
+  python3 "$HOME/.claude/hub/bin/hub_statusline.py" 2>/dev/null || true   # DZH_HUB_STATUSLINE
+  ```
+
+  훅 커맨드와 달리 **`>/dev/null`(stdout 리다이렉트)을 절대 넣지 않는다** — statusLine 에서는
+  stdout 이 실제 출력 채널이라, 이를 막으면 상태줄이 통째로 사라진다. `2>/dev/null || true`
+  만 쓴다. `# DZH_HUB_STATUSLINE` 마커는 설치·제거의 유일한 판정 키다.
 - 서버 포트는 **8794 고정**이다(북마크 가능해야 하므로 후보 순회를 하지 않는다).
 - 티어 1(`.claude/dashboard.html`)은 `commands/dashboard.md` 의 DOM 계약을 **읽기만** 한다.
   그 문서의 불변식 2·5(`<li id="dz-step-…">`·`<td id="dz-cell-…">` 는 한 줄에 하나씩)가 깨지면

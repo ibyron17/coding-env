@@ -1,5 +1,7 @@
-"""hub_usage 단위 테스트. docs/prps/hub-theme-and-usage-panel.md 「테스트 계획」 케이스 1~17."""
+"""hub_usage 단위 테스트. docs/prps/hub-theme-and-usage-panel.md 「테스트 계획」 케이스 1~17 +
+docs/prps/hub-usage-reset-time-and-refresh.md 「테스트 계획」 케이스 R1~R14b."""
 
+import dataclasses
 import json
 import os
 import sys
@@ -117,6 +119,189 @@ class IsUsageSampleExpiredTest(unittest.TestCase):
     def test_case17_future_timestamp_clock_skew_is_not_expired(self) -> None:
         sample = self._sample_at(BASE_TIME_MS + 60_000)
         self.assertFalse(hub_usage.is_usage_sample_expired(sample, BASE_TIME_MS))
+
+
+RATE_LIMIT_CAPTURED_AT_MS = 1_786_433_120_000
+RATE_LIMIT_CAPTURED_AT_S = RATE_LIMIT_CAPTURED_AT_MS // 1000
+
+
+def _resets_at_s(hours_from_capture: float) -> int:
+    return RATE_LIMIT_CAPTURED_AT_S + int(hours_from_capture * 3600)
+
+
+class ParseStatusLineRateLimitsTest(unittest.TestCase):
+    """케이스 R1~R9."""
+
+    def test_r1_both_windows_present_are_mapped_to_ms(self) -> None:
+        session_s = _resets_at_s(2)
+        weekly_s = _resets_at_s(48)
+        text = json.dumps(
+            {"rate_limits": {"five_hour": {"resets_at": session_s}, "seven_day": {"resets_at": weekly_s}}}
+        )
+        result = hub_usage.parse_status_line_rate_limits(text, RATE_LIMIT_CAPTURED_AT_MS)
+        self.assertEqual(
+            result,
+            hub_usage.RateLimitResets(
+                captured_at_ms=RATE_LIMIT_CAPTURED_AT_MS,
+                session_resets_at_ms=session_s * 1000,
+                weekly_resets_at_ms=weekly_s * 1000,
+            ),
+        )
+
+    def test_r2_only_five_hour_present(self) -> None:
+        text = json.dumps({"rate_limits": {"five_hour": {"resets_at": _resets_at_s(2)}}})
+        result = hub_usage.parse_status_line_rate_limits(text, RATE_LIMIT_CAPTURED_AT_MS)
+        self.assertIsNone(result.weekly_resets_at_ms)
+        self.assertIsNotNone(result.session_resets_at_ms)
+
+    def test_r3_only_seven_day_present(self) -> None:
+        text = json.dumps({"rate_limits": {"seven_day": {"resets_at": _resets_at_s(48)}}})
+        result = hub_usage.parse_status_line_rate_limits(text, RATE_LIMIT_CAPTURED_AT_MS)
+        self.assertIsNone(result.session_resets_at_ms)
+        self.assertIsNotNone(result.weekly_resets_at_ms)
+
+    def test_r4_rate_limits_key_absent_is_normal_payload(self) -> None:
+        text = json.dumps({"hookEventName": "Status"})
+        self.assertIsNone(hub_usage.parse_status_line_rate_limits(text, RATE_LIMIT_CAPTURED_AT_MS))
+
+    def test_r5_rate_limits_not_a_dict(self) -> None:
+        text = json.dumps({"rate_limits": "not-a-dict"})
+        self.assertIsNone(hub_usage.parse_status_line_rate_limits(text, RATE_LIMIT_CAPTURED_AT_MS))
+
+    def test_r5_window_not_a_dict(self) -> None:
+        text = json.dumps({"rate_limits": {"five_hour": "not-a-dict", "seven_day": "not-a-dict"}})
+        self.assertIsNone(hub_usage.parse_status_line_rate_limits(text, RATE_LIMIT_CAPTURED_AT_MS))
+
+    def test_r6_resets_at_as_string_that_window_is_dropped(self) -> None:
+        text = json.dumps(
+            {
+                "rate_limits": {
+                    "five_hour": {"resets_at": str(_resets_at_s(2))},
+                    "seven_day": {"resets_at": _resets_at_s(48)},
+                }
+            }
+        )
+        result = hub_usage.parse_status_line_rate_limits(text, RATE_LIMIT_CAPTURED_AT_MS)
+        self.assertIsNone(result.session_resets_at_ms)
+        self.assertIsNotNone(result.weekly_resets_at_ms)
+
+    def test_r6_resets_at_as_float_and_bool_both_windows_dropped_is_none(self) -> None:
+        text = json.dumps(
+            {"rate_limits": {"five_hour": {"resets_at": 1.5}, "seven_day": {"resets_at": True}}}
+        )
+        self.assertIsNone(hub_usage.parse_status_line_rate_limits(text, RATE_LIMIT_CAPTURED_AT_MS))
+
+    def test_r7_resets_at_already_in_ms_is_rejected_by_horizon_check(self) -> None:
+        """단위 오류 시뮬레이션 — 이미 ms 인 값을 다시 ×1000 하면 지평선을 아득히 벗어난다."""
+        text = json.dumps({"rate_limits": {"five_hour": {"resets_at": RATE_LIMIT_CAPTURED_AT_MS + 3600_000}}})
+        self.assertIsNone(hub_usage.parse_status_line_rate_limits(text, RATE_LIMIT_CAPTURED_AT_MS))
+
+    def test_r8_resets_at_in_the_past_is_dropped(self) -> None:
+        text = json.dumps({"rate_limits": {"five_hour": {"resets_at": _resets_at_s(-1)}}})
+        self.assertIsNone(hub_usage.parse_status_line_rate_limits(text, RATE_LIMIT_CAPTURED_AT_MS))
+
+    def test_r9_broken_json_does_not_raise(self) -> None:
+        self.assertIsNone(hub_usage.parse_status_line_rate_limits("{not json", RATE_LIMIT_CAPTURED_AT_MS))
+
+    def test_r9_empty_string(self) -> None:
+        self.assertIsNone(hub_usage.parse_status_line_rate_limits("", RATE_LIMIT_CAPTURED_AT_MS))
+
+
+class DropPassedResetsTest(unittest.TestCase):
+    """케이스 R10~R12."""
+
+    def _resets(self, session_resets_at_ms, weekly_resets_at_ms) -> hub_usage.RateLimitResets:
+        return hub_usage.RateLimitResets(
+            captured_at_ms=RATE_LIMIT_CAPTURED_AT_MS,
+            session_resets_at_ms=session_resets_at_ms,
+            weekly_resets_at_ms=weekly_resets_at_ms,
+        )
+
+    def test_r10_only_session_passed_keeps_weekly_original_unchanged(self) -> None:
+        now_ms = RATE_LIMIT_CAPTURED_AT_MS + 10_000
+        original = self._resets(session_resets_at_ms=now_ms - 1, weekly_resets_at_ms=now_ms + 10_000)
+        result = hub_usage.drop_passed_resets(original, now_ms)
+        self.assertEqual(result, self._resets(session_resets_at_ms=None, weekly_resets_at_ms=now_ms + 10_000))
+        self.assertEqual(original.session_resets_at_ms, now_ms - 1)  # 원본 불변
+
+    def test_r11_both_passed_returns_none(self) -> None:
+        now_ms = RATE_LIMIT_CAPTURED_AT_MS + 10_000
+        original = self._resets(session_resets_at_ms=now_ms - 1, weekly_resets_at_ms=now_ms - 1)
+        self.assertIsNone(hub_usage.drop_passed_resets(original, now_ms))
+
+    def test_r12_now_equals_session_resets_at_is_treated_as_passed(self) -> None:
+        now_ms = RATE_LIMIT_CAPTURED_AT_MS + 10_000
+        original = self._resets(session_resets_at_ms=now_ms, weekly_resets_at_ms=now_ms + 10_000)
+        result = hub_usage.drop_passed_resets(original, now_ms)
+        self.assertIsNone(result.session_resets_at_ms)
+
+
+class SameResetTimesTest(unittest.TestCase):
+    """케이스 R13."""
+
+    def test_r13_only_captured_at_differs_is_still_same(self) -> None:
+        previous = hub_usage.RateLimitResets(
+            captured_at_ms=RATE_LIMIT_CAPTURED_AT_MS, session_resets_at_ms=1, weekly_resets_at_ms=2
+        )
+        current = hub_usage.RateLimitResets(
+            captured_at_ms=RATE_LIMIT_CAPTURED_AT_MS + 5000, session_resets_at_ms=1, weekly_resets_at_ms=2
+        )
+        self.assertTrue(hub_usage.same_reset_times(previous, current))
+
+    def test_r13_previous_none_is_not_same(self) -> None:
+        current = hub_usage.RateLimitResets(
+            captured_at_ms=RATE_LIMIT_CAPTURED_AT_MS, session_resets_at_ms=1, weekly_resets_at_ms=2
+        )
+        self.assertFalse(hub_usage.same_reset_times(None, current))
+
+    def test_r13_differing_reset_time_is_not_same(self) -> None:
+        previous = hub_usage.RateLimitResets(
+            captured_at_ms=RATE_LIMIT_CAPTURED_AT_MS, session_resets_at_ms=1, weekly_resets_at_ms=2
+        )
+        current = hub_usage.RateLimitResets(
+            captured_at_ms=RATE_LIMIT_CAPTURED_AT_MS, session_resets_at_ms=1, weekly_resets_at_ms=3
+        )
+        self.assertFalse(hub_usage.same_reset_times(previous, current))
+
+
+class ParseRateLimitCaptureTest(unittest.TestCase):
+    """케이스 R14."""
+
+    def test_r14_round_trip_via_asdict_and_json(self) -> None:
+        original = hub_usage.RateLimitResets(
+            captured_at_ms=RATE_LIMIT_CAPTURED_AT_MS, session_resets_at_ms=1, weekly_resets_at_ms=2
+        )
+        text = json.dumps(dataclasses.asdict(original))
+        self.assertEqual(hub_usage.parse_rate_limit_capture(text), original)
+
+    def test_r14_missing_field_returns_none(self) -> None:
+        text = json.dumps({"captured_at_ms": RATE_LIMIT_CAPTURED_AT_MS})
+        self.assertIsNone(hub_usage.parse_rate_limit_capture(text))
+
+    def test_r14_wrong_type_field_returns_none(self) -> None:
+        text = json.dumps(
+            {"captured_at_ms": RATE_LIMIT_CAPTURED_AT_MS, "session_resets_at_ms": "not-an-int", "weekly_resets_at_ms": None}
+        )
+        self.assertIsNone(hub_usage.parse_rate_limit_capture(text))
+
+    def test_r14_broken_json_returns_none(self) -> None:
+        self.assertIsNone(hub_usage.parse_rate_limit_capture("{not json"))
+
+
+class FormatStatusLineSummaryTest(unittest.TestCase):
+    """케이스 R14b."""
+
+    def test_r14b_float_and_int_used_percentage_are_floored(self) -> None:
+        text = json.dumps(
+            {"rate_limits": {"five_hour": {"used_percentage": 23.5}, "seven_day": {"used_percentage": 41}}}
+        )
+        self.assertEqual(hub_usage.format_status_line_summary(text), "세션 23% · 주간 41%")
+
+    def test_r14b_no_rate_limits_returns_empty_string(self) -> None:
+        self.assertEqual(hub_usage.format_status_line_summary(json.dumps({"hookEventName": "Status"})), "")
+
+    def test_r14b_broken_json_returns_empty_string(self) -> None:
+        self.assertEqual(hub_usage.format_status_line_summary("{not json"), "")
 
 
 if __name__ == "__main__":
