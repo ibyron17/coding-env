@@ -186,6 +186,10 @@ UpdateMode
 - `reload` 모드의 코드 경로는 **현재 스크립트와 의미상 동일**해야 한다. 플로팅 버튼은 비활성이다.
 - 플로팅 가능 조건 = `mode === "poll"` **AND** `'documentPictureInPicture' in window`.
   둘 중 하나라도 아니면 버튼은 `disabled` 이고 `#dz-pip-hint` 가 사유 한 줄을 보여준다.
+- 위 조건을 만족해도 허브 모달(iframe) 안에서 열린 문서는 `body.dz-embedded` 로 플로팅
+  버튼·안내 줄이 CSS 로 숨는다 — 모달을 닫으면 iframe 이 `about:blank` 로 가 opener 문서가
+  파괴되므로, 그 안에서 플로팅에 진입하면 되돌아갈 곳이 사라진다. 폴링은 이 판정과 무관하게
+  그대로 동작한다.
 - 창 높이는 고정값이 아니다. 압축 뷰는 작업 추적 카드가 빠져 콘텐츠가 짧으므로,
   `measureCompactHeight()` 가 여는 시점에 `.wrap` 을 `body.dz-pip` 상태로 순간 측정해 그 실제
   높이(+24px 여백 +`PIP_CHROME_ALLOWANCE` 창 여백)를 PiP 창을 여는 호출의 초기 크기로 넘긴다.
@@ -199,9 +203,10 @@ UpdateMode
 
 | 요소 | 역할 |
 |------|------|
-| `#dz-pip-btn` | 플로팅 진입/종료 버튼. `.wrap` **바깥**(`<body>` 직계)에 둔다 |
+| `#dz-pip-btn` | 플로팅 진입/종료 버튼. `.wrap` **바깥**(`<body>` 직계)에 둔다. 허브 모달(iframe) 안에서는 `body.dz-embedded` 로 숨는다(R1) |
 | `#dz-pip-hint` | 상태·사유 한 줄. 기본 `hidden`, 스크립트가 텍스트를 넣을 때만 노출 |
 | `body.dz-pip` | PiP 창 문서의 `<body>` 에만 붙는 클래스. 좁은 창용 여백 축소 규칙의 스코프 |
+| `body.dz-embedded` | `window.self !== window.top` 이면 붙는 클래스. `#dz-pip-btn`·`#dz-pip-hint` 를 숨기는 스코프이며 폴링·동기화와 무관하다(R1) |
 | `#dz-log-card` | 「작업 추적」 카드 `<div>`. `init`/`step`/`log` 도, 폴링도 이 요소 자체를 치환하지 않는다. PiP 압축 뷰가 CSS 로 숨기기 위한 유일한 용도이며, DOM 에서 제거하지 않는다 |
 
 > **왜 `.wrap` 바깥인가**: 플로팅은 `.wrap` 서브트리를 **통째로 PiP 창으로 옮기는** 방식이다.
@@ -642,12 +647,13 @@ grep -c 'dz-impl-[0-9].*class="done"' .claude/dashboard.html
 
 | 티어 | URL | 조건 | 얻는 것 |
 |------|-----|------|--------|
-| 1 | `http://localhost:{포트}/dashboard.html` | 서버 재사용 또는 기동 성공 | 5초 폴링 자동 갱신 + 플로팅 버튼 활성 |
+| 1 | `http://localhost:{포트}/dashboard.html` | 서버 재사용 또는 기동 성공 | 5초 폴링 자동 갱신 + 플로팅 버튼 활성(**단독 탭에서만** — 허브 모달 안에서는 숨는다) |
 | 2 | `file://{절대경로}/.claude/dashboard.html` | 서버 불가(python3 없음 · 후보 포트 전부 점유 · 기동 실패) | 포커스 시 갱신 |
 
-**브라우저 열기는 티어와 직교한다.** 티어 1·2 어느 쪽이든 확정된 URL 에 대해 아래 「브라우저 열기」를
-시도하고, 그마저 불가능하면 URL 을 출력해 사용자가 직접 열게 한다. 즉 최악의 결과가 **현재 동작과
-정확히 같다** — 이 기능은 어떤 환경에서도 기존 경험을 나쁘게 만들지 않는다.
+**브라우저 열기는 티어와 직교한다.** 티어 1·2 어느 쪽이든 아래 [3-a](#3-a-열기-대상-확정--허브가-살아-있으면-허브를-연다)
+가 정한 **열기 대상 URL** 에 대해 아래 「브라우저 열기」를 시도하고, 그마저 불가능하면 URL 을
+출력해 사용자가 직접 열게 한다. 즉 최악의 결과가 **현재 동작과 정확히 같다** — 이 기능은
+어떤 환경에서도 기존 경험을 나쁘게 만들지 않는다.
 
 ### 1. 서버 가용성 확인
 
@@ -709,7 +715,8 @@ print(free, 'FREE') if free else print('NONE')
 - 티어 2: `file://<현재 작업 디렉토리 절대경로>/.claude/dashboard.html`
 
 확정된 티어에 따라 아래 [포트 각인](#포트-각인--자동-발행--serve-의-공통-하위-절차) 절차를
-**반드시** 수행한다.
+**반드시** 수행한다. 이 URL 이 **대시보드 URL** 이다(보고·각인용 — 실제로 브라우저에 여는
+URL 은 아래 3-a 가 별도로 정한다).
 
 | 티어 | 각인할 값 | 왜 |
 |------|----------|-----|
@@ -720,7 +727,57 @@ print(free, 'FREE') if free else print('NONE')
 > 찔러야 하고, 사용자 대면 URL 은 `serve` 5단계가 이미 쓰던 표기와 같아야 하기 때문이다.
 > 브라우저에서 `localhost` 가 안 열리면 `http://127.0.0.1:{포트}/dashboard.html` 을 안내한다.
 
+### 3-a. 열기 대상 확정 — 허브가 살아 있으면 허브를 연다
+
+> 3번이 확정한 것은 **대시보드 URL**(보고·각인용)이다. 이 단계는 **브라우저로 열 URL** 만
+> 따로 정한다. 통합 허브(`/hub`) 서버가 살아 있으면 프로젝트 대시보드 대신 **허브 페이지**를
+> 연다 — 허브에서 이 프로젝트 카드를 클릭하면 같은 대시보드가 모달로 열리므로, 여러
+> 프로젝트를 함께 보는 화면이 진입점이 되는 편이 낫다.
+
+허브 생존 판정은 허브의 공개 인터페이스인 `hub.py server-status --json` 하나로 한다 — 그
+출력의 `alive`·`http_ok`·`record.port` 세 필드만 읽는다. Bash 1회. 셸이 변수 확장을 하지
+않도록 `$` 를 쓰지 않는다(2번과 같은 관례).
+
+```bash
+python3 -c "
+import json, os, pathlib, subprocess, sys
+hub_py = pathlib.Path(os.path.expanduser('~/.claude/hub/bin/hub.py'))
+if not hub_py.exists():
+    print('NOHUB'); raise SystemExit
+try:
+    done = subprocess.run([sys.executable, str(hub_py), 'server-status', '--json'],
+                          capture_output=True, text=True, timeout=10)
+    status = json.loads(done.stdout)
+    port = (status.get('record') or {}).get('port')
+    alive = status.get('alive') and status.get('http_ok') and isinstance(port, int)
+    print('HUB', port) if alive else print('NOHUB')
+except Exception:
+    print('NOHUB')
+"
+```
+
+출력은 반드시 아래 둘 중 하나다. **다른 해석을 만들지 않는다.**
+
+| 출력 | 열기 대상 URL |
+|------|--------------|
+| `HUB {포트}` | `http://localhost:{포트}/hub.html` — 허브 페이지 |
+| `NOHUB` | 3번이 확정한 **대시보드 URL**(기존 동작) |
+
+- **포트는 이 출력에서만 온다.** 허브 기본 포트를 이 문서에 적어 넣지 않는다 —
+  `~/.claude/hub/config.json` 으로 바뀔 수 있다.
+- 명령이 실패하거나(허브 미설치·`python3` 없음·타임아웃) 위 둘이 아닌 출력이 나오면
+  **추측하지 말고 `NOHUB` 로 본다.** 이 단계의 어떤 실패도 `init` 을 중단시키지 않으며,
+  실패하면 변경 전과 정확히 같은 동작이 남는다.
+- **로컬 서버(2번)와 포트 각인(3번)은 이 판정과 무관하게 그대로 수행한다.** 허브 모달은 디스크의
+  `.claude/dashboard.html` 을 허브 서버가 직접 읽어 서빙하므로 로컬 서버와 무관하고, 로컬 서버는
+  여전히 (a) 플로팅 창(허브 모달 안에서는 쓸 수 없다) (b) 단독 탭 열람 (c) `log commit` 의 자동
+  종료에 쓰인다.
+- 허브가 이 프로젝트 카드를 반영하기까지 최대 1 수집 주기(기본 5초) 걸린다. **강제 수집을
+  부르지 않는다** — 허브 상주 서버가 스스로 따라잡는다.
+
 ### 4. 브라우저 열기 — 되면 하고, 안 되면 **조용히** 넘어간다
+
+여기서 `<URL>` 은 3-a 가 정한 **열기 대상 URL** 이다.
 
 아래 순서로 **한 번씩만** 시도한다. **재시도하지 않고, 루프를 돌지 않고, 실패를 에러로 보고하지
 않는다.** 성공하면 즉시 5번으로 간다.
@@ -734,15 +791,74 @@ print(free, 'FREE') if free else print('NONE')
    - 그런 도구가 **없으면 navigate 로 끝낸다.** 없는 기능을 다른 수단으로 흉내 내지 않는다
      (「없으면 설치하지 않는다」와 같은 원칙이다).
    - 두 호출 모두 **한 번씩만** 하고, 실패는 무시하고 5번으로 간다.
-2. **없으면 OS 기본 열기 명령을 시도한다.** 아래를 모두 만족할 때만 실행한다.
-   - `$SSH_CONNECTION` 이 설정돼 **있지 않다.** 설정돼 있으면 원격 세션이므로 **시도하지 않는다** —
-     명령이 열어 봐야 사용자가 보는 화면이 아니고, 애초에 그 포트는 원격 머신 것이다.
-   - `uname -s` 결과가 `Darwin` → `open "<URL>"`
-   - `uname -s` 결과가 `Linux` **이고** `$DISPLAY` 또는 `$WAYLAND_DISPLAY` 중 하나가 설정돼 있다
-     → `xdg-open "<URL>"`
-   - 그 밖의 경우(판정 불가, 헤드리스, 컨테이너) → **시도하지 않는다.**
-   - `open`/`xdg-open` 은 **기본이 곧 포커스**다. macOS 에서 `-g`(백그라운드) 옵션을 **붙이지
-     않는다** — 붙이면 탭은 열리지만 창이 뒤에 남아 이번 요구가 무너진다.
+2. **없으면 OS 경로로 간다.** `$SSH_CONNECTION` 이 설정돼 **있으면** 원격 세션이므로 2-a·2-b 를
+   **모두 건너뛴다** — 명령이 열어 봐야 사용자가 보는 화면이 아니고, 애초에 그 포트는 원격
+   머신 것이다.
+
+**2-a. (macOS 만) 이미 열린 탭을 찾아 앞으로 가져온다.** `uname -s` 가 `Darwin` 일 때만 의미가
+있다. Bash 1회, 출력은 폐쇄 어휘 3개(`FOCUSED`/`NOTFOUND`/`UNSUPPORTED`) 중 하나다.
+`{열기 대상 URL}` 만 채우고 나머지는 그대로 쓴다. **아래 코드는 들여쓰기 없이 그대로 옮긴다**
+— heredoc 종료 표시(`APPLESCRIPT`)는 줄 맨 앞에 있어야만 유효하다.
+
+```bash
+if [ "$(uname -s)" != "Darwin" ]; then echo UNSUPPORTED; else
+osascript 2>/dev/null <<'APPLESCRIPT' || echo NOTFOUND
+set targetURL to "{열기 대상 URL}"
+if application "Google Chrome" is running then
+  tell application "Google Chrome"
+    repeat with theWindow in windows
+      set tabIndex to 0
+      repeat with theTab in tabs of theWindow
+        set tabIndex to tabIndex + 1
+        if URL of theTab is targetURL then
+          set active tab index of theWindow to tabIndex
+          set index of theWindow to 1
+          activate
+          return "FOCUSED"
+        end if
+      end repeat
+    end repeat
+  end tell
+end if
+if application "Safari" is running then
+  tell application "Safari"
+    repeat with theWindow in windows
+      repeat with theTab in tabs of theWindow
+        if URL of theTab is targetURL then
+          set current tab of theWindow to theTab
+          set index of theWindow to 1
+          activate
+          return "FOCUSED"
+        end if
+      end repeat
+    end repeat
+  end tell
+end if
+return "NOTFOUND"
+APPLESCRIPT
+fi
+```
+
+| 출력 | 다음 행동 |
+|------|----------|
+| `FOCUSED` | **끝이다.** 2-b 를 건너뛰고 5번(보고)으로 간다 — `open` 을 부르면 방금 앞으로 가져온 탭 옆에 중복 탭이 생긴다 |
+| `NOTFOUND` · `UNSUPPORTED` · 그 밖의 출력 · 명령 실패 | 아래 **2-b** 로 간다 |
+
+- **`is running` 검사를 지우지 마라.** `tell application` 은 꺼져 있는 앱을 **실행시킨다** — 탭을
+  찾으려다 빈 브라우저 창이 뜬다.
+- URL 비교는 **정확 일치**다. 포트를 무시하거나 접두 일치로 바꾸면 **다른 프로젝트의 대시보드
+  탭**을 앞으로 가져온다(대시보드 포트는 8791~8793 중 하나로 프로젝트마다 다르다).
+- 최초 1회 자동화(Automation) 권한 승인이 필요하다. 거부하면 `NOTFOUND` 가 되어 2-b 로 폴백하며
+  **재시도하지 않는다.**
+
+**2-b. `FOCUSED` 가 아니면 기존 OS 기본 열기 명령을 시도한다.**
+- `uname -s` 결과가 `Darwin` → `open "<URL>"`
+- `uname -s` 결과가 `Linux` **이고** `$DISPLAY` 또는 `$WAYLAND_DISPLAY` 중 하나가 설정돼 있다
+  → `xdg-open "<URL>"`
+- 그 밖의 경우(판정 불가, 헤드리스, 컨테이너) → **시도하지 않는다.**
+- `open`/`xdg-open` 은 **기본이 곧 포커스**다. macOS 에서 `-g`(백그라운드) 옵션을 **붙이지
+  않는다** — 붙이면 탭은 열리지만 창이 뒤에 남아 이번 요구가 무너진다.
+
 3. **둘 다 못 하면 아무것도 하지 않는다.** 5번의 보고에 URL 이 이미 들어 있으므로 사용자가 직접 연다.
 
 > 명령이 실패했는지 성공했는지 **깊이 판정하지 않는다.** 종료 코드가 0 이 아니면 열지 못한 것으로
@@ -753,6 +869,7 @@ print(free, 'FREE') if free else print('NONE')
 
 | 상황 | 보고에 반드시 포함 |
 |------|------------------|
+| 허브를 연 경우(3-a `HUB`) | 허브 URL(`http://localhost:{포트}/hub.html`) · "허브 페이지를 열었습니다 — 이 프로젝트 카드를 클릭하면 이 대시보드가 모달로 열립니다" · **대시보드 URL 도 함께** 표기(플로팅 창은 이 단독 탭에서만 동작합니다) |
 | 티어 1 · 기동함 | URL · "5초마다 자동 갱신됩니다" · `/dashboard serve stop {포트}` (끝나면 서버를 끄라는 안내) · 최초 1회라면 `Bash(python3 -m http.server:*)`·`Bash(open:*)` 등을 허용 목록에 추가하면 다음부터 권한 프롬프트가 사라진다는 안내 한 줄 |
 | 티어 1 · 재사용 | URL · "이미 떠 있는 서버를 재사용했습니다" · `/dashboard serve stop {포트}` |
 | 티어 2 | `file://` URL · "자동 갱신이 아니라 창에 포커스를 줄 때 갱신됩니다" · 내려앉은 사유 한 줄 |
@@ -761,6 +878,10 @@ print(free, 'FREE') if free else print('NONE')
 **서버가 세션 종료 후에도 남을 수 있다**는 사실을 티어 1 보고에 **매번** 적는다. 정리 명령은
 포트를 포함한 완전한 형태(`/dashboard serve stop 8792`)로 쓴다 — 자동 경로는 8791 이 아닐 수 있고,
 포트를 빼면 `stop` 이 기본값 8791 을 죽이러 가서 엉뚱한 서버를 끈다.
+
+**탭 재사용(2-a)을 쓰려면 최초 1회 자동화(Automation) 권한 승인이 필요하다** — 기존 허용 목록
+안내와 같은 자리에 한 줄로 덧붙인다: "탭 재사용을 쓰려면 최초 1회 자동화(Automation) 권한
+승인이 필요합니다 — 거부해도 새 탭으로 열리며 다른 동작에는 영향이 없습니다."
 
 ### 포트 각인 — 「자동 발행」 · `serve` 의 공통 하위 절차
 
@@ -961,6 +1082,8 @@ DZ:DASHBOARD 갱신 맵 (동적 영역 — 셀렉터 기반 정밀 치환, comma
                                (DOM 에서 제거하지 않는다 — 복귀 시 로그가 사라진다)
   #dz-impl-card              : 구현 세부 작업 카드 div. 목록이 비면 CSS :has() 가 통째로 숨긴다
                                (DOM 에서 제거하지 않는다 — 폴링이 outerHTML 로 동기화한다)
+  body.dz-embedded           : 허브 모달(iframe) 안에서 열렸다는 표시. #dz-pip-btn/#dz-pip-hint 를
+                               CSS 로만 숨기는 스코프일 뿐 폴링·동기화와는 무관하다
 -->
 <style>
   :root{--ink:#172033;--muted:#5E6B7D;--line:#D9E2EC;--soft:#F4F7FB;--blue:#1E5AA8;--navy:#12335B;--green:#1F8A70;--orange:#F59E0B;--red:#C2410C;}
@@ -1021,6 +1144,10 @@ DZ:DASHBOARD 갱신 맵 (동적 영역 — 셀렉터 기반 정밀 치환, comma
   #dz-pip-btn:disabled{color:var(--muted);cursor:not-allowed;box-shadow:none}
   #dz-pip-hint{position:fixed;top:54px;right:18px;z-index:9;max-width:300px;font-size:11px;line-height:1.5;color:var(--muted);background:#fff;border:1px solid var(--line);border-radius:8px;padding:8px 10px;box-shadow:0 2px 8px rgba(19,51,91,.10)}
   #dz-pip-hint[hidden]{display:none}
+  /* 허브 모달(iframe) 안에서 열린 문서는 body.dz-embedded 가 붙는다 — 플로팅은 iframe 안에서
+     구조적으로 깨진다(모달을 닫으면 iframe 이 about:blank 로 가 opener 문서 자체가 파괴된다).
+     CSS 로만 숨긴다 — DOM 제거는 이 파일의 기존 불변식(id="dz-pip-*" 유지)을 어긴다. */
+  body.dz-embedded #dz-pip-btn,body.dz-embedded #dz-pip-hint{display:none}
   body.dz-pip .wrap{margin:10px auto;padding:0 10px}
   body.dz-pip .card{padding:14px 16px;border-radius:10px;margin-bottom:10px}
   body.dz-pip h1{font-size:16px}
@@ -1082,6 +1209,13 @@ DZ:DASHBOARD 갱신 맵 (동적 영역 — 셀렉터 기반 정밀 치환, comma
   var busy = false;
   var failureCount = 0;
   var reasonHint = '';            // 버튼이 비활성인 영구 사유. 해소되기 전까지 유지된다
+
+  // 허브 모달(iframe) 로 열렸는지 판정(R1). self !== top 은 WindowProxy 신원 비교라 크로스
+  // 오리진에서도 예외를 던지지 않는다(top.location 을 읽으면 던진다 — 그건 하지 않는다).
+  // 표시(body.dz-embedded)에만 쓰고 폴링·동기화는 분기하지 않는다 — 모달 안 라이브 갱신이
+  // 이 판정으로 죽으면 안 된다.
+  var isEmbedded = window.self !== window.top;
+  if(isEmbedded) document.body.classList.add('dz-embedded');
 
   function setHint(text){ pipHint.textContent = text || ''; pipHint.hidden = !text; }
 

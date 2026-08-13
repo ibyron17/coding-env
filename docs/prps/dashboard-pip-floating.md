@@ -145,6 +145,9 @@ UpdateMode
 - `reload` 모드의 코드 경로는 **현재 스크립트와 의미상 동일**해야 한다. 플로팅 버튼은 비활성이다.
 - 플로팅 가능 조건 = `mode === "poll"` **AND** `'documentPictureInPicture' in window`.
   둘 중 하나라도 아니면 버튼은 `disabled` 이고 `#dz-pip-hint` 가 사유 한 줄을 보여준다.
+  **보강됨(R1, [`hub-first-entry-and-ui-signals.md`](./hub-first-entry-and-ui-signals.md)).**
+  이 조건을 만족해도 허브 모달(iframe) 안에서 열린 문서는 `body.dz-embedded` 로 표시가
+  CSS 로 숨는다 — 조건 자체는 바뀌지 않고 **표시 조건**이 하나 더해진다.
 
 ### 정적 요소 추가 (동적 셀렉터 표에 넣지 않는다)
 

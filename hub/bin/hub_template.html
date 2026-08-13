@@ -17,22 +17,27 @@ DZH:HUB 데이터 계약
   (자기 URL 을 받아 문자열 전체 비교), 아니면 포커스 복귀 시 location.reload(). 두 모드
   모두 #dzh-refresh 버튼과 포커스 복귀 시에도 같은 즉시 갱신 경로를 탄다.
 
-  불변식 H1″(정본: docs/prps/hub-card-interactions-and-usage.md). 폴링·틱이 내용을
+  불변식 H1‴(정본: docs/prps/hub-first-entry-and-ui-signals.md). 폴링·틱이 내용을
   갱신하는 대상은 #dzh-app(자식 전체 교체) · #dzh-usage-body(innerHTML) ·
   #dzh-usage-summary(textContent) · #dzh-refresh 의 data-tooltip·class 속성뿐이다.
   다음 노드는 정적이며 폴링이 절대 교체하지 않는다: #dzh-usage, #dzh-usage-toggle,
-  #dzh-theme-toggle, #dzh-tooltip, #dzh-dashboard-modal(과 그 자식 전부), #dzh-live.
+  #dzh-theme-toggle, #dzh-tooltip, #dzh-dashboard-modal(과 그 자식 전부).
   이들의 갱신은 속성·textContent 단위로만 한다. 여기에 두 조항이 더해진다 —
   ① 순서는 데이터가 아니라 사용자 상태다: #dzh-app 자식의 배치 순서는 스냅샷이 아니라
   storedProjectOrder(모듈 스코프 + localStorage['dzh-project-order'])가 정한다. 서버의
   활동순 정렬은 아직 저장 순서에 없는 신규 프로젝트끼리의 상대 순서를 정할 때만 쓰인다.
-  ② 드래그 중에는 다시 그리지 않는다: isReordering 이 참이면 render() 는 #dzh-app 을
-  건드리지 않고 즉시 반환한다(재렌더가 드래그 중인 노드를 파괴하면 드롭이 취소된다).
-  원칙은 그대로다 — 사용자 상태(포커스·접힘·선택·순서·열린 모달)를 가진 것은 재렌더
-  대상 밖에 둔다.
+  ② 드래그 중에는 다시 그리지 않는다 — isReordering 이 참이면 render() 는 즉시 반환한다.
+  그 사이 dragover 가 #dzh-app 자식의 순서를 직접 바꾸며(라이브 이동), 따라서 드래그
+  구간에서는 DOM 이 저장 순서보다 앞서 있다. drop 이 그 DOM 순서를 커밋하고, dragend 가
+  한 번 다시 그려 둘을 맞춘다. 취소·카드 밖 드롭은 drop 없이 dragend 만 발화하므로 재렌더가
+  라이브 이동을 자동으로 되돌린다. 원칙은 그대로다 — 사용자 상태(포커스·접힘·선택·순서·
+  열린 모달)를 가진 것은 재렌더 대상 밖에 둔다.
 
   #dzh-usage 와 그 안의 #dzh-usage-toggle 은 정적 노드이며 class·aria-expanded 속성만
-  갱신한다(노드 교체 금지). 테마 토글 버튼은 이들 바깥의 정적 마크업이라 폴링과 무관하게
+  갱신한다(노드 교체 금지). 접힘을 바꾸는 경로는 둘이다 — 제목 줄 클릭과 패널 바깥 클릭 —
+  이며 둘 다 같은 함수(applyUsageCollapsedState)와 같은 저장 키를 쓴다. 패널 안에는 툴팁
+  트리거를 두지 않는다(R5) — 되살리려면 tooltipDismissObserver 의 #dzh-usage-body 관찰도
+  함께 되살려야 한다. 테마 토글 버튼은 이들 바깥의 정적 마크업이라 폴링과 무관하게
   DOM 이 그대로 유지된다. rate_limit_resets(있으면)는 펼침 본문에 초기화 예정 시각 줄로
   더해진다(docs/prps/hub-usage-reset-time-and-refresh.md). usage·rate_limit_resets 의 값은
   모두 같은 statusLine 캡처(rate_limits.json) 하나에서 온다 — 퍼센트와 초기화 예정 시각을
@@ -43,8 +48,7 @@ DZH:HUB 데이터 계약
   죽지 않도록 document 에 위임한다.
   프로젝트 대시보드 모달(#dzh-dashboard-modal, docs/prps/hub-card-interactions-and-usage.md
   결정 N5)은 <dialog>+showModal() 정적 싱글턴이다. 카드 클릭이 iframe.src 와 제목만 바꾸고,
-  닫힘(close 이벤트)에서 iframe.src 를 비워 숨은 폴링을 멈춘다. #dzh-live 는 카드 순서
-  변경(R2)을 스크린리더에 알리는 aria-live="polite" 정적 영역이다.
+  닫힘(close 이벤트)에서 iframe.src 를 비워 숨은 폴링을 멈춘다.
 -->
 <style>
   :root{
@@ -96,15 +100,28 @@ DZH:HUB 데이터 계약
      없이도 화면 상태와 데이터가 항상 일치하게 한다(R3). */
   .card[data-dashboard-key]{cursor:pointer}
   .card[data-dashboard-key]:hover{border-color:var(--accent)}
+  /* 지금 작업중인 카드를 훑어 찾기 쉽게 하는 스캔 보조 신호(R3) — 배지의 텍스트+글리프+색
+     3채널에 얹는 중복 신호라 새 접근성 부채가 아니다(결정 D4). box-shadow 는 --shadow(카드
+     기본 그림자)를 먼저 유지한 뒤 두 번째 그림자로 halo 를 더한다 — 순서를 바꾸면 working
+     카드만 기본 그림자를 잃어 평면이 된다. 은은한 pulse 는 사용자가 선택했다(결정 D3) —
+     reduced-motion 에서는 정적 glow 로 낙착해 신호 자체는 잃지 않는다. */
+  .card.card-working{border-color:var(--accent);box-shadow:var(--shadow),0 0 14px -2px var(--accent);animation:card-working-glow 2.6s ease-in-out infinite alternate}
+  @keyframes card-working-glow{from{box-shadow:var(--shadow),0 0 10px -3px var(--accent)}to{box-shadow:var(--shadow),0 0 18px -1px var(--accent)}}
+  @media (prefers-reduced-motion:reduce){.card.card-working{animation:none}}
+  /* 드래그 중인 원본 카드(R7, 결정 DG6) — 고스트(반투명 복제)와 구분되도록 낮춘다. 놓일 자리가
+     곧 이 카드의 현재 위치다(dragover 의 라이브 이동). dragend 가 render() 를 불러 카드를
+     재생성하므로 클래스 제거 코드가 필요 없다 — 재렌더가 청소한다. opacity 는 컴포지터
+     친화 속성이라 pulse(card-working)와 겹쳐도 추가 리페인트 부담이 없다. */
+  .card.card-dragging{opacity:.55}
   .project-head{display:flex;align-items:center;gap:10px;flex-wrap:nowrap}
-  /* 드래그 핸들(R2) — 카드 전체 클릭(R3)과 조작 영역이 겹치지 않도록 전용 버튼으로 둔다
-     (결정 O5). 22px 는 인접 배지들보다 살짝 작게 잡아 "잡는 곳"이라는 보조적 위계를 준다. */
+  /* 드래그 핸들(R2) — 카드 전체 클릭(R3)과 조작 영역이 겹치지 않도록 전용 요소로 둔다
+     (결정 DG3 — 드래그 전용이라 button 이 아니라 aria-hidden 인 span 이다). 22px 는 인접
+     배지들보다 살짝 작게 잡아 "잡는 곳"이라는 보조적 위계를 준다. */
   .card-drag-handle{width:22px;height:22px;flex:0 0 auto;padding:0;color:var(--muted);
                      background:transparent;border:1px solid var(--line);border-radius:6px;
                      cursor:grab;display:inline-flex;align-items:center;justify-content:center;
                      font-size:13px;line-height:1}
   .card-drag-handle:hover{color:var(--accent-ink);border-color:var(--accent)}
-  .card-drag-handle:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
   /* font:inherit 를 먼저 두고 font-size·font-weight 를 뒤에 다시 적어, <button> 기본 폰트만
      리셋하고 크기·굵기는 명시값을 쓰게 한다(순서 의존 — .usage-toggle 과 같은 관례). 티어
      2·3 은 <span> 으로 렌더돼(R3) 이 리셋은 그때 아무 효과가 없다. */
@@ -211,9 +228,16 @@ DZH:HUB 데이터 계약
      임의값이다(실측 아님 — 문제가 되면 조정한다). 32px 뷰포트 여백은 .usage·.tooltip 이
      이미 쓰는 것과 같은 관례. */
   .modal{width:min(1040px, calc(100vw - 32px));height:min(760px, calc(100vh - 32px));
-         padding:0;border:0;border-radius:14px;background:var(--surface);color:var(--ink);
-         box-shadow:var(--shadow)}
+         padding:0;border:1px solid var(--line);border-radius:14px;background:var(--surface);color:var(--ink);
+         box-shadow:0 24px 64px rgba(0,0,0,.35)}
   .modal[open]{display:flex;flex-direction:column}
+  /* depth·경계(R8, 결정 MD1) — ::backdrop 의 어두운 오버레이가 depth 의 주역이고, 테마 토큰
+     테두리가 경계의 주역이다(카드용 --shadow 하나만으로는 이만한 표면을 띄우기엔 약했다).
+     오버레이·그림자 색은 라이트·다크 공통값을 원해 토큰화하지 않고 리터럴로 둔다(결정 MD2) —
+     T25-29 가 금지하는 것은 색각 안전성이 없는 범주 색 리터럴뿐이라 이 중성 검정 반투명은
+     걸리지 않는다. blur() 는 넣지 않는다 — 모달이 열린 동안에도 폴링·틱이 배경을 통째로
+     교체해 매번 재합성 비용이 든다(결정 MD3). */
+  .modal::backdrop{background:rgba(8,14,22,.55)}
   .modal-head{display:flex;align-items:center;justify-content:space-between;gap:12px;
               padding:14px 18px;border-bottom:1px solid var(--line)}
   .modal-title{font-size:14px;font-weight:800;color:var(--head);overflow:hidden;
@@ -271,7 +295,6 @@ try{
   <iframe id="dzh-modal-frame" class="modal-frame"
           aria-label="프로젝트 진행 대시보드"></iframe>
 </dialog>
-<div id="dzh-live" class="sr-only" aria-live="polite"></div>
 <script type="application/json" id="dzh-data">{}</script>
 <script>
 (function(){
@@ -426,13 +449,12 @@ try{
   window.addEventListener('resize', function(){ hideTooltip(); });
 
   // 30초 틱이 트리거 노드를 파괴하는데 포인터가 멈춰 있으면 마우스 이벤트가 안 와 낡은 문구가
-  // 남는다(결정 T6) — #dzh-app·#dzh-usage-body 의 자식 교체(렌더의 innerHTML 통째 교체)를
-  // 감시해 고아 툴팁을 막는다.
+  // 남는다(결정 T6) — #dzh-app 의 자식 교체(렌더의 innerHTML 통째 교체)를 감시해 고아 툴팁을
+  // 막는다. #dzh-usage-body 관찰은 R5 로 지웠다 — 그 안에는 트리거가 더 없어 절대 유용하게
+  // 발화할 수 없다(결정 UT4). 패널 안에 다시 data-tooltip 을 넣으려면 이 관찰도 되살려야 한다.
   var appElForTooltipObserver = document.getElementById('dzh-app');
-  var usageBodyElForTooltipObserver = document.getElementById('dzh-usage-body');
   var tooltipDismissObserver = new MutationObserver(function(){ hideTooltip(); });
   if(appElForTooltipObserver) tooltipDismissObserver.observe(appElForTooltipObserver, {childList: true});
-  if(usageBodyElForTooltipObserver) tooltipDismissObserver.observe(usageBodyElForTooltipObserver, {childList: true});
 
   // 표시 중인 트리거의 data-tooltip 이 폴링·틱으로 갱신될 수 있다(#dzh-refresh 의 연결 상태
   // 문구 등) — showTooltip 은 진입 시점에만 속성을 읽으므로, 포인터를 올려둔 채면 다음 진입
@@ -486,7 +508,7 @@ try{
   var PROJECT_ORDER_STORAGE_KEY = 'dzh-project-order';
   var MAX_STORED_PROJECT_ORDER = 200;
   var DRAG_HANDLE_SELECTOR = '.card-drag-handle';
-  var DRAG_HANDLE_HINT = '드래그하거나 ←/→ 키로 순서 변경';
+  var DRAG_HANDLE_HINT = '드래그해서 순서 변경';
   // 프로젝트 대시보드 모달(R3, 결정 N7) — file:// 모드는 클릭 대상에서 빠지고 사유를 안내한다.
   var FILE_MODE_DASHBOARD_HINT = '허브 서버를 켜면(/hub server start) 카드에서 대시보드를 볼 수 있습니다';
 
@@ -510,8 +532,6 @@ try{
   var storedProjectOrder = readStoredProjectOrder();
   var isReordering = false;          // 참이면 render() 가 #dzh-app 을 건드리지 않는다(결정 O6)
   var draggedProjectPath = null;
-  var focusHandleAfterRenderPath = null;   // 이동 뒤 재렌더가 날린 포커스를 복원할 대상(결정 O5)
-  var liveRegionEl = document.getElementById('dzh-live');
 
   // 데이터 블록이 깨지면(수동 편집·render_hub_html 결함 등) JSON.parse 가 던지고, try/catch 가
   // 없으면 이 IIFE 전체가 죽어 render() 가 한 번도 안 불려 "불러오는 중…" 이 영구 고정된다(검수 n4).
@@ -559,61 +579,21 @@ try{
     return displayOrder.concat(hiddenPaths).slice(0, MAX_STORED_PROJECT_ORDER);
   }
 
-  // path 를 targetIndex 로 옮긴 **새** 배열. 범위를 벗어나면 클램프. 순수 함수 — 원본을
-  // 변형하지 않는다.
-  function moveProjectPath(order, path, targetIndex){
-    var withoutPath = order.filter(function(candidate){ return candidate !== path; });
-    var clampedIndex = Math.max(0, Math.min(targetIndex, withoutPath.length));
-    return withoutPath.slice(0, clampedIndex).concat([path], withoutPath.slice(clampedIndex));
-  }
-
-  // #dzh-live 에 이동 결과를 넣어 스크린리더가 낭독하게 한다(결정 O5).
-  function announceProjectPosition(displayName, index, total){
-    if(!liveRegionEl) return;
-    liveRegionEl.textContent = displayName + ' — ' + (index + 1) + ' / ' + total + ' 번째';
-  }
-
-  // 지금 화면에 그려진 카드의 순서를 DOM 에서 직접 읽는다(드래그·키보드 이동의 기준).
+  // 지금 화면에 그려진 카드의 순서를 DOM 에서 직접 읽는다(드래그 라이브 이동·drop 의 기준).
   function currentCardOrder(){
     return Array.prototype.map.call(app.querySelectorAll('.card[data-project-path]'), function(card){
       return card.getAttribute('data-project-path');
     });
   }
 
-  // 방향키·Home·End 를 목표 인덱스로 바꾼다. 해당 없는 키면 null(호출자가 무시한다). 순수 함수.
-  function keyboardMoveTargetIndex(key, currentIndex, totalCount){
-    if(key === 'ArrowLeft') return Math.max(0, currentIndex - 1);
-    if(key === 'ArrowRight') return Math.min(totalCount - 1, currentIndex + 1);
-    if(key === 'Home') return 0;
-    if(key === 'End') return totalCount - 1;
-    return null;
-  }
-
-  // 새 표시 순서를 저장 순서에 반영·영속화한다. 렌더는 호출자가 맡는다(드래그는 dragend 에서,
-  // 키보드는 이 자리에서 바로) — isReordering 이 걸린 도중에는 render() 가 조기 반환하기
-  // 때문이다(결정 O6).
-  function commitReorder(newDisplayOrder, focusPath){
+  // 새 표시 순서를 저장 순서에 반영·영속화한다. 렌더는 호출자(dragend)가 맡는다 — isReordering
+  // 이 걸린 도중에는 render() 가 조기 반환하기 때문이다(결정 O6).
+  function commitReorder(newDisplayOrder){
     var snapshotPaths = (snapshot.projects || []).map(function(project){ return project.path; });
     var hiddenPaths = storedProjectOrder.filter(function(path){ return snapshotPaths.indexOf(path) === -1; });
     var nextOrder = newDisplayOrder.concat(hiddenPaths).slice(0, MAX_STORED_PROJECT_ORDER);
     persistProjectOrder(nextOrder);
     storedProjectOrder = nextOrder;
-    focusHandleAfterRenderPath = focusPath;
-  }
-
-  // 이동 뒤 재렌더가 포커스를 날리므로, 렌더 직후 이동한 카드의 핸들로 포커스를 복원한다(결정 O5).
-  function restoreHandleFocusAfterRender(){
-    if(!focusHandleAfterRenderPath) return;
-    var path = focusHandleAfterRenderPath;
-    focusHandleAfterRenderPath = null;
-    var cards = app.querySelectorAll('.card[data-project-path]');
-    for(var i = 0; i < cards.length; i++){
-      if(cards[i].getAttribute('data-project-path') === path){
-        var handle = cards[i].querySelector(DRAG_HANDLE_SELECTOR);
-        if(handle) handle.focus();
-        return;
-      }
-    }
   }
 
   function elapsedLabel(fromMs){
@@ -725,11 +705,12 @@ try{
       + renderTier1ActiveStep(tier1) + renderTier1ImplProgress(tier1);
   }
 
-  // 드래그 핸들 하나. aria-label 은 결정 O5 의 스펙 그대로 "위치 이동: {프로젝트명}".
-  function renderDragHandle(project){
-    return '<button class="card-drag-handle" type="button" draggable="true" aria-label="'
-      + escapeHtml('위치 이동: ' + project.display_name) + '" data-tooltip="'
-      + escapeHtml(DRAG_HANDLE_HINT) + '">≡</button>';
+  // 드래그 전용 핸들(결정 DG1~DG3). 키보드로 아무 것도 할 수 없게 됐으므로 <button> 이 아니다 —
+  // 포커스는 받지만 Enter/Space 에 반응하지 않는 컨트롤은 보조기술 사용자에게 거짓말이 된다.
+  // aria-hidden 으로 접근성 트리에서 빼고, Tab 순서에서도 자연히 빠진다(span 은 기본 비포커스).
+  function renderDragHandle(){
+    return '<span class="card-drag-handle" draggable="true" aria-hidden="true" data-tooltip="'
+      + escapeHtml(DRAG_HANDLE_HINT) + '">≡</span>';
   }
 
   // 클릭 가능(티어 1 + 서버 모드)이면 <button>, 아니면 <span> — 없는 기능을 있는 척하지
@@ -755,9 +736,12 @@ try{
     var cardAttrs = ' data-project-path="' + escapeHtml(project.path || '') + '"';
     if(isClickable) cardAttrs += ' data-dashboard-key="' + escapeHtml(project.dashboard_key) + '"';
     else if(project.dashboard_key) cardAttrs += ' data-tooltip="' + escapeHtml(FILE_MODE_DASHBOARD_HINT) + '"';
-    return '<div class="card"' + cardAttrs + '>'
+    // working 만 강조한다 — stale 은 base_state 가 working 이어도 "소식 없음"이므로 강조하면
+    // 지금 돌고 있다고 오해하게 된다(R3, 결정 D2).
+    var stateClass = project.state === 'working' ? ' card-working' : '';
+    return '<div class="card' + stateClass + '"' + cardAttrs + '>'
       + '<div class="project-head">'
-      + renderDragHandle(project)
+      + renderDragHandle()
       + renderProjectNameEl(project, isClickable)
       + '<span class="badge tier" data-tooltip="' + escapeHtml(TIER_DESCRIPTION[project.tier] || '') + '">' + escapeHtml(TIER_LABEL[project.tier] || ('티어 ' + project.tier)) + '</span>'
       + renderStateBadge(project.state)
@@ -837,19 +821,13 @@ try{
     return USAGE_RESET_LABEL + ' ' + absolutePart + ' · ' + remaining;
   }
 
-  // 초기화 예정 시각 한 줄의 HTML. 그릴 값이 없으면 빈 문자열. capturedAtMs 는 툴팁의
-  // '이 정보를 확인한 시각'에 쓰인다(표시 규칙 표) — formatTimestamp 는 usage-meta 와 같은
-  // 기존 함수를 재사용한다(새 날짜 포맷 도입 없음).
-  // 네이티브 title 이 아니라 data-tooltip 을 쓴다 — 대시보드의 모든 툴팁은 #dzh-tooltip
-  // 커스텀 컴포넌트 하나로 통일한다(T25-39 가 title 속성 0건을 강제한다).
-  function renderUsageResetRow(resetsAtMs, capturedAtMs){
+  // 초기화 예정 시각 한 줄의 HTML. 그릴 값이 없으면 빈 문자열.
+  // 툴팁은 R5 로 제거됐다 — 패널 안에서는 마우스를 올려도 아무 말도 걸지 않는다(결정 UT1).
+  // 캡처 시각은 /hub status 의 rate_limit_capture_age_ms 로 진단한다.
+  function renderUsageResetRow(resetsAtMs){
     var text = usageResetText(resetsAtMs, Date.now());
     if(text === null) return '';
-    var capturedAtNumber = Number(capturedAtMs);
-    var tooltipAttr = isFinite(capturedAtNumber)
-      ? ' data-tooltip="' + escapeHtml('이 정보를 확인한 시각: ' + formatTimestamp(capturedAtNumber)) + '"'
-      : '';
-    return '<div class="usage-reset"' + tooltipAttr + '>' + escapeHtml(text) + '</div>';
+    return '<div class="usage-reset">' + escapeHtml(text) + '</div>';
   }
 
   function hideUsagePanel(){
@@ -902,13 +880,12 @@ try{
     var sessionBar = renderUsageBar(USAGE_SESSION_LABEL, usage.session_percent);
     var weeklyBar = renderUsageBar(USAGE_WEEKLY_LABEL, usage.weekly_percent);
     if(!sessionBar || !weeklyBar){ hideUsagePanel(); return; }
-    var capturedAtMs = resets && resets.captured_at_ms;
-    var sessionResetRow = renderUsageResetRow(resets && resets.session_resets_at_ms, capturedAtMs);
-    var weeklyResetRow = renderUsageResetRow(resets && resets.weekly_resets_at_ms, capturedAtMs);
+    var sessionResetRow = renderUsageResetRow(resets && resets.session_resets_at_ms);
+    var weeklyResetRow = renderUsageResetRow(resets && resets.weekly_resets_at_ms);
     var meta = '마지막 갱신 ' + elapsedLabel(usage.sampled_at_ms) + ' ' + USAGE_CYCLE_NOTE;
     usageSummaryEl.textContent = usageSummaryText(usage);
     usageBodyEl.innerHTML = sessionBar + sessionResetRow + weeklyBar + weeklyResetRow
-      + '<div class="usage-meta" data-tooltip="' + escapeHtml(formatTimestamp(usage.sampled_at_ms)) + '">' + meta + '</div>';
+      + '<div class="usage-meta">' + meta + '</div>';
     usageEl.hidden = false;
     document.body.classList.add('has-usage');
     applyUsageCollapsedState();
@@ -968,7 +945,6 @@ try{
     app.insertAdjacentHTML('beforeend', extra);
     renderConnectionStatus();
     renderUsagePanel(snapshot.usage, snapshot.rate_limit_resets);
-    restoreHandleFocusAfterRender();
   }
   // 펼치는 순간 다음 폴링(최대 5초)을 기다리지 않고 그 자리에서 한 번 더 갱신한다(요구 2).
   // ①은 file:// 모드에서도 동작하는 로컬 재계산, ②는 서버 모드에서만 가능한 즉시 fetch 다.
@@ -984,63 +960,65 @@ try{
     if(isServed) poll();                                           // ② 서버에 최신 스냅샷을 즉시 요청
   });
 
-  // 카드 순서 변경(R2) — #dzh-app 자식은 렌더마다 전멸하므로 전부 document 위임이다(결정 O7).
-  // HTML5 DnD: dragstart(핸들에서 시작) → dragover(카드 위, preventDefault 필수 — GOTCHA 3,
-  // 안 그러면 drop 이 아예 안 온다) → drop(순서 계산·저장, 렌더는 dragend 로 미룬다) →
+  // 패널 바깥 클릭으로 접는다(R4, 결정 Q1~Q5). 위 토글과 마찬가지로 이 리스너도 반드시
+  // `if(!isServed){ … return; }` 앞에 등록돼야 한다 — 뒤로 가면 file:// 모드에서 기능이
+  // 통째로 사라진다(GOTCHA 2).
+  document.addEventListener('click', function(event){
+    if(isUsageCollapsed) return;                       // 이미 접혀 있으면 할 일이 없다
+    if(usageEl.hidden) return;                         // 패널이 없는 화면에서 접힘을 저장하지 않는다(결정 Q3)
+    if(event.target.closest('#dzh-usage')) return;     // 패널 안(토글 버튼 포함)은 토글 리스너 소관(GOTCHA 1)
+    if(event.target.closest('dialog')) return;         // 모달·배경 클릭은 페이지 클릭이 아니다(결정 Q4)
+    isUsageCollapsed = true;
+    persistUsageCollapsed(isUsageCollapsed);
+    applyUsageCollapsedState();
+  });
+
+  // 카드 순서 변경(R7, 결정 DG1~DG6) — #dzh-app 자식은 렌더마다 전멸하므로 전부 document
+  // 위임이다(결정 O7). HTML5 DnD: dragstart(핸들에서 시작, 카드 전체를 고스트로 삼는다) →
+  // dragover(대상 카드 위치로 드래그 중인 카드를 실제로 옮긴다 — 라이브 이동. preventDefault
+  // 필수, GOTCHA 3) → drop(그 시점의 DOM 순서를 그대로 커밋한다 — 인덱스 산술 없음) →
   // dragend(모든 경로 — 성공·취소·Escape — 에서 반드시 발화하므로 여기서 isReordering 을
-  // 해제하고 한 번만 다시 그린다).
+  // 해제하고 한 번만 다시 그려 취소된 이동을 되돌린다). 조작 수단은 드래그 하나뿐이다 —
+  // 키보드 이동은 사용자 요구로 제거됐다(WCAG 2.1.1 회귀, 결정 DG2 에 기록).
   document.addEventListener('dragstart', function(event){
     var handle = event.target.closest(DRAG_HANDLE_SELECTOR);
     var card = handle && handle.closest('[data-project-path]');
     if(!card) return;
     draggedProjectPath = card.getAttribute('data-project-path');
     isReordering = true;
+    card.classList.add('card-dragging');
+    var cardRect = card.getBoundingClientRect();
     event.dataTransfer.effectAllowed = 'move';
     event.dataTransfer.setData('text/plain', draggedProjectPath);   // Firefox 는 이게 없으면 드래그를 시작하지 않는다
+    // 핸들이 카드 왼쪽 위에 있어 오프셋이 작다 — 고스트가 커서에 자연스럽게 매달린다(결정 DG7).
+    event.dataTransfer.setDragImage(card, event.clientX - cardRect.left, event.clientY - cardRect.top);
   });
   document.addEventListener('dragover', function(event){
     if(draggedProjectPath === null) return;
-    if(!event.target.closest('[data-project-path]')) return;
-    event.preventDefault();                        // GOTCHA 3
+    var targetCard = event.target.closest('[data-project-path]');
+    if(!targetCard) return;
+    event.preventDefault();                        // GOTCHA 3 — 없으면 drop 이 아예 안 온다
+    var draggedCard = app.querySelector('.card-dragging');
+    if(!draggedCard || targetCard === draggedCard) return;
+    // 대상이 드래그 중인 카드보다 뒤에 있으면(=내가 앞) 대상 '뒤'로, 아니면 대상 '앞'으로
+    // 넣는다 — 인덱스 산술로 순서를 옮기던 옛 방식과 결과가 정확히 같다(결정 DG4).
+    // 좌표(중심점) 비교는 쓰지 않는다 — 3열 그리드에서는 좌우·상하가 섞여 새 임계값이 생긴다.
+    // 카드 높이가 균일(340px)하므로 이동 직후 포인터 아래 슬롯에는 드래그 중인 카드 자신이
+    // 놓여 다음 dragover 가 즉시 반환한다 — 진동(oscillation)이 생기지 않는 근거다(GOTCHA 17).
+    var draggedIsBefore = !!(draggedCard.compareDocumentPosition(targetCard)
+                             & Node.DOCUMENT_POSITION_FOLLOWING);
+    app.insertBefore(draggedCard, draggedIsBefore ? targetCard.nextSibling : targetCard);
   });
   document.addEventListener('drop', function(event){
     if(draggedProjectPath === null) return;
-    var targetCard = event.target.closest('[data-project-path]');
-    if(!targetCard) return;
+    if(!event.target.closest('[data-project-path]')) return;
     event.preventDefault();
-    var targetPath = targetCard.getAttribute('data-project-path');
-    if(targetPath === draggedProjectPath) return;
-    var order = currentCardOrder();
-    // moveProjectPath 는 원본 배열(order) 기준 targetIndex 를 받아, path 를 먼저 뺀 배열에
-    // 그 인덱스로 다시 끼워 넣는다 — path 를 뺀 배열에서 인덱스를 다시 구하면(필터 후
-    // indexOf) 제거로 한 칸씩 당겨진 효과가 이중으로 반영돼 정방향 이동이 한 칸씩
-    // 모자라진다(인접 오른쪽 이동 무동작·마지막 자리 도달 불가). order.indexOf 그대로
-    // 넘기는 것이 정방향·역방향 모두 정답이다.
-    var targetIndex = order.indexOf(targetPath);
-    // 포커스 복원은 키보드 경로 전용이다(결정 O5) — 마우스 드롭은 포커스를 옮기지 않는다.
-    commitReorder(moveProjectPath(order, draggedProjectPath, targetIndex), null);
+    commitReorder(currentCardOrder());            // DOM 이 곧 최종 순서다(결정 DG4·DG5)
   });
   document.addEventListener('dragend', function(){
     draggedProjectPath = null;
     isReordering = false;
-    render();     // 드래그 중 억눌렸던 재렌더를 여기서 한 번 따라잡는다
-  });
-
-  // 키보드 이동(결정 O5, WCAG 2.1.1) — 핸들에 포커스가 있을 때 ←/→/Home/End. 순간적인
-  // 동작이라 isReordering 플래그를 쓰지 않는다.
-  document.addEventListener('keydown', function(event){
-    var handle = event.target.closest(DRAG_HANDLE_SELECTOR);
-    var card = handle && handle.closest('[data-project-path]');
-    if(!card) return;
-    var order = currentCardOrder();
-    var path = card.getAttribute('data-project-path');
-    var targetIndex = keyboardMoveTargetIndex(event.key, order.indexOf(path), order.length);
-    if(targetIndex === null) return;
-    event.preventDefault();      // 방향키의 페이지 스크롤을 막는다
-    var displayName = (card.querySelector('.project-name') || {}).textContent || '';
-    commitReorder(moveProjectPath(order, path, targetIndex), path);
-    render();
-    announceProjectPosition(displayName, targetIndex, order.length);
+    render();     // 드래그 중 억눌렸던 재렌더를 여기서 한 번 따라잡는다(취소 시 라이브 이동도 되돌린다)
   });
 
   render();

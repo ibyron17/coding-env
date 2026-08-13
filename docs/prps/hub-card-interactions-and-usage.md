@@ -443,6 +443,11 @@ function orderedProjectPaths(storedOrder, snapshotPaths){   // 순수 — DOM·�
 
 ### 결정 O5 — 조작 수단: **전용 드래그 핸들** + 키보드 이동
 
+> **대체됨(superseded, 2026-08-13).** 이 결정은 [`hub-first-entry-and-ui-signals.md`](./hub-first-entry-and-ui-signals.md)
+> 의 결정 DG1~DG3 이 대체한다 — 사용자가 드래그 전용 조작을 명시적으로 요구해 키보드
+> 이동·낭독(`#dzh-live`)·포커스 복원을 제거했다(WCAG 2.1.1 회귀, 결정 DG2 에 기록). 아래
+> 근거는 당시 판단의 기록으로 남긴다.
+
 | 안 | 장점 | 단점 | 판정 |
 |----|------|------|------|
 | **A. 카드 안 전용 핸들(`≡`)에 HTML5 DnD + 핸들 포커스 시 방향키 이동** | 의존성 0. **R3(카드 전체 클릭)과 충돌이 구조적으로 없다** — 클릭 영역과 드래그 영역이 다른 요소다. 키보드 경로가 있어 WCAG 2.1.1 을 만족 | 핸들 1개가 카드에 추가된다. 터치 미지원(HTML5 DnD 의 한계) | **권고** |
@@ -458,10 +463,13 @@ function orderedProjectPaths(storedOrder, snapshotPaths){   // 순수 — DOM·�
 ```
 
 - `.project-head` 의 **맨 앞**에 놓는다(왼쪽 = 잡는 곳이라는 보편 관례).
-- **키보드**: 핸들에 포커스가 있을 때 `ArrowLeft`/`ArrowRight` → 한 칸 이동(`preventDefault` 로
-  페이지 스크롤 억제). `Home`/`End` → 맨 앞/맨 뒤.
-- **낭독**: 이동 후 정적 `aria-live="polite"` 영역(`#dzh-live`)에 `"{이름} — 3 / 9 번째"` 를 넣는다.
-- 이동 뒤 재렌더가 포커스를 날리므로, `focusHandleAfterRender` 에 경로를 담아 두고 렌더 직후
+- **키보드**(**대체됨 R7** — 조작 수단이 드래그 하나로 줄며 함께 제거된다): 핸들에 포커스가
+  있을 때 `ArrowLeft`/`ArrowRight` → 한 칸 이동(`preventDefault` 로 페이지 스크롤 억제).
+  `Home`/`End` → 맨 앞/맨 뒤.
+- **낭독**(**대체됨 R7** — 키보드 경로가 사라지며 `#dzh-live` 자체가 제거된다): 이동 후 정적
+  `aria-live="polite"` 영역(`#dzh-live`)에 `"{이름} — 3 / 9 번째"` 를 넣는다.
+- **포커스 복원**(**대체됨 R7** — 드롭은 포커스를 옮기지 않으므로 복원할 대상이 없어진다):
+  이동 뒤 재렌더가 포커스를 날리므로, `focusHandleAfterRender` 에 경로를 담아 두고 렌더 직후
   `[data-project-path="…"] .card-drag-handle` 로 포커스를 복원한다.
 
 ### 결정 O6 — 드래그 중에는 `#dzh-app` 을 다시 그리지 않는다
@@ -509,9 +517,13 @@ function orderedProjectPaths(storedOrder: string[], snapshotPaths: string[]): st
 
 function moveProjectPath(order: string[], path: string, targetIndex: number): string[]
     /** path 를 targetIndex 로 옮긴 **새** 배열. 범위를 벗어나면 클램프. 순수 함수. */
+    // 폐기됨(R7) — hub-first-entry-and-ui-signals.md 결정 DG4. 드롭이 DOM 순서를 그대로
+    // 커밋하므로 인덱스 산술 자체가 필요 없어진다.
 
 function announceProjectPosition(displayName: string, index: number, total: number): void
     /** #dzh-live 에 이동 결과를 넣어 스크린리더가 낭독하게 한다. */
+    // 폐기됨(R7) — hub-first-entry-and-ui-signals.md 결정 DG1·DG2. 키보드 경로 제거로
+    // #dzh-live 자체도 함께 삭제된다.
 ```
 
 `stableSortedProjects()` 는 `orderedProjectPaths()` 로 대체되고 삭제된다.
@@ -625,6 +637,12 @@ nosniff 를 이 경로에만 더하는 이유: `hub.html` 은 이 프로세스�
 
 > **즉 서버가 그 경로를 서빙하는 것만으로 모달 안 대시보드가 살아 움직인다.** `/dashboard`
 > 템플릿·`commands/dashboard.md` 는 손대지 않는다. 이 성질은 수동 확인 M8 로 반드시 실검증한다.
+
+> **보강됨(2026-08-13).** [`hub-first-entry-and-ui-signals.md`](./hub-first-entry-and-ui-signals.md)
+> R1 은 이 모달이 좁은 iframe 안에서 대시보드 단독용 플로팅 UI 를 가리는 문제를 고치기 위해
+> `commands/dashboard.md` 템플릿에 CSS 1줄 + JS 2줄을 더한다 — 위 표의 세 확인 항목(갱신
+> 모드 판정·폴링 대상·주기)은 그대로이며, 라이브 갱신 메커니즘 자체는 여전히 한 줄도
+> 바뀌지 않는다.
 
 **알려진 한계**: 대시보드의 PiP(Document Picture-in-Picture) 기능은 iframe 안에서 권한 위임
 없이는 동작하지 않을 수 있다. 모달은 "읽기"용이고 PiP 가 필요하면 원래대로 대시보드를 직접 열면
@@ -960,6 +978,7 @@ function applyTheme(theme: 'light'|'dark'): void
           aria-label="프로젝트 진행 대시보드"></iframe>
 </dialog>
 <div id="dzh-live" class="sr-only" aria-live="polite"></div>   ← ★신규 · 정적 (R2 낭독)
+                                                                ← 제거됨(R7, hub-first-entry-and-ui-signals.md)
 
 <script type="application/json" id="dzh-data">{}</script>      ← 무변경(치환 마커)
 ```
@@ -987,7 +1006,8 @@ function applyTheme(theme: 'light'|'dark'): void
 > `#dzh-refresh` 의 `data-tooltip`·`class` **속성**.
 >
 > 다음 노드는 **정적**이며 폴링이 절대 교체하지 않는다: `#dzh-usage`, `#dzh-usage-toggle`,
-> `#dzh-theme-toggle`, `#dzh-tooltip`, `#dzh-dashboard-modal`(과 그 자식 전부), `#dzh-live`.
+> `#dzh-theme-toggle`, `#dzh-tooltip`, `#dzh-dashboard-modal`(과 그 자식 전부), `#dzh-live`
+> (`#dzh-live` 는 **제거됨** — R7, 정본: [`hub-first-entry-and-ui-signals.md`](./hub-first-entry-and-ui-signals.md) 불변식 H1‴).
 > 이들의 갱신은 **속성·textContent 단위**로만 한다.
 >
 > 여기에 이번 개정으로 두 조항이 더해진다.

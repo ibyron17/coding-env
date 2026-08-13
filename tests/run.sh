@@ -996,10 +996,10 @@ test_manifest_fields_complete() {
 }
 
 # T22: dashboard 템플릿 무결성 — LLM 지시문 방식이라 런타임 Edit 결과는 검증 대상이 아니고,
-# 설치·문서 정합성만 자동 검증한다 (하위 검증 T22-1~T22-96).
+# 설치·문서 정합성만 자동 검증한다 (하위 검증 T22-1~T22-104).
 test_dashboard_template_integrity() {
   local test_name="T22"
-  local test_desc="dashboard 템플릿 무결성 (T22-1~T22-96)"
+  local test_desc="dashboard 템플릿 무결성 (T22-1~T22-104)"
   log_test_name "$test_name" "$test_desc"
 
   local sandbox
@@ -1503,7 +1503,13 @@ test_dashboard_template_integrity() {
     record_failure "$test_name" "T22-69: file:// 문자열이 문서에서 사라짐"
     return 1
   fi
-  if ! sed -n '/^## 자동 발행/,/^## `serve`/p' "$dashboard_command_file" | grep -q '폴백'; then
+  # sed | grep -q 로 직접 파이프하지 않는다 — grep -q 가 매칭 즉시 종료하면 앞단 sed 가
+  # SIGPIPE 를 받고, pipefail 이 그 종료 상태를 파이프 전체 결과로 흘려 매칭이 있어도
+  # 실패로 보이는 경우가 있다(bash 3.2 실측). 다른 sed 범위 검사(T22-81 등)와 같은 관례로
+  # 변수에 먼저 담아 그 안전한 값을 grep 한다.
+  local autopublish_section
+  autopublish_section=$(sed -n '/^## 자동 발행/,/^## `serve`/p' "$dashboard_command_file")
+  if ! grep -q '폴백' <<< "$autopublish_section"; then
     record_failure "$test_name" "T22-69: 자동 발행 절 안에 폴백 표기 미발견"
     return 1
   fi
@@ -1771,6 +1777,89 @@ test_dashboard_template_integrity() {
     fi
   done
 
+  # T22-97(R1): body.dz-embedded #dz-pip-btn CSS 규칙 존재 — 허브 모달 안에서 플로팅 버튼을
+  # 숨기는 규칙 자체가 없으면 R1 전체가 죽어 있다.
+  if ! grep -qF 'body.dz-embedded #dz-pip-btn' "$dashboard_command_file"; then
+    record_failure "$test_name" "T22-97: body.dz-embedded #dz-pip-btn CSS 규칙 미발견"
+    return 1
+  fi
+
+  # T22-98(R1): 임베드 판정식 — self !== top 이 없으면 늘 false 로 오판정한다.
+  if ! grep -qF 'window.self !== window.top' "$dashboard_command_file"; then
+    record_failure "$test_name" "T22-98: window.self !== window.top 판정식 미발견"
+    return 1
+  fi
+
+  # T22-99(R1, GOTCHA 3): isEmbedded 는 선언 1 + 사용 1, 정확히 2줄이어야 한다 — 그 이상이면
+  # 문서 산문에도 그 식별자를 쓴 것이고, if(isEmbedded) return 이 있으면 폴링이 임베드
+  # 판정으로 조기 반환하는 회귀다(결정 B2).
+  if [[ "$(grep -c 'isEmbedded' "$dashboard_command_file")" -ne 2 ]]; then
+    record_failure "$test_name" "T22-99: isEmbedded 등장 횟수가 정확히 2가 아님"
+    return 1
+  fi
+  if grep -qE 'if\(isEmbedded\) return' "$dashboard_command_file"; then
+    record_failure "$test_name" "T22-99: if(isEmbedded) return 발견(폴링 조기 반환 회귀)"
+    return 1
+  fi
+
+  # T22-100(R2): 3-a 절차 어휘 4종 — 절 자체가 없으면 허브 우선 열기가 전혀 동작하지 않는다.
+  local r2_step3a_token
+  for r2_step3a_token in '### 3-a. 열기 대상 확정' 'NOHUB' 'server-status --json' '열기 대상 URL'; do
+    if ! grep -qF -- "$r2_step3a_token" "$dashboard_command_file"; then
+      record_failure "$test_name" "T22-100: 3-a 절 토큰 미발견: $r2_step3a_token"
+      return 1
+    fi
+  done
+
+  # T22-101(R2, 결정 F3): 허브 기본 포트를 하드코딩하지 않는다(역방향) + 보고 표에 모달
+  # 문구 존재(결정 F5 의 대시보드 URL 병기 회귀 방지).
+  if grep -qF '8794' "$dashboard_command_file"; then
+    record_failure "$test_name" "T22-101: 허브 기본 포트(8794) 가 하드코딩됨"
+    return 1
+  fi
+  if ! grep -qF '모달' "$dashboard_command_file"; then
+    record_failure "$test_name" "T22-101: 보고 표에 '모달' 문구 미발견(대시보드 URL 병기 회귀)"
+    return 1
+  fi
+
+  # T22-102(R6): 4번 범위에 폐쇄 어휘·구조 4종이 모두 있는지 확인한다.
+  local browser_open_r6_section
+  browser_open_r6_section=$(sed -n '/^### 4\. 브라우저 열기/,/^### 5\./p' "$dashboard_command_file")
+  if [[ -z "$browser_open_r6_section" ]]; then
+    record_failure "$test_name" "T22-102: 브라우저 열기 절 범위 추출 실패 — 앵커가 깨졌다"
+    return 1
+  fi
+  local r6_token
+  for r6_token in 'FOCUSED' 'NOTFOUND' 'UNSUPPORTED' 'osascript'; do
+    if ! grep -qF -- "$r6_token" <<< "$browser_open_r6_section"; then
+      record_failure "$test_name" "T22-102: 4번 범위에 $r6_token 미발견"
+      return 1
+    fi
+  done
+
+  # T22-103(R6, 가장 값진 검사): ① is running 검사 존재(GOTCHA 10 — 없으면 꺼진 브라우저를
+  # 실행시킨다) ② 4번 범위에 '2-b 를 건너뛰고' 또는 '끝이다' 존재(GOTCHA 11 — 중복 탭 방지).
+  if ! grep -qF 'is running' "$dashboard_command_file"; then
+    record_failure "$test_name" "T22-103: 'is running' 검사 미발견(꺼진 브라우저를 실행시키는 회귀)"
+    return 1
+  fi
+  if ! grep -qF '2-b 를 건너뛰고' <<< "$browser_open_r6_section" \
+    && ! grep -qF '끝이다' <<< "$browser_open_r6_section"; then
+    record_failure "$test_name" "T22-103: 4번 범위에 '2-b 를 건너뛰고' 또는 '끝이다' 미발견(중복 탭 회귀)"
+    return 1
+  fi
+
+  # T22-104(R6, 결정 TR4 역방향): URL 매칭은 정확 일치여야 한다 — 느슨한 매칭 흔적이 있으면
+  # 남의 프로젝트 탭을 앞으로 가져올 수 있다.
+  if ! grep -qF 'URL of' <<< "$browser_open_r6_section"; then
+    record_failure "$test_name" "T22-104: 'URL of' 미발견(URL 비교 코드 자체가 없음)"
+    return 1
+  fi
+  if grep -qE 'starts with|contains' <<< "$browser_open_r6_section"; then
+    record_failure "$test_name" "T22-104: 느슨한 매칭 흔적(starts with/contains) 발견"
+    return 1
+  fi
+
   log_ok "$test_name 통과"
   ((passed_tests++))
 }
@@ -1893,10 +1982,10 @@ test_hub_unit_tests() {
   ((passed_tests++))
 }
 
-# T25: 허브 문서·상수 정합성 (하위 검증 T25-1~T25-64)
+# T25: 허브 문서·상수 정합성 (하위 검증 T25-1~T25-69)
 test_hub_docs_and_constants() {
   local test_name="T25"
-  local test_desc="허브 문서·상수 정합성 (T25-1~T25-64)"
+  local test_desc="허브 문서·상수 정합성 (T25-1~T25-69)"
   log_test_name "$test_name" "$test_desc"
 
   local hub_settings_file="$REPO_ROOT/hub/bin/hub_settings.py"
@@ -2827,6 +2916,127 @@ PYEOF
   done
   if ! grep -qF "usage_api_last_failure" "$hub_command_file"; then
     record_failure "$test_name" "T25-64: commands/hub.md 에 usage_api_last_failure 설명이 없음"
+    return 1
+  fi
+
+  # T25-65(R3): working 카드 glow — CSS 규칙 + JS 방출 + pulse·접근성 분기가 모두 있어야
+  # 신호 자체와 저감 대응이 함께 산다(개정 1 — pulse 와 reduced-motion 분기는 반드시 함께).
+  local r3_token
+  for r3_token in '.card.card-working{' "card-working'" '@keyframes card-working-glow' 'prefers-reduced-motion'; do
+    if ! grep -qF -- "$r3_token" "$hub_template_file"; then
+      record_failure "$test_name" "T25-65: hub_template.html 에 $r3_token 이 없음"
+      return 1
+    fi
+  done
+  if ! grep -qF '작업중' "$hub_readme_file"; then
+    record_failure "$test_name" "T25-65: hub/README.md 「화면 배치」에 작업중 강조 설명이 없음"
+    return 1
+  fi
+
+  # T25-66(R4): 바깥 클릭 리스너 — closest 가드 2종이 있어야 하고, GOTCHA 2 를 줄 번호
+  # 비교로 기계적으로 강제한다(T25-53 선례) — if(!isServed){ 뒤로 가면 file:// 모드에서
+  # 기능이 조용히 사라진다.
+  if ! grep -qF "closest('#dzh-usage')" "$hub_template_file"; then
+    record_failure "$test_name" "T25-66: closest('#dzh-usage') 가드 미발견"
+    return 1
+  fi
+  if ! grep -qF "closest('dialog')" "$hub_template_file"; then
+    record_failure "$test_name" "T25-66: closest('dialog') 가드 미발견"
+    return 1
+  fi
+  # if(!isServed){ 는 renderConnectionStatus() 안에도 한 번 더 나온다(무관한 기존 코드) —
+  # 리스너 등록을 지키는 실제 게이트는 IIFE 끝의 reload 분기이므로 **마지막** 등장을 앵커로
+  # 쓴다(T22-37 이 pip 버튼 위치를 마지막 등장으로 판정하는 것과 같은 관례).
+  local outside_click_guard_line is_served_gate_line
+  outside_click_guard_line=$(grep -n "closest('#dzh-usage')" "$hub_template_file" | head -1 | cut -d: -f1)
+  is_served_gate_line=$(grep -n 'if(!isServed){' "$hub_template_file" | tail -1 | cut -d: -f1)
+  if [[ -z "$outside_click_guard_line" || -z "$is_served_gate_line" || "$outside_click_guard_line" -ge "$is_served_gate_line" ]]; then
+    record_failure "$test_name" "T25-66: 바깥 클릭 리스너가 if(!isServed){ 뒤에 등록됨(GOTCHA 2 위반)"
+    return 1
+  fi
+  if ! grep -qF '바깥' "$hub_readme_file"; then
+    record_failure "$test_name" "T25-66: hub/README.md 사용량 패널 절에 바깥 클릭 설명이 없음"
+    return 1
+  fi
+
+  # T25-67(R5, 역방향 중심): 패널 안 툴팁 2종과 죽은 옵저버가 사라졌는지 확인하면서도,
+  # renderUsageResetRow·usage-meta·data-tooltip(패널 밖)은 여전히 살아 있어야 한다 —
+  # "지운 것"과 "지우면 안 되는 것"을 함께 감사한다.
+  if grep -qF '이 정보를 확인한 시각' "$hub_template_file"; then
+    record_failure "$test_name" "T25-67: '이 정보를 확인한 시각' 툴팁 문구가 남아 있음"
+    return 1
+  fi
+  if grep -qF 'usage-meta" data-tooltip' "$hub_template_file"; then
+    record_failure "$test_name" "T25-67: usage-meta 의 data-tooltip 속성이 남아 있음"
+    return 1
+  fi
+  if grep -qF 'usageBodyElForTooltipObserver' "$hub_template_file"; then
+    record_failure "$test_name" "T25-67: usageBodyElForTooltipObserver 가 남아 있음(결정 UT4 위반)"
+    return 1
+  fi
+  if ! grep -qF 'renderUsageResetRow' "$hub_template_file"; then
+    record_failure "$test_name" "T25-67: renderUsageResetRow 함수가 사라짐(과잉 제거)"
+    return 1
+  fi
+  if ! grep -qF 'usage-meta' "$hub_template_file" || ! grep -qF 'data-tooltip' "$hub_template_file"; then
+    record_failure "$test_name" "T25-67: usage-meta 또는 data-tooltip(패널 밖) 이 과잉 제거됨"
+    return 1
+  fi
+  if ! grep -qF 'rate_limit_capture_age_ms' "$hub_readme_file"; then
+    record_failure "$test_name" "T25-67: hub/README.md 에 캡처 시각 진단 창구(rate_limit_capture_age_ms) 언급이 없음"
+    return 1
+  fi
+
+  # T25-68(R7, 정·역 혼합): 라이브 이동 구현 4토큰이 있고, 제거된 키보드 경로의 흔적 6종은
+  # 전부 0건이어야 한다(전수 확인 — PRP 자체 확인 결과와 일치).
+  local r7_positive_token
+  for r7_positive_token in 'setDragImage' 'compareDocumentPosition' 'card-dragging' 'commitReorder(currentCardOrder())'; do
+    if ! grep -qF -- "$r7_positive_token" "$hub_template_file"; then
+      record_failure "$test_name" "T25-68: hub_template.html 에 $r7_positive_token 이 없음"
+      return 1
+    fi
+  done
+  local r7_removed_token
+  for r7_removed_token in 'keyboardMoveTargetIndex' 'announceProjectPosition' 'moveProjectPath' 'dzh-live' 'restoreHandleFocusAfterRender' 'ArrowLeft'; do
+    if grep -qF -- "$r7_removed_token" "$hub_template_file"; then
+      record_failure "$test_name" "T25-68: hub_template.html 에 제거 대상 $r7_removed_token 이 남아 있음"
+      return 1
+    fi
+  done
+  local card_order_section
+  card_order_section=$(sed -n '/^## 카드 순서/,/^## /p' "$hub_readme_file")
+  if grep -qF '←' <<< "$card_order_section"; then
+    record_failure "$test_name" "T25-68: hub/README.md 「카드 순서」에 ← 가 남아 있음(키보드 조작 잔재)"
+    return 1
+  fi
+  if ! grep -qF '드래그' <<< "$card_order_section"; then
+    record_failure "$test_name" "T25-68: hub/README.md 「카드 순서」에 드래그 설명이 없음"
+    return 1
+  fi
+
+  # T25-69(R8): 모달 depth·경계 — ::backdrop·테두리가 있고 옛 border:0 은 사라졌는지 확인한다.
+  if ! grep -qF '.modal::backdrop{' "$hub_template_file"; then
+    record_failure "$test_name" "T25-69: .modal::backdrop 규칙이 없음"
+    return 1
+  fi
+  local modal_rule_line
+  modal_rule_line=$(grep -n '^  \.modal{' "$hub_template_file" | head -1 | cut -d: -f1)
+  if [[ -z "$modal_rule_line" ]]; then
+    record_failure "$test_name" "T25-69: .modal{ 규칙을 찾지 못함"
+    return 1
+  fi
+  local modal_rule_text
+  modal_rule_text=$(sed -n "${modal_rule_line},+2p" "$hub_template_file")
+  if ! grep -qF 'border:1px solid var(--line)' <<< "$modal_rule_text"; then
+    record_failure "$test_name" "T25-69: .modal 규칙에 border:1px solid var(--line) 이 없음"
+    return 1
+  fi
+  if grep -qF 'border:0' <<< "$modal_rule_text"; then
+    record_failure "$test_name" "T25-69: .modal 규칙에 옛 border:0 이 남아 있음"
+    return 1
+  fi
+  if ! grep -qF '어둡' "$hub_readme_file"; then
+    record_failure "$test_name" "T25-69: hub/README.md 모달 절에 배경 어두워짐 설명이 없음"
     return 1
   fi
 

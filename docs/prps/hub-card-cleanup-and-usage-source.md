@@ -414,6 +414,8 @@ statusLine stdin ─parse─▶ RateLimitCapture ─┬─ usage_sample_from_cap
 
 부수 효과: `usage-meta` 툴팁(절대 시각)과 `usage-reset` 툴팁("이 정보를 확인한 시각")이 같은
 타임스탬프를 보여준다. 중복이지만 각 줄의 문맥에서 각각 옳으므로 그대로 둔다(수술적).
+**폐기됨(R5, [`hub-first-entry-and-ui-signals.md`](./hub-first-entry-and-ui-signals.md)).** 두
+툴팁 모두 사라진다 — 패널에는 상대 시각만 남고, 절대 시각은 `/hub status` 로 진단한다.
 
 #### 결정 P7 — `format_status_line_summary` 를 캡처에서 만든다 (파싱 1회로 통합)
 

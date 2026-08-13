@@ -314,7 +314,7 @@ function renderSession(session): string    // 변경 — phaseText·agentTypesTe
 | `#dzh-refresh` | `title="새로고침"` (정적) | `data-tooltip="새로고침"` | **붙이지 않음** — `aria-label` 과 문구가 같아 이중 낭독이 된다 |
 | `.project-name` | `title=` 전체 프로젝트명 | `data-tooltip=` 동일 | **붙이지 않음** — 접근성 이름(=요소 텍스트)과 같다. 말줄임은 시각 표현일 뿐 AT 는 전문을 읽는다 |
 | `.badge.tier` | `title=` 티어 설명 | `data-tooltip=` 동일 | 붙인다(문구가 배지 텍스트와 다르다) |
-| `.usage-meta` | `title=` 절대 타임스탬프 | `data-tooltip=` 동일 | 붙인다 |
+| `.usage-meta` | `title=` 절대 타임스탬프 | `data-tooltip=` 동일 | 붙인다 — **폐기됨(R5, [`hub-first-entry-and-ui-signals.md`](./hub-first-entry-and-ui-signals.md))**. 이 트리거 자체가 제거된다 |
 | `.agent-chip`(신규) | — | `data-tooltip=` 단계·진행 여부 | 붙인다 |
 | `.agent-chip-more`(신규) | — | `data-tooltip=` 접힌 타입 전체 목록 | 붙인다 |
 
