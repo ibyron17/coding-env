@@ -751,6 +751,7 @@ python3 -m unittest discover -s tests/hub -t "$REPO_ROOT" -v
 | P6 | `dz-now-card` 가 없는 옛 세대 픅스처 | 파싱은 성공하고 없는 필드는 기본값 |
 | P7 | 대시보드가 아닌 HTML / 빈 문자열 / 잘린 파일 | `None`(예외를 던지지 않는다) |
 | P8 | `.step-detail` 에 이스케이프된 `&lt;T&gt;` | 언이스케이프 없이 그대로 담긴다(렌더가 텍스트로 넣는다) |
+| P9 | `/dashboard` 9f32074 이후 신세대 픅스처(`#dz-subtitle`·`data-started-at`·세션 탭 없음) | 파싱 성공, `subtitle=""`·`started_at=None` 기본값 (2026-08-13 추가) |
 
 #### `test_hub_model.py` — 상태 판정
 

@@ -15,7 +15,7 @@
 hub/install.sh
 ```
 
-`~/.claude/hub/bin/` 에 11개 파일을 설치한다. `--scope` 인자가 없다 — 설치 위치는 이 하나뿐이며,
+`~/.claude/hub/bin/` 에 12개 파일을 설치한다. `--scope` 인자가 없다 — 설치 위치는 이 하나뿐이며,
 머신 전역 자산이라 프로젝트마다 사본을 두지 않는다.
 
 - `--force` — 수정된 파일이 있어도 덮어쓴다
@@ -107,17 +107,28 @@ hub/install.sh --force      # 1. 설치본 갱신
 - 프롬프트 앞부분 **120자**가 `~/.claude/hub/events/*.jsonl` 에 평문으로 최대 **7일** 보관된다.
   `config.json` 의 `record_prompt_excerpt: false` 로 끌 수 있다.
 - **서버 가동 중에는 `127.0.0.1:8794` 가 열려 있다.** 루프백 바인딩(원격 불가) +
-  허용 경로 2개(`/`, `/hub.html`) 화이트리스트로 제한돼 있어 `events/*.jsonl`·`bin/*.py`·
-  `config.json` 은 어떤 경로로도 노출되지 않는다. 다만 이 포트에 닿는 **로컬**의 다른 프로세스는
-  `hub.html` 에 인라인된 프롬프트 발췌를 읽을 수 있다. 끄는 수단은 `record_prompt_excerpt:false`
-  와 `/hub server stop`.
+  화이트리스트로 제한돼 있어 `events/*.jsonl`·`bin/*.py`·`config.json` 은 어떤 경로로도
+  노출되지 않는다. 허용 경로는 `/`·`/hub.html` 두 고정 경로와, 티어 1 프로젝트의
+  `/project/<16자리 hex>/dashboard.html`(요청 문자열로 파일 경로를 조립하지 않는 결정적
+  키 조회) 뿐이다. 다만 이 포트에 닿는 **로컬**의 다른 프로세스는 `hub.html` 에 인라인된
+  프롬프트 발췌를 읽거나, 서버가 서빙 중인 프로젝트 대시보드를 열 수 있다. 끄는 수단은
+  `record_prompt_excerpt:false` 와 `/hub server stop`.
+- **프로젝트 대시보드 모달(서버 모드)은 허브 오리진(`http://127.0.0.1:8794`)에서 실행된다.**
+  카드를 클릭해 여는 모달의 iframe 은 그 프로젝트의 `.claude/dashboard.html` 을 원본 그대로
+  보여주며, 위 문단의 로컬 노출 범위를 그대로 물려받는다 — 새로 늘어나는 노출은 없다(이미
+  같은 원리로 `hub.html` 에 세션 발췌가 인라인돼 있다).
 - 아래 「사용량 패널」의 계정 단위 사용률도 같은 방식으로 `hub.html` 에 인라인된다. 끄는
   수단은 `config.json` 의 `show_usage_panel: false` — 이 경우 캡처 파일(`rate_limits.json`)
-  자체를 읽지 않는다. 이 퍼센트의 출처는 `/hub statusline on` 이 등록하는 캡처 하나뿐이라,
-  등록하지 않으면 애초에 수집되지 않는다.
+  자체를 읽지 않는다. 이 퍼센트의 출처는 `/hub statusline on` 이 등록하는 캡처, 또는
+  `usage_api_enabled: true` 로 켜는 사용량 API 폴링 둘 중 하나이며, 등록·활성화하지 않으면
+  애초에 수집되지 않는다.
 - `/hub statusline on` 을 켜면 세션·주간 사용률 한 줄(`세션 23% · 주간 41%`)이 **터미널
   상태줄**에도 상시 표시된다 — 화면을 함께 보는 사람에게도 보이는 위치라는 점에 유의한다.
   끄는 수단은 `/hub statusline off`.
+- `usage_api_enabled: true` 는 macOS Keychain 의 Claude Code OAuth 자격증명을 읽어 비공개
+  usage API 를 호출한다(`hub_usage_fetch.py` 가 유일한 접점) — 자격증명은 그 파일의 지역
+  변수로만 존재하고 로그·파일·화면 어디에도 남지 않는다. 기본값은 **off** 다. 끄는 수단은
+  `config.json` 의 `usage_api_enabled: false`(기본값).
 
 ## 화면 배치
 
@@ -127,6 +138,9 @@ hub/install.sh --force      # 1. 설치본 갱신
 - 프로젝트 카드는 뷰포트 폭에 따라 1~3열 그리드로 자동 전환된다(≤683px 1열 · 684~1015px 2열 ·
   1016px 이상 3열이 상한이다 — 와이드 모니터에서도 카드가 잘게 쪼개지지 않도록 4열은 만들지
   않는다). 같은 행의 카드도 세션 목록 유무와 무관하게 자기 높이만큼만 차지한다.
+- 새로고침·테마 버튼은 제목(`h1`)과 같은 줄 오른쪽 끝에 있다 — 예전처럼 화면에 고정되지
+  않고 스크롤하면 함께 올라간다. 테마 버튼은 라이트/다크 **2상태** 아이콘(☾/☀)이다 — 첫
+  로드 시 시스템 선호로 한 번 확정되고, 그 뒤로는 OS 테마를 바꿔도 따라가지 않는다.
 - 사용량 패널(있을 때만)은 화면 우하단에 고정된다 — 접힘·펼침 상태와 무관하게 위치는 항상
   같다.
 - 마지막 카드와 푸터는 패널이 접혀 있든 펼쳐 있든 가려지지 않는다. 하단 여백은 패널의
@@ -145,17 +159,62 @@ hub/install.sh --force      # 1. 설치본 갱신
   Tab 으로 포커스하면 이 파일 안의 커스텀 **툴팁**이 뜬다 — 네이티브 title 툴팁의 지연 없이
   약 120ms 안에 나타나고, Escape·스크롤·클릭으로 즉시 닫힌다.
 
+## 카드 순서
+
+카드는 기본으로 서버가 계산한 활동순(최근 활동이 위)으로 놓이지만, 카드 왼쪽 위의 `≡`
+핸들로 순서를 직접 정할 수 있다.
+
+- **드래그**: 핸들을 잡고 원하는 카드 위에 놓으면 그 자리로 들어간다.
+- **키보드**: 핸들에 Tab 으로 포커스한 뒤 `←`/`→` 로 한 칸씩, `Home`/`End` 로 맨 앞/맨 뒤로
+  옮긴다. 이동 결과는 스크린리더에 "{이름} — 3 / 9 번째"로 낭독된다.
+- 순서는 `localStorage`(`dzh-project-order`)에 저장돼 새로고침해도 유지된다 — 테마·사용량
+  패널 접힘과 같은 한계로, 오리진(`file://` ↔ `http://localhost:8794`)과 브라우저마다 따로
+  저장된다.
+- 새로 나타난 프로젝트는 **맨 앞**에 붙는다. 세션이 한동안 끊긴 프로젝트도 순서를 잃지
+  않는다(최대 200개까지 기억하고, 넘으면 가장 오래 안 보인 것부터 잊는다).
+- 드래그하는 동안에는 폴링(60초)·틱(30초)이 화면을 다시 그리지 않는다 — 드래그 중인 카드가
+  갑자기 사라져 드롭이 취소되는 것을 막기 위해서다.
+
+## 프로젝트 대시보드 모달
+
+티어 1(`대시보드 추적`) 카드를 클릭하면 그 프로젝트의 `.claude/dashboard.html` 을 허브를
+떠나지 않고 모달로 볼 수 있다.
+
+- **서버 모드에서만 동작한다.** 허브 서버가 프로젝트 대시보드를
+  `/project/<16자리 hex>/dashboard.html` 경로로 서빙한다 — 키는 프로젝트 절대경로에서
+  결정적으로 파생된 값(sha256 앞자리)이라, 요청 문자열이 파일 경로 조립에 전혀 쓰이지
+  않는다(경로 traversal 이 구조적으로 불가능하다).
+- `file://` 로 열었을 때는 카드가 클릭 대상이 아니다 — 마우스를 올리면 "허브 서버를
+  켜면(`/hub server start`) 카드에서 대시보드를 볼 수 있습니다"라는 안내가 뜬다. 티어 2·3
+  카드는 서버 모드에서도 클릭 대상이 아니다(그 프로젝트에는 대시보드 자체가 없다).
+- 모달 안 대시보드는 원본 화면과 똑같이 **5초마다 스스로 갱신**된다 — `/dashboard` 템플릿을
+  전혀 고치지 않고, 허브 서버가 그 경로를 서빙하는 것만으로 성립한다.
+- ESC·닫기 버튼·배경(바깥 어두운 영역) 클릭 세 가지 모두로 닫을 수 있다. 닫으면 모달 안
+  iframe 의 5초 폴링도 함께 멈춘다(숨은 요청이 남지 않는다).
+
 ## 사용량 패널 — 5시간·7일 한도 사용률
 
-허브 페이지 우하단에 세션(5시간)·주간(7일) 한도 사용률을 막대 2개로 보여준다. 출처는
-**Claude Code CLI 가 statusLine 명령에 주는 입력 JSON**(`rate_limits.*.used_percentage`)
-**하나뿐**이다 — `/hub statusline on` 을 등록해야 이 패널이 뜬다(전제). Claude 데스크톱
-앱이 남기던 비공개 사용량 파일(`plan-usage-history.json`)은 2026-08 실측으로 사라져 더
-이상 이 기능의 출처가 아니다.
+허브 페이지 우하단에 세션(5시간)·주간(7일) 한도 사용률을 막대 2개로 보여준다. 이 패널이
+읽는 파일은 `rate_limits.json` **하나뿐**이고, 그 파일을 채우는 생산자는 둘이다.
 
-> **statusLine 을 등록하지 않으면 패널이 조용히 존재하지 않는다(경고 없음).** 화면상
-> "패널 없음"은 statusLine 미등록·세션 미실행·계약 불일치·만료·세션 창 롤오버 다섯 경우가
-> 똑같이 보이므로, 원인은 아래 `/hub status` 필드로 가른다.
+1. **`/hub statusline on`**(터미널) — Claude Code CLI 가 statusLine 명령에 주는 입력 JSON
+   (`rate_limits.*.used_percentage`). 지금까지의 유일한 경로였다.
+2. **사용량 API 폴링(옵트인, macOS 전용)** — `config.json` 에 `usage_api_enabled: true` 를
+   두면 상주 서버가 5분마다(`usage_api_poll_interval_seconds`) macOS Keychain 의 Claude
+   Code 자격증명으로 비공개 usage API 를 폴링해 **같은 파일**을 채운다. **터미널 세션을
+   한 번도 열지 않아도**(데스크톱 앱·Cursor 전용 사용자 등) 패널이 뜨는 유일한 경로다.
+
+두 생산자는 같은 `RateLimitCapture` 포맷을 쓰고 값이 같으면 아무도 다시 쓰지 않는다 —
+어느 쪽이 최근에 관측했든 화면은 같은 숫자를 보인다. **기본값은 두 경로 다 off** 다(옵트인)
+— `usage_api_enabled` 는 자격증명을 만지고 외부로 나가는 기능이라 기본값을 켜 두지 않는다.
+켜져 있어도 실패(Keychain 접근 실패·인증 만료·429·응답 스키마 불일치 등)는 화면에 경고를
+띄우지 않고 **조용히 강등**된다 — 사유는 `/hub status` 의 `usage_api_last_failure` 로만
+확인한다. Claude 데스크톱 앱이 남기던 비공개 사용량 파일(`plan-usage-history.json`)은
+2026-08 실측으로 사라져 더 이상 이 기능의 출처가 아니다.
+
+> **두 경로 모두 꺼져 있으면 패널이 조용히 존재하지 않는다(경고 없음).** 화면상
+> "패널 없음"은 두 생산자 모두 미등록·세션 미실행·계약 불일치·만료·세션 창 롤오버 여러
+> 경우가 똑같이 보이므로, 원인은 아래 `/hub status` 필드로 가른다.
 
 - 제목 줄(`Claude 사용 한도`)을 클릭하거나 Tab 으로 포커스한 뒤 Enter/Space 를 누르면
   접기/펼치기가 전환된다. 접으면 세션·주간 수치를 한 줄 요약(`세션 43% · 주간 71%`)으로
@@ -180,10 +239,11 @@ hub/install.sh --force      # 1. 설치본 갱신
 ## 한도 초기화 예정 시각
 
 사용량 패널을 **펼치면** 세션·주간 막대 각각 아래에 `초기화 18:32 · 2시간 12분 뒤` 형태의 줄이
-더해진다. 출처는 **Claude Code CLI 가 statusLine 명령에 stdin 으로 주는 공식 입력 JSON**
-(`rate_limits.*.resets_at`)이다 — macOS 가 아니어도, 터미널 전용 환경에서도 동작한다.
-위 사용량 패널의 퍼센트와 **같은 캡처 파일 하나**(`rate_limits.json`)에서 나온다 — 앱과 CLI
-두 출처로 갈리던 이전 구성은 없어졌다.
+더해진다. 위 사용량 패널의 퍼센트와 **같은 캡처 파일 하나**(`rate_limits.json`)에서 나온다 —
+채우는 생산자도 퍼센트와 동일하게 둘이다: **Claude Code CLI 가 statusLine 명령에 stdin 으로
+주는 공식 입력 JSON**(`rate_limits.*.resets_at`, macOS 가 아니어도 동작) 또는
+**`usage_api_enabled` 사용량 API 폴링**(macOS 전용, 옵트인). 어느 쪽에서 왔든 값은 항상
+같은 형태로 담긴다.
 
 - 설치: `/hub statusline on` — `~/.claude/settings.json` 의 `statusLine` 에 우리 커맨드를
   등록한다(`# DZH_HUB_STATUSLINE` 마커로 식별). 이미 다른 `statusLine` 이 설정돼 있으면
@@ -234,6 +294,8 @@ hub/install.sh --force      # 1. 설치본 갱신
 | `server_port` | `8794` | 상주 서버 고정 포트 |
 | `server_collect_interval_seconds` | `5` | 수집 루프 주기 |
 | `show_usage_panel` | `true` | `false` 면 사용량 패널을 끈다 — 캡처 파일(`rate_limits.json`)을 아예 읽지 않는다 |
+| `usage_api_enabled` | `false` | `true` 면 상주 서버가 macOS Keychain 자격증명으로 사용량 API 를 폴링한다(옵트인, macOS 전용). `show_usage_panel` 도 함께 `true` 여야 폴링이 실제로 일어난다 |
+| `usage_api_poll_interval_seconds` | `300` | 사용량 API 폴링 기본 주기(초). 연속 실패마다 2배씩 늘어 최대 60분까지 늦춰진다 |
 
 ## 제거
 
@@ -249,14 +311,15 @@ hub/install.sh --uninstall
 
 ```
 ~/.claude/hub/
-├── bin/                     # hub/install.sh 가 배포. 11개 파일
-├── config.json              # 선택
-├── rate_limits.json          # /hub statusline on 이 캡처한 한도 초기화 예정 시각
-├── server.json               # 서버 자신이 bind 직후 1회 쓴다(PID·포트·기동 시각)
-├── server_heartbeat          # 수집 루프가 매 사이클 touch — 생존 판정의 정본
-├── server.log                # 서버의 stderr. 크래시 원인 규명 창구
-├── events/YYYY-MM-DD.jsonl   # 훅 이벤트 로그(append-only, 날짜별)
-└── hub.html                  # 생성물 — 브라우저로 여는 유일한 파일
+├── bin/                        # hub/install.sh 가 배포. 12개 파일(hub_usage_fetch.py 포함)
+├── config.json                 # 선택
+├── rate_limits.json             # statusLine 등록 또는 usage_api_enabled 폴링이 채우는 한도 캡처
+├── last_usage_api_error.json    # 사용량 API 폴링 마지막 실패(있는 경우) — /hub status 가 읽는다
+├── server.json                  # 서버 자신이 bind 직후 1회 쓴다(PID·포트·기동 시각)
+├── server_heartbeat             # 수집 루프가 매 사이클 touch — 생존 판정의 정본
+├── server.log                   # 서버의 stderr. 크래시 원인 규명 창구
+├── events/YYYY-MM-DD.jsonl      # 훅 이벤트 로그(append-only, 날짜별)
+└── hub.html                     # 생성물 — 브라우저로 여는 유일한 파일
 ```
 
 ## 설계 근거

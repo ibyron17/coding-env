@@ -172,6 +172,18 @@
 > 이 네 요소 바깥의 정적 마크업이다. **사용자 상태(포커스·접힘·선택)를 가진 요소는 반드시
 > 이 네 요소 바깥에 둔다.**
 
+> **개정됨(2026-08-13).** `#dzh-collected-at` 은 좁은 화면에서 우상단 고정 클러스터와
+> 겹치는 문제로 제거됐고, 연결 상태 문구는 `#dzh-refresh` 의 `data-tooltip` **속성** 갱신으로
+> 대체됐다. 따라서 현행 갱신 대상은 **요소 3개(`#dzh-app`·`#dzh-usage-body`·
+> `#dzh-usage-summary`) + `#dzh-refresh` 의 `data-tooltip`·`class` 속성**이다 — "내용은 파생,
+> 사용자 상태를 가진 노드는 교체 금지" 원칙은 그대로다. 정본은 `hub_template.html` 상단
+> 주석 블록.
+
+> **재개정(H1″).** 정적 노드 목록에 모달·라이브 영역이 추가되고, "#dzh-app 의 자식
+> **순서**는 사용자 상태" 조항과 "드래그 중 재렌더 금지" 조항이 더해졌다. 정본은
+> `hub_template.html` 상단 주석 블록 및
+> [hub-card-interactions-and-usage.md](./hub-card-interactions-and-usage.md).
+
 `hub_template.html` 상단 주석 블록(현행 7~16행)의 "폴링이 내용을 갱신하는 요소는 … 세 개뿐"
 문장을 위 H1′ 로 교체하고, 참조 문서에 이 PRP 를 추가한다.
 

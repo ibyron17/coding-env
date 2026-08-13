@@ -191,20 +191,33 @@ python3 "$HOME/.claude/hub/bin/hub.py" status --json
 `server_collect_stalled`(서버 요약) · `last_collected_at_ms` 를 표로 보고한다.
 
 `usage_panel_enabled`(사용량 패널 스위치)·`usage_sample_age_ms`(캡처에서 퍼센트를 실을 수
-있을 때만 채워지는 나이, ms)도 같은 표에 곁들인다. 퍼센트의 유일한 출처는 `/hub statusline on`
-이 등록하는 statusLine 캡처(`rate_limits.json`)다 — 등록하지 않았거나 세션을 한 번도 안
-돌렸으면 `usage_panel_enabled:true` 인데도 `usage_sample_age_ms` 는 항상 `null` 이다.
-`usage_panel_enabled:false` 면 `config.json` 에서 껐다는 뜻이고, `true` 인데
-`usage_sample_age_ms` 가 `null` 이면 캡처가 없거나(statusLine 미등록·세션 미실행) 계약이
-안 맞거나 퍼센트가 없는(구형 캡처 등) 것이며, 숫자인데 5시간(18,000,000ms)을 넘거나 세션
-(5시간) 창이 이미 리셋됐으면 만료돼 패널이 표시되지 않는 것이다 — 패널이 안 보이는 여러
-이유를 이 필드와 아래 `rate_limit_capture_age_ms` 로 구분한다.
+있을 때만 채워지는 나이, ms)도 같은 표에 곁들인다. 퍼센트의 출처는 `/hub statusline on`
+이 등록하는 statusLine 캡처, 또는 `usage_api_enabled:true` 로 켜는 사용량 API 폴링 —
+둘 중 하나가 채우는 같은 캡처 파일(`rate_limits.json`)이다. 둘 다 등록·활성화하지 않았거나
+세션을 한 번도 안 돌렸으면 `usage_panel_enabled:true` 인데도 `usage_sample_age_ms` 는
+항상 `null` 이다. `usage_panel_enabled:false` 면 `config.json` 에서 껐다는 뜻이고, `true`
+인데 `usage_sample_age_ms` 가 `null` 이면 캡처가 없거나(두 생산자 모두 미등록·세션 미실행)
+계약이 안 맞거나 퍼센트가 없는(구형 캡처 등) 것이며, 숫자인데 5시간(18,000,000ms)을 넘거나
+세션(5시간) 창이 이미 리셋됐으면 만료돼 패널이 표시되지 않는 것이다 — 패널이 안 보이는
+여러 이유를 이 필드와 아래 `rate_limit_capture_age_ms`·`usage_api_last_failure` 로 구분한다.
 
 `statusline_installed`(우리 statusLine 설치 여부) · `rate_limit_capture_age_ms`(한도
 초기화 시각 캡처를 처음 관측한 뒤 지난 시간, ms) · `rate_limit_resets_remaining_ms`
 (`{"session": ms|null, "weekly": ms|null}` — 아직 지나지 않은 리셋까지 남은 시간)도 같은
 표에 곁들인다. 초기화 예정 시각 줄이 안 보이는 이유(①statusLine 미설치 ②세션 미실행
 ③리셋 시각이 이미 지남 ④`show_usage_panel:false`)를 이 세 필드로 구분한다.
+
+`usage_api_enabled`(`config.json` 의 사용량 API 스위치) · `usage_api_last_attempt_age_ms`
+(마지막 폴링 시도로부터 지난 시간, ms — 시도한 적이 없으면 `null`) ·
+`usage_api_last_failure`(`{at_ms, reason, response_keys?}` 또는 성공 시 `null`)도 같은
+표에 곁들인다. `usage_api_enabled:false` 면 옵트인 기능이 꺼져 있다는 뜻이고(기본값),
+`true` 인데 `usage_api_last_failure` 가 있으면 그 `reason` 으로 원인을 구분한다 —
+`credential_unavailable`/`credential_unparsable` 은 macOS Keychain 접근 문제,
+`http_unauthorized` 는 재로그인 필요, `http_rate_limited` 는 일시적 과다 요청,
+`network_error` 는 연결 실패, `schema_mismatch` 는 응답 형식이 바뀐 경우다(이때만
+`response_keys` 에 응답의 키 구조가 함께 실린다 — **값은 절대 포함되지 않는다**). 이
+경로는 스위치 off·statusLine 미등록·세션 미실행·계약 불일치·만료와 함께 "패널이 안 뜨는
+이유"의 사각지대를 마저 없앤다.
 
 ---
 
