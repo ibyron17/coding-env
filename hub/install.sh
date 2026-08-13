@@ -66,8 +66,9 @@ count_lines() {
 
 # 수정 감지 — 대상에 있으나 내용이 다른 관리 파일 목록 (사용자 수정 의심 → --force 필요).
 # 대상에만 있는 파일(우리 소유가 아님)은 충돌로 보지 않는다 — 루트 install.sh 의 D1 원칙과 동일.
+# __pycache__ 는 실행 시점마다 바뀌는 바이트코드 파생물이라 비교 대상이 아니므로 제외한다.
 list_differing_managed_files() {
-  diff -rq "$SOURCE_BIN_DIR" "$TARGET_BIN_DIR" 2> /dev/null | grep -E "^Files .* differ$" || true
+  diff -rq -x __pycache__ "$SOURCE_BIN_DIR" "$TARGET_BIN_DIR" 2> /dev/null | grep -E "^Files .* differ$" || true
 }
 
 check_preconditions() {
@@ -101,6 +102,15 @@ verify_installed_file_count() {
   return 0
 }
 
+# hub/bin 최상위의 일반 파일만 배포 대상이다 — __pycache__ 는 테스트 실행이 만든 로컬
+# 바이트코드 파생물(.gitignore 대상)이라 배포하지 않는다(소유권 원칙: hub/bin 이 배포하는 파일만 관리).
+copy_managed_bin_files() {
+  local source_file
+  while IFS= read -r -d '' source_file; do
+    cp "$source_file" "$TARGET_BIN_DIR/" || return 1
+  done < <(find "$SOURCE_BIN_DIR" -maxdepth 1 -type f -print0)
+}
+
 perform_install() {
   log_info "허브 설치 (coding-env 설치와 무관 — 별도 자산)"
   check_preconditions || { log_error "설치 중단 — 변경된 파일 없음"; return 1; }
@@ -109,7 +119,7 @@ perform_install() {
     log_error "디렉토리 생성 실패: $TARGET_BIN_DIR"
     return 1
   fi
-  if ! cp -R "$SOURCE_BIN_DIR/." "$TARGET_BIN_DIR/"; then
+  if ! copy_managed_bin_files; then
     log_error "복사 실패: $SOURCE_BIN_DIR → $TARGET_BIN_DIR"
     return 1
   fi
@@ -126,7 +136,7 @@ log_install_plan() {
   log_info "허브 설치 계획 (DRY-RUN)"
   check_preconditions || { log_error "사전 조건 실패 — 실제 실행 시 설치되지 않습니다"; return 1; }
   log_plan "mkdir -p $TARGET_BIN_DIR"
-  log_plan "cp -R hub/bin/. $TARGET_BIN_DIR/   (${HUB_FILE_COUNT}개)"
+  log_plan "hub/bin 최상위 파일 → $TARGET_BIN_DIR/   (${HUB_FILE_COUNT}개, __pycache__ 제외)"
   log_done "${HUB_FILE_COUNT}개 파일이 대상에 반영될 예정. 실제 변경 없음"
   return 0
 }
