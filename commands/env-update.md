@@ -76,6 +76,18 @@ git fetch origin
 
 If fails → **ERROR**: "Failed to fetch from origin"
 
+### Check installed manifest freshness
+
+```bash
+git -C "$repo_path" rev-parse HEAD
+```
+
+Compare this HEAD against the `installed_from_commit` field of the manifest read in Phase 1:
+
+- No manifest was found (interactive fallback path), the `installed_from_commit` field is missing, or its value is `"unknown"` → treat the install as **stale**
+- `installed_from_commit` != current HEAD → **stale**
+- `installed_from_commit` == current HEAD → **fresh**
+
 ### Detect changes
 
 ```bash
@@ -85,7 +97,20 @@ git log --oneline '@{u}..HEAD'   # commits in local not in remote (divergence)
 
 If local has commits not in remote AND remote has commits not in local → **ERROR**: "Branches have diverged. Manual resolution required."
 
-If no new commits in upstream → **INFO**: "Already up to date. No changes." → exit 0
+If no new commits in upstream AND the install is fresh → **INFO**: "Already up to date. No changes." → exit 0
+
+If no new commits in upstream but the install is stale:
+
+```
+[INFO] Repo is up to date, but the installed files are from an older commit.
+[INFO] Repo HEAD:      <repo HEAD, short hash>
+[INFO] Installed from: <installed_from_commit, short hash (or "unknown")>
+[INFO] Reinstall now? (y/n)
+```
+
+Wait for user input.  
+If `y` → skip Phase 3 (there is nothing to pull) and continue directly to Phase 4.  
+If `n` or other → stop, no error.
 
 If new commits exist:
 
@@ -104,6 +129,8 @@ If `n` or other → stop, no error.
 ## Phase 3 — PULL
 
 **Goal**: Fast-forward merge.
+
+If Phase 2 triggered a reinstall because only the installed files were stale (no new upstream commits), skip this phase — there is nothing to pull — and go directly to Phase 4.
 
 ```bash
 git pull --ff-only
@@ -265,7 +292,8 @@ Exit 0.
 | No tracking branch | ERROR: stop with `git branch --set-upstream-to` hint |
 | Fetch fails | ERROR: stop |
 | Branches diverged | ERROR: stop |
-| Already up to date | INFO: stop, exit 0 |
+| Already up to date (repo and install both fresh) | INFO: stop, exit 0 |
+| Repo up to date but install stale | INFO: ask to reinstall, skip Phase 3, proceed to Phase 4 |
 | Pull fails | ERROR: stop |
 | install.sh conflict | WARN: ask `--force?` |
 | install.sh force fails | ERROR: stop |
@@ -280,3 +308,4 @@ Exit 0.
 - **Manifest is runtime metadata**: Not part of the deployed files, so it's never backed up or version-controlled.
 - **User modifications preserved**: If local rules/agents are modified, install.sh will require `--force` to overwrite. User must decide.
 - **Dirty repo is OK**: Minor uncommitted changes won't block the update. Major conflicts will be caught by install.sh.
+- **Why the manifest freshness check exists**: Contributors who commit directly in this repo are always at or ahead of `@{u}`, so `git log HEAD..@{u}` is permanently empty for them. Without comparing `installed_from_commit` to repo HEAD, Phase 4's reinstall would never run for that workflow, and the installed files would silently drift out of date.
