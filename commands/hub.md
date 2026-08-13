@@ -160,9 +160,10 @@ python3 "$HOME/.claude/hub/bin/hub.py" install-statusline --json
 
 > 이 명령은 `~/.claude/settings.json` 의 `statusLine` 에 우리 커맨드를 등록합니다 — **모든
 > 프로젝트의 터미널 상태줄**에 영향을 줍니다. 등록 후에는 상태줄에 `세션 23% · 주간 41%` 가
-> 상시 표시되고, 한도 초기화 예정 시각이 `~/.claude/hub/rate_limits.json` 에 캡처돼 사용량
-> 패널을 펼쳤을 때 보입니다. 이미 다른 `statusLine` 이 설정돼 있으면 **덮어쓰지 않고
-> 거부**합니다.
+> 상시 표시되고, 한도 초기화 예정 시각과 사용률이 `~/.claude/hub/rate_limits.json` 에
+> 캡처돼 사용량 패널에 보입니다. **패널의 퍼센트도 이 등록이 있어야 뜹니다** — 등록하지
+> 않으면 사용량 패널 자체가 존재하지 않습니다. 이미 다른 `statusLine` 이 설정돼 있으면
+> **덮어쓰지 않고 거부**합니다.
 
 결과의 `installed`·`already_installed` 를 보고한다. `ok=false` 면 `reason` 을 그대로 보고하고
 **재시도하지 않는다** — 다른 `statusLine` 과의 충돌(`current_command` 동봉)이거나
@@ -189,12 +190,15 @@ python3 "$HOME/.claude/hub/bin/hub.py" status --json
 `events_today_and_yesterday`(오늘+어제 이벤트 수) · `server_alive`·`server_crashed_evidence`·
 `server_collect_stalled`(서버 요약) · `last_collected_at_ms` 를 표로 보고한다.
 
-`usage_panel_enabled`(사용량 패널 스위치)·`usage_sample_age_ms`(마지막 사용량 샘플의
-나이, ms)도 같은 표에 곁들인다. `usage_panel_enabled:false` 면 `config.json` 에서 껐다는
-뜻이고, `true` 인데 `usage_sample_age_ms` 가 `null` 이면 macOS 데스크톱 앱의 사용량 파일이
-없거나 계약이 안 맞는 것이며, 숫자인데 5시간(18,000,000ms)을 넘으면 만료돼 패널이 표시되지
-않는 것이다 — 패널이 안 보이는 네 이유(스위치 off·파일 없음·계약 불일치·만료)를 이 두
-필드로 구분한다.
+`usage_panel_enabled`(사용량 패널 스위치)·`usage_sample_age_ms`(캡처에서 퍼센트를 실을 수
+있을 때만 채워지는 나이, ms)도 같은 표에 곁들인다. 퍼센트의 유일한 출처는 `/hub statusline on`
+이 등록하는 statusLine 캡처(`rate_limits.json`)다 — 등록하지 않았거나 세션을 한 번도 안
+돌렸으면 `usage_panel_enabled:true` 인데도 `usage_sample_age_ms` 는 항상 `null` 이다.
+`usage_panel_enabled:false` 면 `config.json` 에서 껐다는 뜻이고, `true` 인데
+`usage_sample_age_ms` 가 `null` 이면 캡처가 없거나(statusLine 미등록·세션 미실행) 계약이
+안 맞거나 퍼센트가 없는(구형 캡처 등) 것이며, 숫자인데 5시간(18,000,000ms)을 넘거나 세션
+(5시간) 창이 이미 리셋됐으면 만료돼 패널이 표시되지 않는 것이다 — 패널이 안 보이는 여러
+이유를 이 필드와 아래 `rate_limit_capture_age_ms` 로 구분한다.
 
 `statusline_installed`(우리 statusLine 설치 여부) · `rate_limit_capture_age_ms`(한도
 초기화 시각 캡처를 처음 관측한 뒤 지난 시간, ms) · `rate_limit_resets_remaining_ms`

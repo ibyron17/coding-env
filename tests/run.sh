@@ -1893,10 +1893,10 @@ test_hub_unit_tests() {
   ((passed_tests++))
 }
 
-# T25: 허브 문서·상수 정합성 (하위 검증 T25-1~T25-49)
+# T25: 허브 문서·상수 정합성 (하위 검증 T25-1~T25-56)
 test_hub_docs_and_constants() {
   local test_name="T25"
-  local test_desc="허브 문서·상수 정합성 (T25-1~T25-49)"
+  local test_desc="허브 문서·상수 정합성 (T25-1~T25-56)"
   log_test_name "$test_name" "$test_desc"
 
   local hub_settings_file="$REPO_ROOT/hub/bin/hub_settings.py"
@@ -2306,22 +2306,23 @@ PYEOF
     return 1
   fi
 
-  # T25-31(문서 정합): show_usage_panel 스위치와 데이터 출처(plan-usage-history.json)가
-  # hub/README.md 에 문서화돼 있다.
+  # T25-31(문서 정합, 개정 — 죽은 전제를 테스트로 고정하지 않는다): show_usage_panel 스위치와
+  # 데이터 출처(statusLine 캡처의 used_percentage)가 hub/README.md 에 문서화돼 있다.
+  # plan-usage-history.json 은 결정 P1 로 사라진 경로라 더 이상 grep 대상이 아니다(승인 항목 5).
   local hub_readme_usage_file="$REPO_ROOT/hub/README.md"
-  if ! grep -qF "show_usage_panel" "$hub_readme_usage_file"; then
-    record_failure "$test_name" "T25-31: hub/README.md 에 show_usage_panel 행이 없음"
-    return 1
-  fi
-  if ! grep -qF "plan-usage-history.json" "$hub_readme_usage_file"; then
-    record_failure "$test_name" "T25-31: hub/README.md 에 plan-usage-history.json 언급이 없음"
-    return 1
-  fi
+  local usage_source_token
+  for usage_source_token in "show_usage_panel" "used_percentage" "statusLine"; do
+    if ! grep -qF "$usage_source_token" "$hub_readme_usage_file"; then
+      record_failure "$test_name" "T25-31: hub/README.md 에 $usage_source_token 언급이 없음"
+      return 1
+    fi
+  done
 
   # T25-32(결정 G1~G5 회귀): 프로젝트 목록이 뷰포트 폭에 따라 열 수가 바뀌는 그리드이고,
   # 카드가 행 높이에 맞춰 늘어나지 않으며, 비-카드 요소는 한 행을 다 쓴다.
   local grid_token
-  for grid_token in "max-width:1440px" "display:grid" "repeat(auto-fill,minmax(320px,1fr))" \
+  for grid_token in "max-width:1440px" "display:grid" \
+                    "repeat(auto-fill,minmax(max(320px,calc((100% - 24px)/3 - 1px)),1fr))" \
                     "align-items:start" "grid-column:1/-1"; do
     if ! grep -qF "$grid_token" "$hub_template_file"; then
       record_failure "$test_name" "T25-32: hub_template.html 에 그리드 규칙($grid_token)이 없음"
@@ -2433,9 +2434,15 @@ PYEOF
     fi
   done
 
-  # T25-43(세션 활동 노출 회귀): 세션 표시가 '실행 중인 것만' 으로 되돌아가지 않는다.
+  # T25-43(세션 활동 노출 회귀 — 개정: agent-chip-more 부재 검사로 반전): 세션 표시가
+  # '실행 중인 것만' 으로 되돌아가지 않고, "+N" 오버플로 칩(agent-chip-more)도 되살아나지
+  # 않는다(결정 K1~K3).
   if grep -qF "active_agent_types" "$hub_template_file" "$hub_model_file"; then
     record_failure "$test_name" "T25-43: active_agent_types 가 부활함 — 완료 세션이 다시 빈 목록이 된다"
+    return 1
+  fi
+  if grep -qF "agent-chip-more" "$hub_template_file"; then
+    record_failure "$test_name" "T25-43: agent-chip-more 가 남아 있음 — +N 오버플로 칩은 결정 K3 로 삭제됨"
     return 1
   fi
   local session_activity_token
@@ -2468,8 +2475,10 @@ PYEOF
     record_failure "$test_name" "T25-41: POLL_INTERVAL_MS = 60000 회귀(폴링 주기가 바뀜)"
     return 1
   fi
-  if ! grep -qF "약 15분 주기" "$hub_template_file"; then
-    record_failure "$test_name" "T25-41: '약 15분 주기' 문구 회귀(사용량 갱신 주기 고지 유실)"
+  # '약 15분 주기'는 데스크톱 앱 샘플링 주기 전제 문구였다. 퍼센트 출처가 statusLine 캡처로
+  # 바뀌며(결정 P1·P6) 그 전제 자체가 사라졌다 — 새 문구로 교체한다(승인 항목 5).
+  if ! grep -qF "세션 진행 중에만 갱신" "$hub_template_file"; then
+    record_failure "$test_name" "T25-41: '세션 진행 중에만 갱신' 문구 회귀(사용량 갱신 주기 고지 유실)"
     return 1
   fi
 
@@ -2584,6 +2593,108 @@ PYEOF
   for focus_token in "restart" "포커스"; do
     if ! grep -qF "$focus_token" "$hub_readme_file"; then
       record_failure "$test_name" "T25-49: hub/README.md 에 서버 제어 설명($focus_token)이 없음"
+      return 1
+    fi
+  done
+
+  # T25-50(결정 W1 회귀): 그리드 트랙 최소폭이 3열 상한 계산식으로 바뀌었고, hub/README.md 의
+  # 열 수 고지가 1~3열로 갱신돼 있다.
+  if ! grep -qF "max(320px" "$hub_template_file"; then
+    record_failure "$test_name" "T25-50: hub_template.html 에 max(320px 트랙 계산이 없음"
+    return 1
+  fi
+  if ! grep -qF "/3 - 1px)" "$hub_template_file"; then
+    record_failure "$test_name" "T25-50: hub_template.html 에 3열 상한 계산(/3 - 1px)이 없음(GOTCHA 1)"
+    return 1
+  fi
+  if ! grep -qF "1~3열" "$hub_readme_file"; then
+    record_failure "$test_name" "T25-50: hub/README.md 의 열 수 고지가 1~3열로 갱신되지 않음"
+    return 1
+  fi
+
+  # T25-51(결정 V1 회귀): 완료 세션 숨김 필터는 클라이언트에만 있다 — 서버(hub_model)는
+  # 세션을 걸러내지 않는다(sessions=session_views 가 그대로 있다는 것이 그 증거다).
+  local client_filter_token
+  for client_filter_token in "shouldRenderSession" "visibleAgentRuns"; do
+    if ! grep -qF "$client_filter_token" "$hub_template_file"; then
+      record_failure "$test_name" "T25-51: hub_template.html 에 $client_filter_token 이 없음"
+      return 1
+    fi
+  done
+  if ! grep -qF "sessions=session_views" "$hub_model_file"; then
+    record_failure "$test_name" "T25-51: hub_model.py 가 세션을 걸러내는 것으로 보임(sessions=session_views 부재)"
+    return 1
+  fi
+
+  # T25-52(결정 K1~K3 회귀 — 안 A): "+N" 오버플로 칩 로직(overflowRuns)이 없고,
+  # summarize_agent_runs 의 정렬 키에 실행 중 우선순위(K2)가 반영돼 있다.
+  if grep -qF "overflowRuns" "$hub_template_file"; then
+    record_failure "$test_name" "T25-52: hub_template.html 에 오버플로 칩 흔적(overflowRuns)이 남아 있음"
+    return 1
+  fi
+  if ! grep -qF "0 if is_running_by_type[agent_type] else 1" "$hub_model_file"; then
+    record_failure "$test_name" "T25-52: hub_model.py 의 summarize_agent_runs 정렬 키에 실행 중 우선순위(K2)가 없음"
+    return 1
+  fi
+
+  # T25-53(GOTCHA 2 회귀 — 결정 Z1): STALE_SESSION_HIDE_AFTER_MS 가 존재하고, MS_PER_HOUR
+  # 선언보다 뒤에 선언돼 있다. var 호이스팅은 선언만 끌어올리고 할당은 올리지 않으므로 앞에
+  # 두면 12 * undefined = NaN 이 되어 컷오프가 조용히 죽는다.
+  local ms_per_hour_decl_line stale_cutoff_decl_line
+  ms_per_hour_decl_line=$(grep -n "var MS_PER_HOUR" "$hub_template_file" | head -1 | cut -d: -f1)
+  stale_cutoff_decl_line=$(grep -n "var STALE_SESSION_HIDE_AFTER_MS" "$hub_template_file" | head -1 | cut -d: -f1)
+  if [[ -z "$ms_per_hour_decl_line" || -z "$stale_cutoff_decl_line" ]]; then
+    record_failure "$test_name" "T25-53: MS_PER_HOUR/STALE_SESSION_HIDE_AFTER_MS 선언을 hub_template.html 에서 찾지 못함"
+    return 1
+  fi
+  if [[ "$stale_cutoff_decl_line" -le "$ms_per_hour_decl_line" ]]; then
+    record_failure "$test_name" "T25-53: STALE_SESSION_HIDE_AFTER_MS 가 MS_PER_HOUR 보다 앞서 선언됨(GOTCHA 2)"
+    return 1
+  fi
+
+  # T25-54(결정 P1 회귀 — 퍼센트 출처 교체): 데스크톱 앱 사용량 히스토리 경로·파서가
+  # 소스에 남아 있지 않고, 캡처 단일 출처의 새 계약(신규 필드·투영 함수·비교 함수)이 있다.
+  local hub_usage_file="$REPO_ROOT/hub/bin/hub_usage.py"
+  local desktop_usage_token
+  for desktop_usage_token in "plan-usage-history" "PLAN_USAGE_HISTORY_PATH" "parse_usage_history"; do
+    if grep -qF "$desktop_usage_token" "$hub_collect_file" || grep -qF "$desktop_usage_token" "$hub_usage_file"; then
+      record_failure "$test_name" "T25-54: hub_collect.py/hub_usage.py 에 데스크톱 앱 흔적($desktop_usage_token)이 남아 있음"
+      return 1
+    fi
+  done
+  local capture_source_token
+  for capture_source_token in "session_used_percent" "usage_sample_from_capture" "same_capture_values"; do
+    if ! grep -qF "$capture_source_token" "$hub_usage_file"; then
+      record_failure "$test_name" "T25-54: hub_usage.py 에 캡처 단일 출처 토큰($capture_source_token)이 없음"
+      return 1
+    fi
+  done
+
+  # T25-55(문서 정합 — 결정 P1): commands/hub.md 의 usage_sample_age_ms 설명에 데스크톱 앱
+  # 문구가 없고, statusLine 등록이 전제라는 점이 명시돼 있다.
+  if grep -qF "macOS 데스크톱 앱" "$hub_command_file"; then
+    record_failure "$test_name" "T25-55: commands/hub.md 에 macOS 데스크톱 앱 문구가 남아 있음(결정 P1 위반)"
+    return 1
+  fi
+  if ! grep -qF "퍼센트의 유일한 출처는" "$hub_command_file"; then
+    record_failure "$test_name" "T25-55: commands/hub.md 의 usage_sample_age_ms 설명에 statusLine 등록 전제가 없음"
+    return 1
+  fi
+
+  # T25-56(전제 2 회귀 — #dzh-data 계약 불변): HubSnapshot 의 usage·rate_limit_resets 두
+  # 필드가 그대로 있고, 템플릿이 여전히 snapshot.usage·snapshot.rate_limit_resets 를 읽는다.
+  if ! grep -qF "usage: UsageSample | None = None" "$hub_model_file"; then
+    record_failure "$test_name" "T25-56: hub_model.py 의 HubSnapshot.usage 필드가 계약과 다름"
+    return 1
+  fi
+  if ! grep -qF "rate_limit_resets: RateLimitResets | None = None" "$hub_model_file"; then
+    record_failure "$test_name" "T25-56: hub_model.py 의 HubSnapshot.rate_limit_resets 필드가 계약과 다름"
+    return 1
+  fi
+  local snapshot_field_token
+  for snapshot_field_token in "snapshot.usage" "snapshot.rate_limit_resets"; do
+    if ! grep -qF "$snapshot_field_token" "$hub_template_file"; then
+      record_failure "$test_name" "T25-56: hub_template.html 이 $snapshot_field_token 를 읽지 않음"
       return 1
     fi
   done

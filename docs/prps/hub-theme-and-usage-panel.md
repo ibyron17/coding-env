@@ -68,6 +68,8 @@
 
 > **개정됨.** 이 조사는 `plan-usage-history.json` 을 **퍼센트의 출처**로 볼 때만 유효하다. **초기화 예정 시각**의 공식 출처는 Claude Code 의 statusLine 입력 JSON(`rate_limits.*.resets_at`)이며, [`hub-usage-reset-time-and-refresh.md`](./hub-usage-reset-time-and-refresh.md) 가 이를 쓴다.
 
+> **개정됨(2회차).** `plan-usage-history.json` 은 2026-08 실측으로 사라졌다. 퍼센트의 출처는 statusLine 입력의 `rate_limits.*.used_percentage` 로 교체됐다 — [`hub-card-cleanup-and-usage-source.md`](./hub-card-cleanup-and-usage-source.md) 결정 P1.
+
 ---
 
 ## 영향 범위
@@ -450,6 +452,8 @@ function renderStateBadge(state, baseState){
 낡은 값인지 알 수 없다. 마지막 원소만 보면 그 경우 패널이 사라지고 경고가 뜬다 —
 **틀린 숫자보다 없는 숫자가 낫다.**
 
+> **적용 대상 소멸.** `parse_usage_history` 삭제와 함께 이 규칙의 대상이 없어졌다(원칙 자체는 P2 의 필드 단위 탈락으로 계승) — [`hub-card-cleanup-and-usage-source.md`](./hub-card-cleanup-and-usage-source.md) 결정 P1·P2.
+
 ### 결정 U2 — 타입 검증은 **엄격한 int**, 범위는 0~100
 
 ```python
@@ -475,6 +479,8 @@ def _valid_percent(value: object) -> bool:
   ("세션은 왜 없지?"), 요구 3이 정의한 패널은 막대 **2개**다. 단순함을 택한다.
 - **중간 상태(dim 처리, "오래됨" 배지)를 만들지 않는다.** 패널은 항상 "마지막 갱신 N분 전"을
   표시하므로 신선도는 이미 연속적으로 노출된다. 임계값과 시각 상태를 하나 더 만들 이유가 없다.
+
+> **확장됨.** 5시간 만료는 그대로 유효하고, 여기에 "세션 창 롤오버 시 즉시 만료"(P5)가 더해졌다 — [`hub-card-cleanup-and-usage-source.md`](./hub-card-cleanup-and-usage-source.md).
 
 ### 결정 U4 — `config.json` 스위치 `show_usage_panel` 을 제공한다 (기본 `true`)
 
@@ -525,7 +531,7 @@ YAGNI.
 | 색 | 두 막대 모두 `--accent`(파랑) 단색. **임계값 색 변화 없음**(아래 대안 3) |
 | 숫자 | 항상 정수 % 텍스트를 병기 — 막대 길이 + 숫자 = 2채널 |
 | 시각 | `elapsedLabel(usage.sampled_at_ms)` 재사용, `title` 에 `formatTimestamp()` 절대시각 |
-| 주기 고지 | `· 약 15분 주기` 정적 문구 — 5초 폴링과 갱신 주기가 다름을 사용자가 오해하지 않게 한다(리스크 3) |
+| 주기 고지 | `· 약 15분 주기` 정적 문구 — 5초 폴링과 갱신 주기가 다름을 사용자가 오해하지 않게 한다(리스크 3). **개정됨.** `· 세션 진행 중에만 갱신`(결정 P6, [`hub-card-cleanup-and-usage-source.md`](./hub-card-cleanup-and-usage-source.md)) |
 | 갱신 | `render()` 말미에서 `renderUsagePanel(snapshot.usage)` 호출. 30초 틱이 경과 라벨을 갱신한다 |
 | 초기화 예정 시각 | 창별로 한 줄(현행: hub-usage-reset-time-and-refresh.md 결정 R2·R4) |
 

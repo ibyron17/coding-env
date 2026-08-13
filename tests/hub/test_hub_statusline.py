@@ -1,6 +1,8 @@
 """hub_statusline.py 단위 테스트. 실제 ~/.claude 는 건드리지 않고 hub_collect 의 모듈 상수를
 임시 디렉토리로 바꿔치기한 뒤 원상복구한다(WriteHubHtmlAtomicityTest 의 setUp/tearDown 패턴).
-docs/prps/hub-usage-reset-time-and-refresh.md 「테스트 계획」 케이스 R26~R29.
+docs/prps/hub-usage-reset-time-and-refresh.md 「테스트 계획」 케이스 R26~R29 +
+docs/prps/hub-card-cleanup-and-usage-source.md 「테스트 계획」 케이스 N39~N42(퍼센트도
+캡처값 비교에 들어간 뒤의 회귀 — 결정 P4).
 """
 
 import io
@@ -76,13 +78,15 @@ class NormalPayloadTest(HubStatuslineEntrypointTest):
         self.assertEqual(exit_code, 0)
         self.assertEqual(output.strip(), "세션 23% · 주간 41%")
         self.assertTrue(hub_collect.RATE_LIMITS_PATH.is_file())
-        resets, warnings = hub_collect.read_rate_limit_capture()
-        self.assertIsNotNone(resets)
+        capture, warnings = hub_collect.read_rate_limit_capture()
+        self.assertIsNotNone(capture)
         self.assertEqual(warnings, ())
 
 
 class SameReplayDoesNotRewriteTest(HubStatuslineEntrypointTest):
-    """케이스 R27 — 같은 페이로드로 재실행하면 파일을 다시 쓰지 않는다(결정 S3 회귀 방지)."""
+    """케이스 R27·N40 — 완전히 같은 페이로드(퍼센트 포함)로 재실행하면 파일을 다시 쓰지
+    않는다(결정 S3·P4 회귀 방지, GOTCHA 4 — captured_at_ms 를 비교에 넣으면 이 테스트가
+    깨진다)."""
 
     def test_r27_identical_payload_leaves_mtime_unchanged(self) -> None:
         text = _rate_limits_payload(int(time.time()))
@@ -104,6 +108,21 @@ class ChangedResetsRewriteTest(HubStatuslineEntrypointTest):
         mtime_before = hub_collect.RATE_LIMITS_PATH.stat().st_mtime_ns
 
         self._run_with_stdin(_rate_limits_payload(now_s, session_hours_from_now=3.0))
+        mtime_after = hub_collect.RATE_LIMITS_PATH.stat().st_mtime_ns
+
+        self.assertNotEqual(mtime_before, mtime_after)
+
+
+class ChangedPercentRewriteTest(HubStatuslineEntrypointTest):
+    """케이스 N39 — 리셋 시각은 그대로인데 퍼센트만 달라진 페이로드도 파일을 갱신한다
+    (결정 P4 — 비교를 네 값으로 확장한 회귀 방지. 리셋만 비교했다면 이 케이스는 안 써진다)."""
+
+    def test_n39_percent_only_change_rewrites_the_file(self) -> None:
+        now_s = int(time.time())
+        self._run_with_stdin(_rate_limits_payload(now_s, session_used_percentage=23))
+        mtime_before = hub_collect.RATE_LIMITS_PATH.stat().st_mtime_ns
+
+        self._run_with_stdin(_rate_limits_payload(now_s, session_used_percentage=24))
         mtime_after = hub_collect.RATE_LIMITS_PATH.stat().st_mtime_ns
 
         self.assertNotEqual(mtime_before, mtime_after)

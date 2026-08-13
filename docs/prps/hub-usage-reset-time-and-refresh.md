@@ -731,11 +731,11 @@ function renderUsageResetRow(resetsAtMs)
 | S4 | 남의 statusLine 이 있으면 **거부** | 단일 값 필드라 병합이 불가능. 소유권 원칙 |
 | S5 | `hub_statusline.py` 는 `hub_collect` 를 임포트(+13ms 실측) | 경로·원자적 쓰기의 정본은 하나여야 한다(검수 m3 선례) |
 | S6 | 상태줄 stdout = 퍼센트 한 줄(데이터 없으면 빈 줄) | 이미 손에 있는 값이고, 빈 상태줄은 사용자가 요구하지 않은 UI 후퇴다 · **승인 항목 2** |
-| S7 | `used_percentage` 는 캡처하지 않는다 | 같은 숫자의 출처를 둘로 만들지 않는다. 타입 규칙(U2)도 다르다 |
+| S7 | `used_percentage` 는 캡처하지 않는다 | 같은 숫자의 출처를 둘로 만들지 않는다. 타입 규칙(U2)도 다르다 · **개정됨.** `used_percentage` 를 **캡처한다**(내림 정수). 기각 근거였던 "타입 규칙 불일치"는 내림 정수로, "재작성 폭주"는 정량 평가로 해소됐다 — [`hub-card-cleanup-and-usage-source.md`](./hub-card-cleanup-and-usage-source.md) 결정 P2·P4·P8. |
 | S8 | `--uninstall` 에 statusLine 제거를 편입 | 없는 스크립트를 0.3초마다 부르는 무성음 상태 방지 |
 | R1 | 스냅샷 필드를 분리(`rate_limit_resets`) | 출처가 둘이면 데이터클래스도 둘 |
 | R2 | staleness = "지나면 사라진다"가 전부 | 절대 시각은 지나기 전까지 참이다. 임의 임계값 금지 |
-| R3 | 패널 게이팅 불변(퍼센트 없으면 패널 없음) | 요구는 장식 추가지 표시 조건 변경이 아니다 · **승인 항목 5** |
+| R3 | 패널 게이팅 불변(퍼센트 없으면 패널 없음) | 요구는 장식 추가지 표시 조건 변경이 아니다 · **승인 항목 5** · **유지됨.** 퍼센트가 없으면 패널이 없다는 게이팅은 그대로다. 다만 그 퍼센트의 출처가 캡처로 바뀌었으므로, 이제 `/hub statusline on` 이 패널 표시의 사실상 전제다 — [`hub-card-cleanup-and-usage-source.md`](./hub-card-cleanup-and-usage-source.md). |
 | R4 | 리셋 줄은 펼침 본문에만 | 요구가 "펼쳤을 때". 접힘 알약을 키우면 결정 L2 위반 |
 | R5 | 지난 값 필터를 서버·클라이언트 양쪽에 | 탭이 몇 시간 열려 있으면 서버 필터만으로는 못 막는다 |
 | X1 | 펼칠 때만 `poll()` 1회 재사용 | `focus`·`visibilitychange` 와 같은 관용구. 새 개념 0 |
@@ -945,12 +945,16 @@ function renderUsageResetRow(resetsAtMs)
    뜨고 출처가 하나로 준다. 그러나 (a) `used_percentage` 는 실수라 U2 검증 규칙을 다시 설계해야
    하고, (b) 세션이 안 돌면 퍼센트가 통째로 낡아 U3(5시간 만료)의 근거가 흔들리며, (c) 이번
    요구("리셋 시각을 보고 싶다")의 범위를 크게 넘는다 → 기각(별도 PRP 감).
+
+   > **채택됨(재검토).** 데스크톱 파일이 실제로 사라져 전제가 바뀌었다 — [`hub-card-cleanup-and-usage-source.md`](./hub-card-cleanup-and-usage-source.md) 결정 P1.
 5. **`hub_statusline.py` 가 `hub_collect` 를 임포트하지 않고 경로·원자적 쓰기를 자체 구현한다.**
    호출당 13ms(31%)를 아낀다. 그러나 `RATE_LIMITS_PATH` 의 정본이 둘이 되어, 한쪽만 바뀌면
    "캡처는 되는데 아무도 읽지 않는" 무성음 실패가 된다(검수 m3 의 재발) → 기각(결정 S5).
 6. **캡처 파일에 `used_percentage` 도 함께 저장해 둔다(장래 대비).** 나중에 대안 4로 갈 때
    편하다. 그러나 퍼센트는 자주 변해 `snapshot_content_key` 를 매 사이클 흔들고(D3 위반),
    지금 아무도 읽지 않는 필드다 → 기각(YAGNI).
+
+   > **채택됨(재검토).** 데스크톱 파일이 실제로 사라져 전제가 바뀌었다 — [`hub-card-cleanup-and-usage-source.md`](./hub-card-cleanup-and-usage-source.md) 결정 P1.
 7. **접힘 알약에도 리셋 시각을 넣는다.** 펼치지 않고 확인할 수 있다. 그러나 알약이 약 100px
    길어져 결정 L2("접으면 작게")를 정면으로 어기고, 요구는 "펼쳤을 때"다 → 기각.
 8. **리셋 임박(예: 10분 이내)에 색을 바꾼다.** 새 매직 임계값 + 새 색 상태. 요구는 "시각을

@@ -21,7 +21,9 @@ DZH:HUB 데이터 계약
   #dzh-usage 와 그 안의 #dzh-usage-toggle 은 정적 노드이며 class·aria-expanded 속성만
   갱신한다(노드 교체 금지). 테마 토글 버튼은 이 넷 바깥의 정적 마크업이라 폴링과 무관하게
   DOM 이 그대로 유지된다. rate_limit_resets(있으면)는 펼침 본문에 초기화 예정 시각 줄로
-  더해진다(docs/prps/hub-usage-reset-time-and-refresh.md).
+  더해진다(docs/prps/hub-usage-reset-time-and-refresh.md). usage·rate_limit_resets 의 값은
+  모두 같은 statusLine 캡처(rate_limits.json) 하나에서 온다 — 퍼센트와 초기화 예정 시각을
+  서로 다른 출처로 오해하지 말 것(docs/prps/hub-card-cleanup-and-usage-source.md 결정 P1·P3).
   #dzh-tooltip 은 전역 커스텀 툴팁의 정적 싱글턴이다(위 네 요소 바깥, docs/prps/
   hub-session-activity-and-tooltip.md). 폴링 대상이 아니다 — 사용자 상호작용(hover·focus)만
   내용을 바꾼다. 트리거는 data-tooltip="…" 속성을 가진 임의의 요소이며, 리스너는 재렌더로
@@ -57,7 +59,12 @@ DZH:HUB 데이터 계약
   *{box-sizing:border-box}
   body{margin:0;font-family:"Pretendard","Apple SD Gothic Neo","Malgun Gothic",sans-serif;color:var(--ink);background:var(--bg);line-height:1.5}
   .wrap{max-width:1440px;margin:32px auto;padding:0 16px}
-  #dzh-app{display:grid;grid-template-columns:repeat(auto-fill,minmax(320px,1fr));gap:12px;align-items:start}
+  /* 최대 3열 — 트랙 최소폭을 (콘텐츠폭 − gap 2개)/3 로 올리면 4열이 산술적으로 불가능해진다.
+     24px 은 같은 줄의 gap:12px 2개다(3열의 gap 개수) — gap 을 고치면 이 값도 같이 고쳐야 한다.
+     -1px 은 서브픽셀 반올림이 비율을 3 아래로 떨어뜨려 2열로 붕괴하는 것을 막는 여유다(GOTCHA 1).
+     max(320px, …) 가 좁은 폭에서는 종전 320px 을 그대로 쓰게 해 2·1열 반응형을 보존한다.
+     (결정 W1, docs/prps/hub-card-cleanup-and-usage-source.md) */
+  #dzh-app{display:grid;grid-template-columns:repeat(auto-fill,minmax(max(320px,calc((100% - 24px)/3 - 1px)),1fr));gap:12px;align-items:start}
   #dzh-app>.empty,#dzh-app>.warnings{grid-column:1/-1}
   .head-row{display:flex;align-items:baseline;justify-content:space-between;flex-wrap:wrap;gap:8px 16px;margin-bottom:18px}
   .head-actions{display:flex;align-items:baseline;gap:12px;flex-wrap:wrap}
@@ -98,7 +105,6 @@ DZH:HUB 데이터 계약
   .agent-chip{font-family:ui-monospace,monospace;font-size:11px;font-weight:700;line-height:1.3;
               color:var(--muted);background:var(--soft);border-radius:6px;padding:2px 6px}
   .agent-chip-running{color:var(--accent-ink);background:var(--accent-soft)}
-  .agent-chip-more{background:transparent;border:1px solid var(--line)}
   .agent-chip .glyph{margin-right:2px}
   .sr-only{position:absolute;width:1px;height:1px;margin:-1px;padding:0;overflow:hidden;
            clip:rect(0,0,0,1px);white-space:nowrap;border:0}
@@ -338,7 +344,7 @@ try{var m=localStorage.getItem('dzh-theme');
   var MINUTES_PER_HOUR = 60;
   var STATE_LABEL = {working:'작업중', idle:'대기', stale:'소식 없음', done:'완료'};
   var STATE_GLYPH = {working:'●', idle:'○', stale:'▲', done:'✓'};
-  var MAX_VISIBLE_AGENT_CHIPS = 2;            // 초과분은 "+N" 칩 하나로 접는다(결정 D4)
+  var MAX_VISIBLE_AGENT_CHIPS = 2;            // 화면에 실을 칩 상한(결정 K1) — 상한 밖 타입은 표시하지 않는다
   var AGENT_RUN_RUNNING_GLYPH = '●';          // 상태 배지의 working 글리프와 의도적으로 같은 모양
   var AGENT_RUN_RUNNING_LABEL = '진행 중';
   var AGENT_RUN_ENDED_LABEL = '종료';
@@ -353,13 +359,20 @@ try{var m=localStorage.getItem('dzh-theme');
   };
   var USAGE_SESSION_LABEL = '세션 (5시간)';
   var USAGE_WEEKLY_LABEL = '주간 (7일)';
-  var USAGE_CYCLE_NOTE = '· 약 15분 주기';
+  // 퍼센트 출처가 statusLine 캡처로 바뀌면서(결정 P1) "주기" 개념 자체가 없어졌다 — 세션이
+  // 돌 때만 실시간으로 갱신되고 안 돌면 정지된다(결정 P6, docs/prps/hub-card-cleanup-and-usage-source.md).
+  var USAGE_CYCLE_NOTE = '· 세션 진행 중에만 갱신';
   var USAGE_COLLAPSE_STORAGE_KEY = 'dzh-usage-collapsed';
   var USAGE_COLLAPSED_FLAG = '1';
   var USAGE_CLEARANCE_MARGIN_PX = 32;   // 패널 bottom 오프셋 16 + 여유 16
   var USAGE_RESET_LABEL = '초기화';
   var MS_PER_HOUR = 3600000;
   var MS_PER_DAY = 86400000;
+  // 12시간 — stale_after_minutes(30분)와 이벤트 표시 창(약 24~48시간) 사이의 임의값이다(결정
+  // Z1). 더 나은 앵커가 없음을 인정하고 상수 1개로 둔다 — 되돌리기·값 변경 모두 1줄.
+  // MS_PER_HOUR 선언 뒤에 둔다 — var 호이스팅은 선언만 끌어올리고 할당은 올리지 않으므로
+  // 앞에 두면 12 * undefined = NaN 이 되어 컷오프가 조용히 죽는다(GOTCHA 2).
+  var STALE_SESSION_HIDE_AFTER_MS = 12 * MS_PER_HOUR;
 
   var app = document.getElementById('dzh-app');
   var collectedAtLabel = document.getElementById('dzh-collected-at');
@@ -434,18 +447,21 @@ try{var m=localStorage.getItem('dzh-theme');
       + runningGlyph + escapeHtml(run.agent_type) + runningSrText + '</span>';
   }
 
-  // 칩 목록. 상한을 넘는 타입은 "+N" 칩 하나로 접고 전체 목록을 그 툴팁에 담는다(결정 D4·D5).
+  // 화면에 실을 칩 목록의 유일한 판정자(결정 K1). renderAgentRuns 와 shouldRenderSession 이
+  // 이 함수를 공유한다 — shouldRenderSession 이 agent_runs.length 를 직접 보면 "칩은 없는데
+  // 줄은 남는" 어긋남이 생긴다(GOTCHA 3).
+  function visibleAgentRuns(runs){
+    if(!runs) return [];
+    return runs.slice(0, MAX_VISIBLE_AGENT_CHIPS);
+  }
+
+  // 칩 목록. 상한을 넘는 타입은 표시하지 않는다 — "+N" 오버플로 칩은 결정 K3 로 폐기됐다.
+  // summarize_agent_runs(서버)가 실행 중 타입을 항상 먼저 주므로(결정 K2) 상한 안에서도
+  // 지금 진행 중인 작업은 계속 보인다.
   function renderAgentRuns(runs){
-    if(!runs || !runs.length) return '';
-    var visibleRuns = runs.slice(0, MAX_VISIBLE_AGENT_CHIPS);
-    var overflowRuns = runs.slice(MAX_VISIBLE_AGENT_CHIPS);
-    var chipsHtml = visibleRuns.map(renderAgentChip).join('');
-    if(overflowRuns.length){
-      var overflowTooltip = overflowRuns.map(function(run){ return run.agent_type; }).join(', ');
-      chipsHtml += '<span class="agent-chip agent-chip-more" data-tooltip="'
-        + escapeHtml(overflowTooltip) + '">+' + overflowRuns.length + '</span>';
-    }
-    return '<span class="agent-runs">' + chipsHtml + '</span>';
+    var visibleRuns = visibleAgentRuns(runs);
+    if(!visibleRuns.length) return '';
+    return '<span class="agent-runs">' + visibleRuns.map(renderAgentChip).join('') + '</span>';
   }
 
   function renderSession(session){
@@ -456,6 +472,20 @@ try{var m=localStorage.getItem('dzh-theme');
       + '<span class="session-time">' + elapsedLabel(session.last_event_at_ms) + '</span>'
       + renderAgentRuns(session.agent_runs)
       + '</div>' + excerpt + '</li>';
+  }
+
+  // 숨김 조건 = 완료 + 표시할 발췌 없음 + 보이는 칩 0개(결정 V2). visibleAgentRuns 를 반드시
+  // 경유한다(GOTCHA 3) — agent_runs.length 를 직접 보면 상한 밖으로 밀린 종료 타입 때문에
+  // 칩이 없는데도 줄이 남는 어긋남이 생긴다. stale 세션은 마지막 이벤트로부터
+  // STALE_SESSION_HIDE_AFTER_MS(결정 Z1) 넘게 조용하면 함께 숨긴다. 둘 다 클라이언트 전용
+  // 필터라 프로젝트 배지 집계(서버의 state)에는 영향을 주지 않는다(결정 V1).
+  function shouldRenderSession(session){
+    var hasVisibleChip = visibleAgentRuns(session.agent_runs).length > 0;
+    if(session.state === 'done' && !session.task_excerpt && !hasVisibleChip) return false;
+    if(session.state === 'stale' && (Date.now() - session.last_event_at_ms) >= STALE_SESSION_HIDE_AFTER_MS){
+      return false;
+    }
+    return true;
   }
 
   function renderTier1ActiveStep(tier1){
@@ -482,8 +512,15 @@ try{var m=localStorage.getItem('dzh-theme');
   }
 
   function renderProject(project){
-    var sessionsHtml = project.sessions.length
-      ? '<ul class="sessions">' + project.sessions.map(renderSession).join('') + '</ul>' : '';
+    // 세션은 서버가 오래된 것부터 준다(§2.4-2, hub_model.compose_project_views) — 클라이언트가
+    // 최신순으로 다시 정렬한다(결정 Z1 안 2). slice() 로 복제해 원본 project.sessions 를
+    // 변형하지 않는다 — 같은 snapshot 객체가 다음 TICK_MS 렌더에도 재사용된다.
+    var visibleSessions = project.sessions
+      .slice()
+      .sort(function(a, b){ return b.last_event_at_ms - a.last_event_at_ms; })
+      .filter(shouldRenderSession);
+    var sessionsHtml = visibleSessions.length
+      ? '<ul class="sessions">' + visibleSessions.map(renderSession).join('') + '</ul>' : '';
     return '<div class="card">'
       + '<div class="project-head">'
       + '<span class="project-name" data-tooltip="' + escapeHtml(project.display_name) + '">' + escapeHtml(project.display_name) + '</span>'

@@ -187,21 +187,21 @@ class CmdStatusServerSummaryTest(unittest.TestCase):
     도 부르는데, 그 상수는 HUB_HOME 과 별개로 임포트 시점에 확정되므로 직접 바꿔야 한다.
     RATE_LIMITS_PATH·SETTINGS_PATH 도 같은 이유로 격리한다 — cmd_status 가
     hub_settings.statusline_install_status()·hub_collect.read_rate_limit_capture() 를
-    새로 호출하게 되면서(docs/prps/hub-usage-reset-time-and-refresh.md) 실제 개발자 머신의
-    ~/.claude/settings.json·~/.claude/hub/rate_limits.json 을 읽던 회귀가 생길 수 있었다.
-    이 클래스의 "실제 ~/.claude 를 건드리지 않는다"는 주장이 문자 그대로 참이 되는 조건이다."""
+    새로 호출하게 되면서(docs/prps/hub-usage-reset-time-and-refresh.md, 사용률 퍼센트까지
+    이 캡처 하나로 통합된 뒤로는 docs/prps/hub-card-cleanup-and-usage-source.md 결정 P1)
+    실제 개발자 머신의 ~/.claude/settings.json·~/.claude/hub/rate_limits.json 을 읽던
+    회귀가 생길 수 있었다. 이 클래스의 "실제 ~/.claude 를 건드리지 않는다"는 주장이 문자
+    그대로 참이 되는 조건이다."""
 
     def setUp(self) -> None:
         self.temp_dir = Path(tempfile.mkdtemp())
         self.original_html_path = hub_collect.HUB_HTML_PATH
         self.original_config_path = hub_collect.CONFIG_PATH
-        self.original_usage_path = hub_collect.PLAN_USAGE_HISTORY_PATH
         self.original_error_path = hub_collect.LAST_COLLECT_ERROR_PATH
         self.original_rate_limits_path = hub_collect.RATE_LIMITS_PATH
         self.original_settings_path = hub_settings.SETTINGS_PATH
         hub_collect.HUB_HTML_PATH = self.temp_dir / "hub.html"  # 존재하지 않는 경로 — 실제 파일 미접근
         hub_collect.CONFIG_PATH = self.temp_dir / "config.json"  # 존재하지 않으면 기본값
-        hub_collect.PLAN_USAGE_HISTORY_PATH = self.temp_dir / "plan-usage-history.json"  # 실제 사용량 파일 미접근
         hub_collect.LAST_COLLECT_ERROR_PATH = self.temp_dir / "last_collect_error.json"
         hub_collect.RATE_LIMITS_PATH = self.temp_dir / "rate_limits.json"  # 존재하지 않으면 None
         hub_settings.SETTINGS_PATH = self.temp_dir / "settings.json"  # 존재하지 않으면 미설치로 판정
@@ -209,7 +209,6 @@ class CmdStatusServerSummaryTest(unittest.TestCase):
     def tearDown(self) -> None:
         hub_collect.HUB_HTML_PATH = self.original_html_path
         hub_collect.CONFIG_PATH = self.original_config_path
-        hub_collect.PLAN_USAGE_HISTORY_PATH = self.original_usage_path
         hub_collect.LAST_COLLECT_ERROR_PATH = self.original_error_path
         hub_collect.RATE_LIMITS_PATH = self.original_rate_limits_path
         hub_settings.SETTINGS_PATH = self.original_settings_path
@@ -247,21 +246,30 @@ class CmdStatusServerSummaryTest(unittest.TestCase):
         self.assertIsNone(payload["usage_sample_age_ms"])
 
     def test_usage_sample_age_ms_is_null_when_usage_file_is_absent(self) -> None:
-        """`commands/hub.md` 의 공개 출력 계약 — 파일이 없으면 enabled 는 true 인데 age 는 null.
+        """`commands/hub.md` 의 공개 출력 계약 — 캡처 파일이 없으면 enabled 는 true 인데 age 는 null.
 
-        비-macOS·터미널 전용 사용자가 **항상** 보게 되는 상태다(검수 R2-n2). 스위치 off 와
-        값이 다르다는 점이 핵심이다 — off 는 enabled 도 false 다. setUp 이 잡아 둔 임시 경로에
-        파일을 쓰지 않는 것만으로 이 상황이 재현된다.
+        statusLine 을 등록하지 않은 사용자가 **항상** 보게 되는 상태다(검수 R2-n2, 결정 P1).
+        스위치 off 와 값이 다르다는 점이 핵심이다 — off 는 enabled 도 false 다. setUp 이 잡아 둔
+        임시 경로에 파일을 쓰지 않는 것만으로 이 상황이 재현된다.
         """
-        self.assertFalse(hub_collect.PLAN_USAGE_HISTORY_PATH.exists())
+        self.assertFalse(hub_collect.RATE_LIMITS_PATH.exists())
         payload = self._run_cmd_status(collect_stalled=False)
         self.assertTrue(payload["usage_panel_enabled"])
         self.assertIsNone(payload["usage_sample_age_ms"])
 
     def test_usage_sample_age_ms_is_int_when_usage_file_is_normal(self) -> None:
-        """`commands/hub.md` 의 공개 출력 계약 — 정상 사용량 파일이면 usage_sample_age_ms 는 정수."""
-        hub_collect.PLAN_USAGE_HISTORY_PATH.write_text(
-            json.dumps({"version": 2, "samples": [{"t": 1, "org": "o", "u": {"fh": 10, "sd": 19}}]})
+        """`commands/hub.md` 의 공개 출력 계약 — 캡처에 퍼센트가 있으면 usage_sample_age_ms 는
+        정수다(결정 P1 — 퍼센트의 유일한 출처가 캡처 파일로 바뀌었다)."""
+        hub_collect.RATE_LIMITS_PATH.write_text(
+            json.dumps(
+                {
+                    "captured_at_ms": 1,
+                    "session_resets_at_ms": None,
+                    "weekly_resets_at_ms": None,
+                    "session_used_percent": 10,
+                    "weekly_used_percent": 19,
+                }
+            )
         )
         payload = self._run_cmd_status(collect_stalled=False)
         self.assertTrue(payload["usage_panel_enabled"])

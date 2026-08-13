@@ -137,7 +137,7 @@ class HubSnapshot:
     projects: tuple[ProjectView, ...]
     unresolved_dir_names: tuple[str, ...]
     warnings: tuple[str, ...]
-    usage: UsageSample | None = None    # 없으면 패널을 그리지 않는다(요구 2). 마지막 필드 — 기본값 순서 제약
+    usage: UsageSample | None = None    # statusLine 캡처(rate_limits.json)의 투영. 없으면 패널을 그리지 않는다(요구 2)
     rate_limit_resets: RateLimitResets | None = None    # 없으면 초기화 예정 시각 줄을 그리지 않는다
 
 
@@ -376,7 +376,13 @@ def compute_session_view(facts: SessionFacts, now_ms: int, stale_after_ms: int) 
 
 # ---- 4. 서브에이전트 요약 ----
 def summarize_agent_runs(facts: SessionFacts) -> tuple[SubagentRunView, ...]:
-    """세션의 모든 서브에이전트를 타입별로 합쳐 최근 시작 순으로 돌려준다(종료된 것도 포함)."""
+    """세션의 서브에이전트를 타입별로 합쳐, 실행 중 타입을 먼저 두고 그 다음 최근 시작 순으로
+    돌려준다(종료된 것도 포함).
+
+    실행 중 우선순위(결정 K2)는 클라이언트의 칩 상한(결정 K1)이 "+N" 오버플로 칩 없이도
+    지금 진행 중인 작업을 놓치지 않게 하기 위한 것이다 — 정렬 키가 전부 결정적이므로
+    snapshot_content_key 안정성(결정 D2)에는 영향이 없다.
+    """
     latest_started_at_ms: dict[str, int] = {}
     is_running_by_type: dict[str, bool] = {}
     for sub in facts.subagents:
@@ -389,7 +395,12 @@ def summarize_agent_runs(facts: SessionFacts) -> tuple[SubagentRunView, ...]:
             is_running_by_type.get(sub.agent_type, False) or sub.ended_at_ms is None
         )
     ordered_types = sorted(
-        latest_started_at_ms, key=lambda agent_type: (-latest_started_at_ms[agent_type], agent_type)
+        latest_started_at_ms,
+        key=lambda agent_type: (
+            0 if is_running_by_type[agent_type] else 1,
+            -latest_started_at_ms[agent_type],
+            agent_type,
+        ),
     )
     return tuple(
         SubagentRunView(

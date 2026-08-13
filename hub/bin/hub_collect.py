@@ -24,11 +24,6 @@ CONFIG_PATH = HUB_HOME / "config.json"
 PROJECTS_DIR = Path.home() / ".claude" / "projects"
 SCRIPT_DIR = Path(__file__).resolve().parent
 TEMPLATE_PATH = SCRIPT_DIR / "hub_template.html"
-# Claude 데스크톱 앱이 남기는 비공개 사용량 히스토리(macOS 전용, 실측 완료 — 리스크 1).
-# 다른 OS·터미널 전용 환경에는 이 파일이 정상적으로 없다.
-PLAN_USAGE_HISTORY_PATH = (
-    Path.home() / "Library" / "Application Support" / "Claude" / "plan-usage-history.json"
-)
 # 배경 spawn(hub_hook.py)의 stdout/stderr 는 DEVNULL 이라 실패가 완전히 무성음이 된다 — 마지막
 # collect 실패를 이 파일에 남겨 `/hub status` 가 읽을 수 있게 한다(검수 M7).
 LAST_COLLECT_ERROR_PATH = HUB_HOME / "last_collect_error.json"
@@ -42,8 +37,8 @@ SPAWN_STAMP_PATH = HUB_HOME / ".collect_spawn_stamp"
 SERVER_RECORD_PATH = HUB_HOME / "server.json"
 SERVER_HEARTBEAT_PATH = HUB_HOME / "server_heartbeat"
 SERVER_LOG_PATH = HUB_HOME / "server.log"
-# hub_statusline.py 가 statusLine stdin 에서 캡처한 한도 초기화 예정 시각
-# (docs/prps/hub-usage-reset-time-and-refresh.md 결정 S2·S5).
+# hub_statusline.py 가 statusLine stdin 에서 캡처한 한도 초기화 예정 시각 + 사용률 —
+# 퍼센트의 유일한 출처다(결정 P1, docs/prps/hub-card-cleanup-and-usage-source.md).
 RATE_LIMITS_PATH = HUB_HOME / "rate_limits.json"
 
 
@@ -282,90 +277,66 @@ def _tier3_activity_by_encoded_name(
     return activity, tuple(warnings)
 
 
-# ---- 사용량 (Claude 데스크톱 앱, docs/prps/hub-theme-and-usage-panel.md) ----
-def read_latest_usage_sample() -> tuple[hub_usage.UsageSample | None, tuple[str, ...]]:
-    """사용량 히스토리 파일을 읽어 마지막 샘플을 돌려준다. 이 함수는 절대 예외를 던지지 않는다.
-
-    반환 계약(PRP 「반환 계약」 표가 정본): 파일 부재는 macOS 데스크톱 앱이 없는 환경에서
-    정상이므로 경고를 내지 않는다. 읽기 실패·계약 불일치만 경고 1건을 남긴다.
-    """
-    if not PLAN_USAGE_HISTORY_PATH.is_file():
-        return None, ()
-    try:
-        # errors="replace" — 앱이 파일을 다시 쓰는 도중의 찢긴 읽기(리스크 6)가 멀티바이트
-        # 경계에서 나면 UnicodeDecodeError 가 나는데, 이는 ValueError 서브클래스라 OSError 로
-        # 잡히지 않는다(검수 M1). U+FFFD 로 치환하면 JSON 파싱이 자연스럽게 실패해 기존
-        # "계약 불일치 → 경고 1건" 경로로 합류한다 — read_recent_events 의 선례와 동일하다.
-        text = PLAN_USAGE_HISTORY_PATH.read_text(encoding="utf-8", errors="replace")
-    except OSError as error:
-        return None, (f"{PLAN_USAGE_HISTORY_PATH}: 사용량 파일 읽기 실패 ({error})",)
-    sample = hub_usage.parse_usage_history(text)
-    if sample is None:
-        return None, (f"{PLAN_USAGE_HISTORY_PATH}: 사용량 파일 계약 불일치 — 패널을 표시하지 않습니다",)
-    return sample, ()
-
-
-def _usage_for_snapshot(
-    now_ms: int, config: hub_model.HubConfig
-) -> tuple[hub_usage.UsageSample | None, tuple[str, ...]]:
-    """스위치 · 만료까지 적용해 화면에 실을 샘플을 고른다(사설).
-
-    `show_usage_panel` 이 꺼져 있으면 파일을 열지도 않는다(결정 U4) — CSS 로 숨기는 게
-    아니라 읽기 자체를 중단하는 것이 진짜 프라이버시 제어다. 만료(5시간 초과)는 앱을 안
-    켰을 뿐인 정상 시나리오라 경고 없이 숨긴다(결정 U3).
-    """
-    if not config.show_usage_panel:
-        return None, ()
-    sample, warnings = read_latest_usage_sample()
-    if sample is None:
-        return None, warnings
-    if hub_usage.is_usage_sample_expired(sample, now_ms):
-        return None, ()
-    return sample, warnings
-
-
-# ---- 한도 초기화 예정 시각 (docs/prps/hub-usage-reset-time-and-refresh.md) ----
-def read_rate_limit_capture() -> tuple[hub_usage.RateLimitResets | None, tuple[str, ...]]:
+# ---- 한도 초기화 예정 시각 + 사용률 (docs/prps/hub-usage-reset-time-and-refresh.md,
+#      docs/prps/hub-card-cleanup-and-usage-source.md 결정 P1~P8) ----
+def read_rate_limit_capture() -> tuple[hub_usage.RateLimitCapture | None, tuple[str, ...]]:
     """캡처 파일을 읽어 판다. 이 함수는 절대 예외를 던지지 않는다.
 
-    반환 계약은 read_latest_usage_sample 과 같은 격이다(PRP 「반환 계약」 표) — 파일 부재는
-    statusLine 미설치·미실행의 정상 상태라 경고를 내지 않는다. 읽기 실패·계약 불일치만
-    경고 1건을 남긴다.
+    반환 계약(PRP 「반환 계약」 표가 정본): 파일 부재는 statusLine 미설치·미실행의 정상
+    상태라 경고를 내지 않는다. 읽기 실패·계약 불일치만 경고 1건을 남긴다. 퍼센트의 유일한
+    출처가 됐으므로(결정 P1) `errors="replace"` 로 찢긴 멀티바이트 읽기를 흡수한다 — 그러지
+    않으면 `UnicodeDecodeError`(ValueError 서브클래스)가 `except OSError` 를 뚫는다
+    (read_latest_usage_sample 의 검수 M1 선례와 같은 문제, §17 발견 1).
     """
     if not RATE_LIMITS_PATH.is_file():
         return None, ()
     try:
-        text = RATE_LIMITS_PATH.read_text(encoding="utf-8")
+        text = RATE_LIMITS_PATH.read_text(encoding="utf-8", errors="replace")
     except OSError as error:
         return None, (f"{RATE_LIMITS_PATH}: 한도 초기화 시각 캡처 파일 읽기 실패 ({error})",)
-    resets = hub_usage.parse_rate_limit_capture(text)
-    if resets is None:
-        return None, (f"{RATE_LIMITS_PATH}: 캡처 파일 계약 불일치 — 초기화 예정 시각을 표시하지 않습니다",)
-    return resets, ()
+    capture = hub_usage.parse_rate_limit_capture(text)
+    if capture is None:
+        return None, (f"{RATE_LIMITS_PATH}: 캡처 파일 계약 불일치 — 사용량 패널을 표시하지 않습니다",)
+    return capture, ()
 
 
-def write_rate_limit_capture(resets: hub_usage.RateLimitResets) -> None:
+def write_rate_limit_capture(capture: hub_usage.RateLimitCapture) -> None:
     """캡처를 원자적으로 쓴다(hub_statusline.py 전용 쓰기 경로). _atomic_write_text 재사용."""
     HUB_HOME.mkdir(parents=True, exist_ok=True)
-    payload = json.dumps(dataclasses.asdict(resets), ensure_ascii=False)
+    payload = json.dumps(dataclasses.asdict(capture), ensure_ascii=False)
     _atomic_write_text(RATE_LIMITS_PATH, HUB_HOME, "rate_limits.json.", payload)
 
 
-def _rate_limit_resets_for_snapshot(
+def _capture_for_snapshot(
     now_ms: int, config: hub_model.HubConfig
-) -> tuple[hub_usage.RateLimitResets | None, tuple[str, ...]]:
-    """스위치 · 만료(지난 값)까지 적용해 화면에 실을 리셋 시각을 고른다(사설).
+) -> tuple[hub_usage.UsageSample | None, hub_usage.RateLimitResets | None, tuple[str, ...]]:
+    """캡처를 **사이클당 1회만** 읽어 화면에 실을 사용률·리셋 시각을 고른다(사설, 결정 P3).
 
-    `show_usage_panel` 이 꺼져 있으면 캡처 파일을 열지도 않는다(U4 와 동일한 프라이버시 제어).
-    지난 리셋 시각은 여기(서버 쪽 1차 필터, 결정 R5)에서 걷어낸다 — 클라이언트 쪽 2차 필터는
-    템플릿이 30초 틱마다 담당한다(탭이 몇 시간 열려 있을 수 있어서다).
+    `show_usage_panel` 이 꺼져 있으면 캡처 파일을 열지도 않는다(전제 8) — CSS 로 숨기는 게
+    아니라 읽기 자체를 중단하는 것이 진짜 프라이버시 제어다. 사용률은 5시간 만료(U3) 또는
+    세션 창 롤오버(결정 P5)면 경고 없이 숨긴다. 지난 리셋 시각은 여기(서버 쪽 1차 필터,
+    결정 R5)에서 걷어낸다 — 클라이언트 쪽 2차 필터는 템플릿이 30초 틱마다 담당한다.
+    두 사설 함수(_usage_for_snapshot·_rate_limit_resets_for_snapshot)가 각각 파일을 읽던
+    구조를 여기 하나로 합쳐, 계약 불일치 경고가 2건으로 중복되는 문제(GOTCHA 5)를 없앤다.
     """
     if not config.show_usage_panel:
-        return None, ()
-    resets, warnings = read_rate_limit_capture()
-    if resets is None:
-        return None, warnings
-    return hub_usage.drop_passed_resets(resets, now_ms), warnings
+        return None, None, ()
+    capture, warnings = read_rate_limit_capture()
+    if capture is None:
+        return None, None, warnings
+
+    usage = hub_usage.usage_sample_from_capture(capture)
+    if usage is not None and (
+        hub_usage.is_usage_sample_expired(usage, now_ms)
+        or hub_usage.is_session_window_rolled_over(capture, now_ms)
+    ):
+        usage = None
+
+    resets = hub_usage.resets_from_capture(capture)
+    if resets is not None:
+        resets = hub_usage.drop_passed_resets(resets, now_ms)
+
+    return usage, resets, warnings
 
 
 # ---- 합성 ----
@@ -404,10 +375,8 @@ def collect_snapshot(now_ms: int) -> hub_model.HubSnapshot:
     projects = hub_model.compose_project_views(
         tier1_by_path, sessions_by_path, tier3_by_path, now_ms, stale_after_ms
     )
-    usage, usage_warnings = _usage_for_snapshot(now_ms, config)
-    warnings.extend(usage_warnings)
-    rate_limit_resets, rate_limit_warnings = _rate_limit_resets_for_snapshot(now_ms, config)
-    warnings.extend(rate_limit_warnings)
+    usage, rate_limit_resets, capture_warnings = _capture_for_snapshot(now_ms, config)
+    warnings.extend(capture_warnings)
     return hub_model.HubSnapshot(
         collected_at_ms=now_ms,
         projects=projects,

@@ -26,10 +26,6 @@ def _minimal_snapshot(collected_at_ms: int) -> hub_model.HubSnapshot:
     )
 
 
-def _usage_history_text(t=1786433123899, fh=10, sd=19) -> str:
-    return json.dumps({"version": 2, "samples": [{"t": t, "org": "org-1", "u": {"fh": fh, "sd": sd}}]})
-
-
 class ServerRecordRoundTripTest(unittest.TestCase):
     """검수 m3 — read_server_record 가 실제로 hub_model.parse_server_record(공유 파서)를
     거치는지 실사용 경로(파일 I/O)로 확인한다."""
@@ -405,120 +401,9 @@ class LoadConfigValidationTest(unittest.TestCase):
         self.assertTrue(any("show_usage_panel" in warning for warning in warnings))
 
 
-class UsageForSnapshotTest(unittest.TestCase):
-    """케이스 18~23 — read_latest_usage_sample · _usage_for_snapshot 의 반환 계약(PRP 「반환 계약」 표)."""
-
-    def setUp(self) -> None:
-        self.temp_dir = Path(tempfile.mkdtemp())
-        self.original_path = hub_collect.PLAN_USAGE_HISTORY_PATH
-        hub_collect.PLAN_USAGE_HISTORY_PATH = self.temp_dir / "plan-usage-history.json"
-        self.now_ms = 1786433123899
-
-    def tearDown(self) -> None:
-        for path in self.temp_dir.glob("*"):
-            path.chmod(0o644)
-        hub_collect.PLAN_USAGE_HISTORY_PATH = self.original_path
-        shutil.rmtree(self.temp_dir, ignore_errors=True)
-
-    def test_case18_missing_file_returns_none_without_warnings(self) -> None:
-        sample, warnings = hub_collect.read_latest_usage_sample()
-        self.assertIsNone(sample)
-        self.assertEqual(warnings, ())
-
-    def test_case19_switch_off_never_reads_the_file(self) -> None:
-        """검수 m6 — read_latest_usage_sample 래퍼가 아니라 I/O 경계(Path.read_text)에서
-        직접 확인한다. 래퍼만 모킹하면 누군가 스위치 검사보다 먼저 read_text 를 호출하는
-        구현으로 바뀌어도 이 테스트가 통과해 U4 의 프라이버시 계약(읽지 않는다)이 고정되지
-        않는다."""
-        hub_collect.PLAN_USAGE_HISTORY_PATH.write_text(_usage_history_text())
-        config = hub_model.HubConfig(show_usage_panel=False)
-        with mock.patch.object(hub_collect.Path, "read_text") as mocked_read_text:
-            sample, warnings = hub_collect._usage_for_snapshot(self.now_ms, config)
-        self.assertIsNone(sample)
-        self.assertEqual(warnings, ())
-        mocked_read_text.assert_not_called()
-
-    def test_case20_broken_json_returns_none_with_one_warning(self) -> None:
-        hub_collect.PLAN_USAGE_HISTORY_PATH.write_text("{not valid json")
-        sample, warnings = hub_collect.read_latest_usage_sample()
-        self.assertIsNone(sample)
-        self.assertEqual(len(warnings), 1)
-
-    def test_case21_unreadable_file_returns_none_with_one_warning(self) -> None:
-        hub_collect.PLAN_USAGE_HISTORY_PATH.write_text(_usage_history_text())
-        hub_collect.PLAN_USAGE_HISTORY_PATH.chmod(0o000)
-        sample, warnings = hub_collect.read_latest_usage_sample()
-        self.assertIsNone(sample)
-        self.assertEqual(len(warnings), 1)
-
-    def test_case22_expired_sample_returns_none_without_warnings(self) -> None:
-        six_hours_ms = 6 * 60 * 60 * 1000
-        hub_collect.PLAN_USAGE_HISTORY_PATH.write_text(
-            _usage_history_text(t=self.now_ms - six_hours_ms)
-        )
-        config = hub_model.HubConfig()
-        sample, warnings = hub_collect._usage_for_snapshot(self.now_ms, config)
-        self.assertIsNone(sample)
-        self.assertEqual(warnings, ())
-
-    def test_case23_normal_file_returns_usage_sample(self) -> None:
-        hub_collect.PLAN_USAGE_HISTORY_PATH.write_text(
-            _usage_history_text(t=self.now_ms, fh=10, sd=19)
-        )
-        config = hub_model.HubConfig()
-        sample, warnings = hub_collect._usage_for_snapshot(self.now_ms, config)
-        self.assertEqual(
-            sample, hub_usage.UsageSample(sampled_at_ms=self.now_ms, session_percent=10, weekly_percent=19)
-        )
-        self.assertEqual(warnings, ())
-
-    def test_case_m1_truncated_multibyte_write_does_not_raise(self) -> None:
-        """검수 M1 회귀 — 앱이 파일을 다시 쓰는 도중의 찢긴 읽기(리스크 6)가 멀티바이트 경계에서
-        나면 UnicodeDecodeError 가 나는데, 이는 ValueError 서브클래스라 `except OSError` 로
-        잡히지 않는다. 기존 케이스 20(`"{not valid json"`)은 유효한 UTF-8 이라 이 경로를 못
-        잡는다 — 여기서는 실제로 잘린 멀티바이트 시퀀스를 바이트로 직접 쓴다."""
-        truncated_bytes = b'{"version":2,"samples":[{"t":1,"org":"o","u":{"fh":' + b"\xed\xa0"
-        hub_collect.PLAN_USAGE_HISTORY_PATH.write_bytes(truncated_bytes)
-        try:
-            sample, warnings = hub_collect.read_latest_usage_sample()
-        except UnicodeDecodeError:
-            self.fail("read_latest_usage_sample 가 UnicodeDecodeError 를 던졌다 — 절대 던지지 않아야 한다")
-        self.assertIsNone(sample)
-        self.assertEqual(len(warnings), 1)
-
-
-class CollectSnapshotUsageIsolationTest(unittest.TestCase):
-    """케이스 24 — 사용량 파싱 실패가 collect_snapshot() 전체를 죽이지 않는다(실패 격리 회귀 방지)."""
-
-    def setUp(self) -> None:
-        self.temp_dir = Path(tempfile.mkdtemp())
-        self.original_events_dir = hub_collect.EVENTS_DIR
-        self.original_projects_dir = hub_collect.PROJECTS_DIR
-        self.original_config_path = hub_collect.CONFIG_PATH
-        self.original_usage_path = hub_collect.PLAN_USAGE_HISTORY_PATH
-        hub_collect.EVENTS_DIR = self.temp_dir / "events"
-        hub_collect.PROJECTS_DIR = self.temp_dir / "projects"
-        hub_collect.CONFIG_PATH = self.temp_dir / "config.json"
-        hub_collect.PLAN_USAGE_HISTORY_PATH = self.temp_dir / "plan-usage-history.json"
-        hub_collect.PLAN_USAGE_HISTORY_PATH.write_text("{not valid json")
-
-    def tearDown(self) -> None:
-        hub_collect.EVENTS_DIR = self.original_events_dir
-        hub_collect.PROJECTS_DIR = self.original_projects_dir
-        hub_collect.CONFIG_PATH = self.original_config_path
-        hub_collect.PLAN_USAGE_HISTORY_PATH = self.original_usage_path
-        shutil.rmtree(self.temp_dir, ignore_errors=True)
-
-    def test_case24_broken_usage_file_does_not_abort_project_collection(self) -> None:
-        snapshot = hub_collect.collect_snapshot(1786433123899)
-        self.assertEqual(snapshot.projects, ())
-        self.assertIsNone(snapshot.usage)
-        self.assertTrue(any("사용량 파일 계약 불일치" in warning for warning in snapshot.warnings))
-
-
-class RateLimitCaptureTest(unittest.TestCase):
-    """케이스 R19~R22, R23b — read/write_rate_limit_capture · _rate_limit_resets_for_snapshot
-    (docs/prps/hub-usage-reset-time-and-refresh.md 「반환 계약」 표)."""
+class CaptureForSnapshotTest(unittest.TestCase):
+    """케이스 N30~N36 — _capture_for_snapshot 이 캡처 파일을 사이클당 1회만 읽어 사용률·
+    리셋 시각을 고르는 반환 계약(docs/prps/hub-card-cleanup-and-usage-source.md §5.5 표)."""
 
     def setUp(self) -> None:
         self.temp_dir = Path(tempfile.mkdtemp())
@@ -535,76 +420,176 @@ class RateLimitCaptureTest(unittest.TestCase):
         hub_collect.RATE_LIMITS_PATH = self.original_rate_limits_path
         shutil.rmtree(self.temp_dir, ignore_errors=True)
 
-    def _resets(self, session_resets_at_ms=None, weekly_resets_at_ms=None) -> hub_usage.RateLimitResets:
-        return hub_usage.RateLimitResets(
-            captured_at_ms=self.now_ms,
-            session_resets_at_ms=session_resets_at_ms,
-            weekly_resets_at_ms=weekly_resets_at_ms,
-        )
+    def _write_capture(self, **overrides) -> None:
+        payload = {
+            "captured_at_ms": self.now_ms,
+            "session_resets_at_ms": None,
+            "weekly_resets_at_ms": None,
+            "session_used_percent": None,
+            "weekly_used_percent": None,
+        }
+        payload.update(overrides)
+        hub_collect.RATE_LIMITS_PATH.write_text(json.dumps(payload))
 
-    def test_r19_missing_capture_file_returns_none_without_warnings(self) -> None:
-        resets, warnings = hub_collect.read_rate_limit_capture()
+    def test_n30_missing_capture_file_returns_none_pair_without_warnings(self) -> None:
+        usage, resets, warnings = hub_collect._capture_for_snapshot(self.now_ms, hub_model.HubConfig())
+        self.assertIsNone(usage)
         self.assertIsNone(resets)
         self.assertEqual(warnings, ())
 
-    def test_r20_broken_json_returns_none_with_one_warning(self) -> None:
-        hub_collect.RATE_LIMITS_PATH.write_text("{not valid json")
-        resets, warnings = hub_collect.read_rate_limit_capture()
-        self.assertIsNone(resets)
-        self.assertEqual(len(warnings), 1)
-
-    def test_r20_unreadable_file_returns_none_with_one_warning(self) -> None:
-        hub_collect.write_rate_limit_capture(self._resets(session_resets_at_ms=self.now_ms + 10_000))
-        hub_collect.RATE_LIMITS_PATH.chmod(0o000)
-        resets, warnings = hub_collect.read_rate_limit_capture()
-        self.assertIsNone(resets)
-        self.assertEqual(len(warnings), 1)
-
-    def test_r21_switch_off_never_reads_the_file(self) -> None:
+    def test_n31_switch_off_never_reads_the_file(self) -> None:
         """검수 m6 과 같은 이유 — 래퍼가 아니라 I/O 경계(Path.read_text)에서 직접 확인한다."""
-        hub_collect.write_rate_limit_capture(self._resets(session_resets_at_ms=self.now_ms + 10_000))
+        self._write_capture(session_used_percent=23, weekly_used_percent=41)
         config = hub_model.HubConfig(show_usage_panel=False)
         with mock.patch.object(hub_collect.Path, "read_text") as mocked_read_text:
-            resets, warnings = hub_collect._rate_limit_resets_for_snapshot(self.now_ms, config)
+            usage, resets, warnings = hub_collect._capture_for_snapshot(self.now_ms, config)
+        self.assertIsNone(usage)
         self.assertIsNone(resets)
         self.assertEqual(warnings, ())
         mocked_read_text.assert_not_called()
 
-    def test_r22_both_resets_in_the_past_returns_none_without_warnings(self) -> None:
-        hub_collect.write_rate_limit_capture(
-            self._resets(session_resets_at_ms=self.now_ms - 1000, weekly_resets_at_ms=self.now_ms - 2000)
+    def test_n32_normal_new_style_capture_fills_both_usage_and_resets(self) -> None:
+        self._write_capture(
+            session_resets_at_ms=self.now_ms + 10_000, weekly_resets_at_ms=self.now_ms + 20_000,
+            session_used_percent=10, weekly_used_percent=19,
         )
-        config = hub_model.HubConfig()
-        resets, warnings = hub_collect._rate_limit_resets_for_snapshot(self.now_ms, config)
-        self.assertIsNone(resets)
+        usage, resets, warnings = hub_collect._capture_for_snapshot(self.now_ms, hub_model.HubConfig())
+        self.assertEqual(
+            usage, hub_usage.UsageSample(sampled_at_ms=self.now_ms, session_percent=10, weekly_percent=19)
+        )
+        self.assertEqual(
+            resets,
+            hub_usage.RateLimitResets(
+                captured_at_ms=self.now_ms,
+                session_resets_at_ms=self.now_ms + 10_000,
+                weekly_resets_at_ms=self.now_ms + 20_000,
+            ),
+        )
         self.assertEqual(warnings, ())
 
+    def test_n33_legacy_capture_without_percent_fills_resets_only(self) -> None:
+        self._write_capture(session_resets_at_ms=self.now_ms + 10_000)
+        usage, resets, warnings = hub_collect._capture_for_snapshot(self.now_ms, hub_model.HubConfig())
+        self.assertIsNone(usage)
+        self.assertIsNotNone(resets)
+        self.assertEqual(warnings, ())
+
+    def test_n34_six_hours_old_capture_expires_usage_without_warnings(self) -> None:
+        six_hours_ms = 6 * 60 * 60 * 1000
+        self._write_capture(
+            captured_at_ms=self.now_ms - six_hours_ms, session_used_percent=10, weekly_used_percent=19
+        )
+        usage, _resets, warnings = hub_collect._capture_for_snapshot(self.now_ms, hub_model.HubConfig())
+        self.assertIsNone(usage)
+        self.assertEqual(warnings, ())
+
+    def test_n35_session_window_rolled_over_expires_usage_even_when_fresh(self) -> None:
+        """결정 P5 — 나이가 3시간뿐이어도 세션 리셋 시각이 이미 지났으면 퍼센트는 틀린 값이다."""
+        self._write_capture(
+            captured_at_ms=self.now_ms - 3 * 60 * 60 * 1000,
+            session_resets_at_ms=self.now_ms - 60 * 60 * 1000,
+            session_used_percent=10, weekly_used_percent=19,
+        )
+        usage, _resets, warnings = hub_collect._capture_for_snapshot(self.now_ms, hub_model.HubConfig())
+        self.assertIsNone(usage)
+        self.assertEqual(warnings, ())
+
+    def test_n36_broken_capture_file_returns_none_pair_with_exactly_one_warning(self) -> None:
+        """GOTCHA 5 회귀 — 캡처 파일을 사이클당 1회만 읽으므로 경고가 2건으로 중복되지 않는다."""
+        hub_collect.RATE_LIMITS_PATH.write_text("{not valid json")
+        usage, resets, warnings = hub_collect._capture_for_snapshot(self.now_ms, hub_model.HubConfig())
+        self.assertIsNone(usage)
+        self.assertIsNone(resets)
+        self.assertEqual(len(warnings), 1)
+
+    def test_n43_truncated_multibyte_capture_does_not_raise(self) -> None:
+        """§17 발견 1 회귀 — 찢긴 멀티바이트 읽기가 UnicodeDecodeError 로 except OSError 를
+        뚫지 않는다(read_latest_usage_sample 의 검수 M1 선례와 같은 문제, errors="replace" 로 흡수)."""
+        truncated_bytes = b'{"captured_at_ms":1,"session_used_percent":' + b"\xed\xa0"
+        hub_collect.RATE_LIMITS_PATH.write_bytes(truncated_bytes)
+        try:
+            capture, warnings = hub_collect.read_rate_limit_capture()
+        except UnicodeDecodeError:
+            self.fail("read_rate_limit_capture 가 UnicodeDecodeError 를 던졌다 — 절대 던지지 않아야 한다")
+        self.assertIsNone(capture)
+        self.assertEqual(len(warnings), 1)
+
+
+class RateLimitCaptureTest(unittest.TestCase):
+    """케이스 R19~R20·R23b — read/write_rate_limit_capture 의 I/O 반환 계약(신형 5필드).
+    스위치·만료·롤오버 시나리오는 CaptureForSnapshotTest(N30~N36)로 옮겼다."""
+
+    def setUp(self) -> None:
+        self.temp_dir = Path(tempfile.mkdtemp())
+        self.original_hub_home = hub_collect.HUB_HOME
+        self.original_rate_limits_path = hub_collect.RATE_LIMITS_PATH
+        hub_collect.HUB_HOME = self.temp_dir
+        hub_collect.RATE_LIMITS_PATH = self.temp_dir / "rate_limits.json"
+        self.now_ms = 1786433123899
+
+    def tearDown(self) -> None:
+        for path in self.temp_dir.glob("*"):
+            path.chmod(0o644)
+        hub_collect.HUB_HOME = self.original_hub_home
+        hub_collect.RATE_LIMITS_PATH = self.original_rate_limits_path
+        shutil.rmtree(self.temp_dir, ignore_errors=True)
+
+    def _capture(
+        self, session_resets_at_ms=None, weekly_resets_at_ms=None,
+        session_used_percent=None, weekly_used_percent=None,
+    ) -> hub_usage.RateLimitCapture:
+        return hub_usage.RateLimitCapture(
+            captured_at_ms=self.now_ms,
+            session_resets_at_ms=session_resets_at_ms,
+            weekly_resets_at_ms=weekly_resets_at_ms,
+            session_used_percent=session_used_percent,
+            weekly_used_percent=weekly_used_percent,
+        )
+
+    def test_r19_missing_capture_file_returns_none_without_warnings(self) -> None:
+        capture, warnings = hub_collect.read_rate_limit_capture()
+        self.assertIsNone(capture)
+        self.assertEqual(warnings, ())
+
+    def test_r20_broken_json_returns_none_with_one_warning(self) -> None:
+        hub_collect.RATE_LIMITS_PATH.write_text("{not valid json")
+        capture, warnings = hub_collect.read_rate_limit_capture()
+        self.assertIsNone(capture)
+        self.assertEqual(len(warnings), 1)
+
+    def test_r20_unreadable_file_returns_none_with_one_warning(self) -> None:
+        hub_collect.write_rate_limit_capture(self._capture(session_resets_at_ms=self.now_ms + 10_000))
+        hub_collect.RATE_LIMITS_PATH.chmod(0o000)
+        capture, warnings = hub_collect.read_rate_limit_capture()
+        self.assertIsNone(capture)
+        self.assertEqual(len(warnings), 1)
+
     def test_r23b_write_then_read_round_trip_is_atomic(self) -> None:
-        original = self._resets(
-            session_resets_at_ms=self.now_ms + 10_000, weekly_resets_at_ms=self.now_ms + 20_000
+        original = self._capture(
+            session_resets_at_ms=self.now_ms + 10_000, weekly_resets_at_ms=self.now_ms + 20_000,
+            session_used_percent=23, weekly_used_percent=41,
         )
         hub_collect.write_rate_limit_capture(original)
-        resets, warnings = hub_collect.read_rate_limit_capture()
-        self.assertEqual(resets, original)
+        capture, warnings = hub_collect.read_rate_limit_capture()
+        self.assertEqual(capture, original)
         self.assertEqual(warnings, ())
         leftover = list(self.temp_dir.glob("rate_limits.json.*.tmp"))
         self.assertEqual(leftover, [])
 
 
 class CollectSnapshotRateLimitIsolationTest(unittest.TestCase):
-    """케이스 R23 — 캡처 파일 계약 불일치가 collect_snapshot() 전체를 죽이지 않는다(실패 격리 회귀 방지)."""
+    """케이스 R23·N37 — 캡처 파일 계약 불일치가 collect_snapshot() 전체를 죽이지 않는다
+    (실패 격리 회귀 방지)."""
 
     def setUp(self) -> None:
         self.temp_dir = Path(tempfile.mkdtemp())
         self.original_events_dir = hub_collect.EVENTS_DIR
         self.original_projects_dir = hub_collect.PROJECTS_DIR
         self.original_config_path = hub_collect.CONFIG_PATH
-        self.original_usage_path = hub_collect.PLAN_USAGE_HISTORY_PATH
         self.original_rate_limits_path = hub_collect.RATE_LIMITS_PATH
         hub_collect.EVENTS_DIR = self.temp_dir / "events"
         hub_collect.PROJECTS_DIR = self.temp_dir / "projects"
         hub_collect.CONFIG_PATH = self.temp_dir / "config.json"
-        hub_collect.PLAN_USAGE_HISTORY_PATH = self.temp_dir / "plan-usage-history.json"
         hub_collect.RATE_LIMITS_PATH = self.temp_dir / "rate_limits.json"
         hub_collect.RATE_LIMITS_PATH.write_text("{not valid json")
 
@@ -612,7 +597,6 @@ class CollectSnapshotRateLimitIsolationTest(unittest.TestCase):
         hub_collect.EVENTS_DIR = self.original_events_dir
         hub_collect.PROJECTS_DIR = self.original_projects_dir
         hub_collect.CONFIG_PATH = self.original_config_path
-        hub_collect.PLAN_USAGE_HISTORY_PATH = self.original_usage_path
         hub_collect.RATE_LIMITS_PATH = self.original_rate_limits_path
         shutil.rmtree(self.temp_dir, ignore_errors=True)
 

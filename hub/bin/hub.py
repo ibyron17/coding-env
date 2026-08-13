@@ -128,17 +128,20 @@ def _rate_limit_capture_age_ms(now_ms: int, config: hub_model.HubConfig) -> int 
     """
     if not config.show_usage_panel:
         return None
-    resets, _warnings = hub_collect.read_rate_limit_capture()
-    if resets is None:
+    capture, _warnings = hub_collect.read_rate_limit_capture()
+    if capture is None:
         return None
-    return now_ms - resets.captured_at_ms
+    return now_ms - capture.captured_at_ms
 
 
 def _rate_limit_resets_remaining_ms(now_ms: int, config: hub_model.HubConfig) -> dict | None:
     """진단용 — 아직 지나지 않은 리셋까지 남은 시간(ms). 스위치 off·캡처 없음이면 None."""
     if not config.show_usage_panel:
         return None
-    resets, _warnings = hub_collect.read_rate_limit_capture()
+    capture, _warnings = hub_collect.read_rate_limit_capture()
+    if capture is None:
+        return None
+    resets = hub_usage.resets_from_capture(capture)
     if resets is None:
         return None
     remaining = hub_usage.drop_passed_resets(resets, now_ms)
@@ -153,16 +156,20 @@ def _rate_limit_resets_remaining_ms(now_ms: int, config: hub_model.HubConfig) ->
 
 
 def _usage_sample_age_ms(now_ms: int, config: hub_model.HubConfig) -> int | None:
-    """진단용 — 사용량 샘플의 나이(ms). 스위치 off·파일 없음·계약 불일치면 None.
+    """진단용 — 사용량 샘플의 나이(ms). 캡처에서 퍼센트를 실을 수 있을 때만 값이 있다.
 
-    만료 여부와 무관하게 나이를 보고한다 — 패널이 안 보이는 네 가지 이유(스위치 off·파일
-    없음·계약 불일치·만료)는 화면상 전부 "패널 없음"으로 똑같이 보이는데, 계약 불일치만
-    warnings 로 드러나므로 나머지를 구분할 창구가 이 필드뿐이다
-    (docs/prps/hub-theme-and-usage-panel.md).
+    스위치 off·캡처 부재·계약 불일치·퍼센트 부재(구형 캡처 등)면 None. 만료 여부와 무관하게
+    나이를 보고한다 — 패널이 안 보이는 여러 이유가 화면상 전부 "패널 없음"으로 똑같이
+    보이는데, 계약 불일치만 warnings 로 드러나므로 나머지를 구분할 창구가 이 필드와
+    `_rate_limit_capture_age_ms` 뿐이다(docs/prps/hub-card-cleanup-and-usage-source.md
+    결정 P1 — statusLine 등록이 없으면 이 필드는 항상 None 이다).
     """
     if not config.show_usage_panel:
         return None
-    sample, _warnings = hub_collect.read_latest_usage_sample()
+    capture, _warnings = hub_collect.read_rate_limit_capture()
+    if capture is None:
+        return None
+    sample = hub_usage.usage_sample_from_capture(capture)
     if sample is None:
         return None
     return now_ms - sample.sampled_at_ms

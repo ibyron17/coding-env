@@ -104,7 +104,7 @@ class SubagentTrackingTest(unittest.TestCase):
 
 
 class SummarizeAgentRunsTest(unittest.TestCase):
-    """A1~A9 — 세션의 서브에이전트 요약(요구 1). infer_phase 를 대체한다."""
+    """A1~A11 — 세션의 서브에이전트 요약(요구 1). infer_phase 를 대체한다."""
 
     def test_a1_all_started_types_survive_after_completion(self) -> None:
         events = [
@@ -215,6 +215,37 @@ class SummarizeAgentRunsTest(unittest.TestCase):
             _snapshot((hub_model.SubagentRunView(agent_type="implementer", phase="구현", is_running=True),))
         )
         self.assertNotEqual(key_without_runs, key_with_runs)
+
+    def test_a10_running_type_sorted_before_later_started_ended_type(self) -> None:
+        """결정 K2 — 실행 중 타입은 나중에 시작한 종료 타입보다 앞에 온다.
+
+        상한(MAX_VISIBLE_AGENT_CHIPS) 밖으로 밀려도 지금 진행 중인 작업은 계속 보여야 한다
+        (+N 오버플로 칩을 없앤 결정 K1~K3 의 전제).
+        """
+        events = [
+            _event("SubagentStart", 0, agent_id="agt-1", agent_type="code-reviewer"),
+            _event("SubagentStart", 1000, agent_id="agt-2", agent_type="implementer"),
+            _event("SubagentStop", 1100, agent_id="agt-2", agent_type="implementer"),
+        ]
+        facts = _facts_from(events)
+        runs = hub_model.summarize_agent_runs(facts)
+        self.assertEqual([run.agent_type for run in runs], ["code-reviewer", "implementer"])
+        self.assertTrue(runs[0].is_running)
+        self.assertFalse(runs[1].is_running)
+
+    def test_a11_running_group_sorted_by_recency_then_ended_group(self) -> None:
+        """실행 중 타입이 여럿이면 그 안에서는 최근 시작 순, 그 다음에 종료 타입이 온다."""
+        events = [
+            _event("SubagentStart", 0, agent_id="agt-1", agent_type="design-architect"),
+            _event("SubagentStop", 100, agent_id="agt-1", agent_type="design-architect"),
+            _event("SubagentStart", 200, agent_id="agt-2", agent_type="code-reviewer"),
+            _event("SubagentStart", 300, agent_id="agt-3", agent_type="implementer"),
+        ]
+        facts = _facts_from(events)
+        runs = hub_model.summarize_agent_runs(facts)
+        self.assertEqual(
+            [run.agent_type for run in runs], ["implementer", "code-reviewer", "design-architect"]
+        )
 
 
 class ParseEventLineTest(unittest.TestCase):

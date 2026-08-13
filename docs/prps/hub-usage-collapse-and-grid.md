@@ -353,6 +353,10 @@ usageToggleButton.addEventListener('click', function(){
 | 1016 ~ 1347px | 3 | 320 ~ 431px | 아이패드 가로(1024), 13" 반쪽 창 |
 | ≥ 1348px | **4 (상한)** | 320 ~ **343px** | 13"~16" 노트북(1440~1728), 27"(2560) |
 
+> **개정됨.** 열 수 상한이 4 → **3** 으로 제한됐다(결정 W1,
+> [`hub-card-cleanup-and-usage-source.md`](./hub-card-cleanup-and-usage-source.md)). 1·2열
+> 임계값(683/1015px)은 불변.
+
 - **왜 최소폭 320px 인가**: 배지 3개(`티어 N`·상태·경과)가 붙는 `.project-head` 는
   `flex-wrap:wrap` 이라 좁아지면 `.last-activity` 가 자기 줄로 내려간다. 320px 은 한국어
   프로젝트명 약 20자 + 배지 2개가 한 줄에 들어가는 최소치다. 그 아래로 내리면 카드가
