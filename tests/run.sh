@@ -1982,10 +1982,10 @@ test_hub_unit_tests() {
   ((passed_tests++))
 }
 
-# T25: 허브 문서·상수 정합성 (하위 검증 T25-1~T25-69)
+# T25: 허브 문서·상수 정합성 (하위 검증 T25-1~T25-70)
 test_hub_docs_and_constants() {
   local test_name="T25"
-  local test_desc="허브 문서·상수 정합성 (T25-1~T25-69)"
+  local test_desc="허브 문서·상수 정합성 (T25-1~T25-70)"
   log_test_name "$test_name" "$test_desc"
 
   local hub_settings_file="$REPO_ROOT/hub/bin/hub_settings.py"
@@ -3039,6 +3039,16 @@ PYEOF
     record_failure "$test_name" "T25-69: hub/README.md 모달 절에 배경 어두워짐 설명이 없음"
     return 1
   fi
+
+  # T25-70: 모달 열기 애니메이션 — 애니메이션 규칙 2개와 reduced-motion 무효화가 세트로
+  # 있어야 한다(T25-65 의 card-working-glow 와 같은 원칙 — 하나만 지워지는 회귀를 막는다).
+  local modal_animation_token
+  for modal_animation_token in 'animation:modal-open' '@keyframes modal-open' '@keyframes backdrop-fade' '.modal[open],.modal[open]::backdrop{animation:none}'; do
+    if ! grep -qF -- "$modal_animation_token" "$hub_template_file"; then
+      record_failure "$test_name" "T25-70: hub_template.html 에 $modal_animation_token 이 없음"
+      return 1
+    fi
+  done
 
   log_ok "$test_name 통과"
   ((passed_tests++))

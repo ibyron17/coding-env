@@ -1038,6 +1038,13 @@ document.addEventListener('drop', function(event){
 `::backdrop` 에 transition 을 걸면 `<dialog>` 의 즉시 `close()` 와 어긋나 사라지는 순간이
 어색해지고, `@starting-style`·`allow-discrete` 같은 신문법을 끌어와야 한다. 요구에 없다.
 
+> **개정(2026-08-13).** 사용자가 모달을 띄울 때의 애니메이션을 명시 요구해 **열기 애니메이션만**
+> 도입한다(`hub_template.html` 의 `.modal[open]`·`.modal[open]::backdrop`, opacity·transform 만
+> 사용하는 `@keyframes modal-open`·`backdrop-fade`). **닫기 미도입 근거는 그대로 유지된다** —
+> `<dialog>.close()` 는 여전히 즉시이고, 닫기 페이드에는 여전히 `@starting-style`·`allow-discrete`
+> 신문법이 필요하기 때문이다. `showModal()` 이 매번 `[open]` 을 새로 부여해 `display:none→flex`
+> 전환에 열기 애니메이션이 자연히 재생되므로 JS 변경은 없다.
+
 ---
 
 ## 불변식 H1″ → **H1‴** 개정 (개정 2)
