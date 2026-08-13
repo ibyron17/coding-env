@@ -9,7 +9,7 @@ set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 readonly REPO_ROOT
-readonly HUB_FILE_COUNT=11
+readonly HUB_FILE_COUNT=12
 readonly MAX_DIFF_LINES=20
 readonly TARGET_HUB_DIR="$HOME/.claude/hub"
 readonly TARGET_BIN_DIR="$TARGET_HUB_DIR/bin"

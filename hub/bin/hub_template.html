@@ -16,10 +16,23 @@ DZH:HUB 데이터 계약
   갱신 모드는 /dashboard 와 같은 판정이다: location.protocol 이 http(s) 면 1분 폴링
   (자기 URL 을 받아 문자열 전체 비교), 아니면 포커스 복귀 시 location.reload(). 두 모드
   모두 #dzh-refresh 버튼과 포커스 복귀 시에도 같은 즉시 갱신 경로를 탄다.
-  폴링이 내용을 갱신하는 요소는 #dzh-app · #dzh-collected-at · #dzh-usage-body ·
-  #dzh-usage-summary 네 개뿐이다(불변식 H1′, docs/prps/hub-usage-collapse-and-grid.md).
+
+  불변식 H1″(정본: docs/prps/hub-card-interactions-and-usage.md). 폴링·틱이 내용을
+  갱신하는 대상은 #dzh-app(자식 전체 교체) · #dzh-usage-body(innerHTML) ·
+  #dzh-usage-summary(textContent) · #dzh-refresh 의 data-tooltip·class 속성뿐이다.
+  다음 노드는 정적이며 폴링이 절대 교체하지 않는다: #dzh-usage, #dzh-usage-toggle,
+  #dzh-theme-toggle, #dzh-tooltip, #dzh-dashboard-modal(과 그 자식 전부), #dzh-live.
+  이들의 갱신은 속성·textContent 단위로만 한다. 여기에 두 조항이 더해진다 —
+  ① 순서는 데이터가 아니라 사용자 상태다: #dzh-app 자식의 배치 순서는 스냅샷이 아니라
+  storedProjectOrder(모듈 스코프 + localStorage['dzh-project-order'])가 정한다. 서버의
+  활동순 정렬은 아직 저장 순서에 없는 신규 프로젝트끼리의 상대 순서를 정할 때만 쓰인다.
+  ② 드래그 중에는 다시 그리지 않는다: isReordering 이 참이면 render() 는 #dzh-app 을
+  건드리지 않고 즉시 반환한다(재렌더가 드래그 중인 노드를 파괴하면 드롭이 취소된다).
+  원칙은 그대로다 — 사용자 상태(포커스·접힘·선택·순서·열린 모달)를 가진 것은 재렌더
+  대상 밖에 둔다.
+
   #dzh-usage 와 그 안의 #dzh-usage-toggle 은 정적 노드이며 class·aria-expanded 속성만
-  갱신한다(노드 교체 금지). 테마 토글 버튼은 이 넷 바깥의 정적 마크업이라 폴링과 무관하게
+  갱신한다(노드 교체 금지). 테마 토글 버튼은 이들 바깥의 정적 마크업이라 폴링과 무관하게
   DOM 이 그대로 유지된다. rate_limit_resets(있으면)는 펼침 본문에 초기화 예정 시각 줄로
   더해진다(docs/prps/hub-usage-reset-time-and-refresh.md). usage·rate_limit_resets 의 값은
   모두 같은 statusLine 캡처(rate_limits.json) 하나에서 온다 — 퍼센트와 초기화 예정 시각을
@@ -28,6 +41,10 @@ DZH:HUB 데이터 계약
   hub-session-activity-and-tooltip.md). 폴링 대상이 아니다 — 사용자 상호작용(hover·focus)만
   내용을 바꾼다. 트리거는 data-tooltip="…" 속성을 가진 임의의 요소이며, 리스너는 재렌더로
   죽지 않도록 document 에 위임한다.
+  프로젝트 대시보드 모달(#dzh-dashboard-modal, docs/prps/hub-card-interactions-and-usage.md
+  결정 N5)은 <dialog>+showModal() 정적 싱글턴이다. 카드 클릭이 iframe.src 와 제목만 바꾸고,
+  닫힘(close 이벤트)에서 iframe.src 를 비워 숨은 폴링을 멈춘다. #dzh-live 는 카드 순서
+  변경(R2)을 스크린리더에 알리는 aria-live="polite" 정적 영역이다.
 -->
 <style>
   :root{
@@ -66,15 +83,37 @@ DZH:HUB 데이터 계약
      (결정 W1, docs/prps/hub-card-cleanup-and-usage-source.md) */
   #dzh-app{display:grid;grid-template-columns:repeat(auto-fill,minmax(max(320px,calc((100% - 24px)/3 - 1px)),1fr));gap:12px;align-items:start}
   #dzh-app>.empty,#dzh-app>.warnings{grid-column:1/-1}
-  .head-row{display:flex;align-items:baseline;justify-content:space-between;flex-wrap:wrap;gap:8px 16px;margin-bottom:18px}
-  .head-actions{display:flex;align-items:baseline;gap:12px;flex-wrap:wrap}
+  /* 헤더 버튼 클러스터(.top-actions)가 고정 위치에서 이 행 안으로 들어왔다(R5) —
+     flex-wrap 은 360px 안팎의 극단적으로 좁은 화면에서 클러스터가 겹치는 대신 아래 줄로
+     내려가게 한다. */
+  .head-row{display:flex;align-items:center;flex-wrap:wrap;gap:12px;margin-bottom:18px}
   h1{font-size:20px;margin:0;color:var(--head);letter-spacing:-.4px}
   /* 340px 는 헤더 블록(project-head+path+tier1) + 세션 약 3개가 스크롤 없이 들어가도록 고른
      값이다 — 넘치는 세션은 .sessions 만 내부 스크롤된다. 카드 높이를 프로젝트마다 다르게
      만들지 않기 위한 고정값이라 근거 없이 바꾸지 마라. */
   .card{background:var(--surface);border:1px solid var(--line);border-radius:14px;padding:16px 20px;box-shadow:var(--shadow);height:340px;display:flex;flex-direction:column;overflow:hidden}
+  /* 클릭 가능 ⇔ dashboard_key 존재(결정 N2) — 속성 존재만으로 커서를 바꿔 별도 클래스
+     없이도 화면 상태와 데이터가 항상 일치하게 한다(R3). */
+  .card[data-dashboard-key]{cursor:pointer}
+  .card[data-dashboard-key]:hover{border-color:var(--accent)}
   .project-head{display:flex;align-items:center;gap:10px;flex-wrap:nowrap}
-  .project-name{font-size:15px;font-weight:800;color:var(--head);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0;flex:1 1 auto}
+  /* 드래그 핸들(R2) — 카드 전체 클릭(R3)과 조작 영역이 겹치지 않도록 전용 버튼으로 둔다
+     (결정 O5). 22px 는 인접 배지들보다 살짝 작게 잡아 "잡는 곳"이라는 보조적 위계를 준다. */
+  .card-drag-handle{width:22px;height:22px;flex:0 0 auto;padding:0;color:var(--muted);
+                     background:transparent;border:1px solid var(--line);border-radius:6px;
+                     cursor:grab;display:inline-flex;align-items:center;justify-content:center;
+                     font-size:13px;line-height:1}
+  .card-drag-handle:hover{color:var(--accent-ink);border-color:var(--accent)}
+  .card-drag-handle:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+  /* font:inherit 를 먼저 두고 font-size·font-weight 를 뒤에 다시 적어, <button> 기본 폰트만
+     리셋하고 크기·굵기는 명시값을 쓰게 한다(순서 의존 — .usage-toggle 과 같은 관례). 티어
+     2·3 은 <span> 으로 렌더돼(R3) 이 리셋은 그때 아무 효과가 없다. */
+  .project-name{font:inherit;font-size:15px;font-weight:800;color:var(--head);overflow:hidden;
+                text-overflow:ellipsis;white-space:nowrap;min-width:0;flex:1 1 auto;
+                border:0;background:none;padding:0;text-align:left}
+  button.project-name{cursor:pointer}
+  button.project-name:hover{color:var(--accent-ink)}
+  button.project-name:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
   /* inline-block 이던 시절엔 line-height 가 body(1.5)를 물려받아 패딩 위아래가 비대칭으로
      보였다(글리프·텍스트가 위로 치우침) — inline-flex+align-items:center 로 박스 기준
      중앙정렷하고 line-height:1 로 그 여백 자체를 없앤다. */
@@ -113,14 +152,24 @@ DZH:HUB 데이터 계약
   .warnings{font-size:12px;color:var(--attention);margin-top:6px;border-left:3px solid var(--attention);padding-left:8px}
   .warnings::before{content:"⚠ "}
   .foot{font-size:11.5px;color:var(--muted)}
-  .theme-toggle{position:fixed;top:16px;right:16px;z-index:30;font-size:11.5px;font-weight:700;color:var(--muted);background:var(--surface);border:1px solid var(--line);border-radius:999px;padding:6px 12px;cursor:pointer;box-shadow:var(--shadow)}
-  .theme-toggle:hover{color:var(--accent-ink);border-color:var(--accent)}
-  /* 아이콘 전용 버튼 — 텍스트가 없어 aria-label 로 접근성 이름을 준다(마크업 참고). 정사각형
-     크기를 고정해 원형 배지처럼 보이게 한다(글자 수에 따라 늘어나던 이전 텍스트 버튼과 다름).
-     32px 는 유니코드 글리프(26px)가 너무 작다는 피드백을 반영해 키운 값이다. */
-  .refresh-btn{width:32px;height:32px;padding:0;color:var(--muted);background:var(--surface);border:1px solid var(--line);border-radius:999px;cursor:pointer;display:inline-flex;align-items:center;justify-content:center}
-  .refresh-btn:hover{color:var(--accent-ink);border-color:var(--accent)}
-  .refresh-btn svg{width:18px;height:18px}
+  /* 헤더 버튼 클러스터 — 새로고침·테마 버튼을 묶는다. R5 로 고정 위치를 버리고 .head-row
+     문서 흐름 안(flex)으로 들어왔다 — margin-left:auto 로 항상 오른쪽 끝에 붙는다. */
+  .top-actions{margin-left:auto;flex:0 0 auto;display:flex;align-items:center;gap:8px}
+  /* 32px 원형 아이콘 버튼 — 헤더 클러스터의 두 버튼과 모달 닫기 버튼이 공유한다(결정 Y4).
+     같은 줄에 나란히 서는 버튼들이 같은 크기·같은 테두리를 갖게 하려고 클래스를 하나로
+     묶었다(추측성 추상화가 아니라, 지금 3곳이 실제로 같아야 한다는 요구에서 나온 것이다).
+     텍스트가 없어 aria-label 로 접근성 이름을 준다(마크업 참고). 32px 는 유니코드 글리프
+     (26px)가 너무 작다는 피드백을 반영해 키운 값이다. */
+  .icon-btn{width:32px;height:32px;padding:0;color:var(--muted);background:var(--surface);
+            border:1px solid var(--line);border-radius:999px;cursor:pointer;
+            display:inline-flex;align-items:center;justify-content:center;box-shadow:var(--shadow)}
+  .icon-btn:hover{color:var(--accent-ink);border-color:var(--accent)}
+  .icon-btn:focus-visible{outline:2px solid var(--accent);outline-offset:3px}
+  .icon-btn svg{width:18px;height:18px}
+  /* 연결 두절은 hover 전용 툴팁만으로는 아무도 못 본다 — 버튼 자체를 경고색으로 바꿔
+     상시 가시 신호를 유지한다(연결 상태 문구가 #dzh-collected-at 에서 툴팁으로 이동한
+     뒤에도 "화면이 멈췄다"는 사실만은 능동적 상호작용 없이 보여야 한다). */
+  .refresh-btn.connection-lost{color:var(--attention);border-color:var(--attention);background:var(--attention-soft)}
   /* 218px 은 JS 가 못 도는 경우에만 쓰이는 fallback 이다(펼침 실측 186 + 여유 32,
      .usage-toggle 의 line-height:1 적용 이후 재실측 — 검수 LOW). 평소에는
      applyUsageClearance() 가 --usage-clearance 를 실측값으로 덮어쓴다 —
@@ -154,22 +203,42 @@ DZH:HUB 데이터 계약
            color:var(--bg);background:var(--ink);box-shadow:var(--shadow);
            overflow-wrap:anywhere;visibility:hidden}
   .tooltip.tooltip-visible{visibility:visible}
+  /* 프로젝트 대시보드 모달(R3) — 네이티브 <dialog>+showModal() 이 포커스 트랩·ESC 닫기·
+     배경 inert 를 공짜로 준다(결정 N5). display 오버라이드는 [open] 에만 걸어야 한다 —
+     .modal 만으로 걸면 dialog 가 닫혀 있어도(open 속성 없음) author 스타일이 UA 의
+     "dialog:not([open]){display:none}" 보다 우선해 화면에 그대로 남는 흔한 함정이 된다.
+     1040×760 은 /dashboard 원본 레이아웃이 데스크톱 화면에서 눌리지 않도록 넉넉히 잡은
+     임의값이다(실측 아님 — 문제가 되면 조정한다). 32px 뷰포트 여백은 .usage·.tooltip 이
+     이미 쓰는 것과 같은 관례. */
+  .modal{width:min(1040px, calc(100vw - 32px));height:min(760px, calc(100vh - 32px));
+         padding:0;border:0;border-radius:14px;background:var(--surface);color:var(--ink);
+         box-shadow:var(--shadow)}
+  .modal[open]{display:flex;flex-direction:column}
+  .modal-head{display:flex;align-items:center;justify-content:space-between;gap:12px;
+              padding:14px 18px;border-bottom:1px solid var(--line)}
+  .modal-title{font-size:14px;font-weight:800;color:var(--head);overflow:hidden;
+               text-overflow:ellipsis;white-space:nowrap}
+  .modal-frame{flex:1 1 auto;width:100%;border:0}
 </style>
 <script>
-/* body 파싱 전에 실행돼 첫 페인트부터 확정 테마로 그린다(FOUC 방지, 결정 T3).
-   localStorage 접근은 file:// 나 저장소 차단 환경에서 던질 수 있어 반드시 감싼다. */
-try{var m=localStorage.getItem('dzh-theme');
-    if(m==='light'||m==='dark')document.documentElement.setAttribute('data-theme',m);}catch(e){}
+/* body 파싱 전에 실행돼 첫 페인트부터 확정 테마로 그린다(FOUC 방지).
+   저장값이 없으면 시스템 선호를 한 번만 읽어 확정하고 그대로 굳힌다(결정 Y1·Y3) —
+   이후로는 OS 테마가 바뀌어도 따라가지 않는다. localStorage 는 file:// 등에서 던질 수 있어 감싼다. */
+try{
+  var s = localStorage.getItem('dzh-theme');
+  var t = (s === 'light' || s === 'dark') ? s
+        : ((window.matchMedia && matchMedia('(prefers-color-scheme: dark)').matches) ? 'dark' : 'light');
+  document.documentElement.setAttribute('data-theme', t);
+  if(s !== t) localStorage.setItem('dzh-theme', t);
+}catch(e){}
 </script>
 </head>
 <body>
-<button id="dzh-theme-toggle" class="theme-toggle" type="button">테마: 시스템</button>
 <div class="wrap">
   <div class="head-row">
     <h1>Claude Agents Manager</h1>
-    <div class="head-actions">
-      <span class="foot" id="dzh-collected-at"></span>
-      <button id="dzh-refresh" class="refresh-btn" type="button" aria-label="새로고침" data-tooltip="새로고침">
+    <div class="top-actions">
+      <button id="dzh-refresh" class="icon-btn refresh-btn" type="button" aria-label="새로고침" data-tooltip="새로고침">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">
           <path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8"/>
           <path d="M21 3v5h-5"/>
@@ -177,6 +246,8 @@ try{var m=localStorage.getItem('dzh-theme');
           <path d="M8 16H3v5"/>
         </svg>
       </button>
+      <button id="dzh-theme-toggle" class="icon-btn theme-toggle" type="button"
+              aria-label="다크 테마로 전환" data-tooltip="다크 테마로 전환">☾</button>
     </div>
   </div>
   <div id="dzh-app"><div class="empty">불러오는 중…</div></div>
@@ -191,41 +262,68 @@ try{var m=localStorage.getItem('dzh-theme');
   <div id="dzh-usage-body" class="usage-body"></div>
 </aside>
 <div id="dzh-tooltip" class="tooltip" role="tooltip"></div>
+<dialog id="dzh-dashboard-modal" class="modal" aria-labelledby="dzh-modal-title">
+  <div class="modal-head">
+    <span id="dzh-modal-title" class="modal-title"></span>
+    <button id="dzh-modal-close" class="icon-btn" type="button"
+            aria-label="닫기" data-tooltip="닫기 (Esc)">✕</button>
+  </div>
+  <iframe id="dzh-modal-frame" class="modal-frame"
+          aria-label="프로젝트 진행 대시보드"></iframe>
+</dialog>
+<div id="dzh-live" class="sr-only" aria-live="polite"></div>
 <script type="application/json" id="dzh-data">{}</script>
 <script>
 (function(){
-  // 테마 토글 — 3상태 순환(시스템 → 라이트 → 다크 → 시스템, 결정 T2). 버튼은 #dzh-app 밖의
-  // 정적 마크업이라 1분 폴링(불변식 H1)과 무관하게 이 IIFE 하나로 수명이 끝난다.
+  // 테마 토글 — 라이트/다크 2상태(결정 Y1~Y4). <head> 인라인 스크립트가 첫 페인트 전에
+  // 이미 시스템 선호를 1회 확정해 두므로(FOUC 방지), 여기서는 그 값을 읽고 바꾸기만 한다.
+  // 버튼은 #dzh-app 밖의 정적 마크업이라 폴링(불변식 H1″)과 무관하게 이 IIFE 하나로 수명이
+  // 끝난다.
   var THEME_STORAGE_KEY = 'dzh-theme';
-  var THEME_CYCLE = ['system', 'light', 'dark'];
-  var THEME_BUTTON_LABEL = {system:'테마: 시스템', light:'테마: 라이트', dark:'테마: 다크'};
+  var THEME_CYCLE = ['light', 'dark'];
+  // 글리프·라벨은 "지금" 이 아니라 "전환될 대상"을 가리킨다 — 라이트일 때 ☾(다크로 전환),
+  // 다크일 때 ☀(라이트로 전환). 새로고침 버튼의 라벨 규약("동작"을 말한다)과 같다.
+  var THEME_GLYPH = {light:'☾', dark:'☀'};
+  var THEME_ACTION_LABEL = {light:'다크 테마로 전환', dark:'라이트 테마로 전환'};
   var toggleButton = document.getElementById('dzh-theme-toggle');
   if(!toggleButton) return;
 
-  function currentThemeOverride(){
+  // 시스템 선호를 1회 읽는다. matchMedia 가 없는 극단적 환경이면 라이트로 낙착(결정 Y3).
+  function resolveSystemTheme(){
     try{
-      var stored = localStorage.getItem(THEME_STORAGE_KEY);
-      return (stored === 'light' || stored === 'dark') ? stored : 'system';
+      return (window.matchMedia && matchMedia('(prefers-color-scheme: dark)').matches) ? 'dark' : 'light';
     }catch(e){
-      return 'system';
+      return 'light';
     }
   }
 
-  function applyThemeButtonLabel(){
-    toggleButton.textContent = THEME_BUTTON_LABEL[currentThemeOverride()];
+  // 지금 유효한 테마. 저장값이 light/dark 가 아니면(부재·구버전 문자열 등) 시스템 선호로
+  // 확정한다 — <head> 스크립트가 이미 저장해 두지만, localStorage 가 막힌 환경에서는
+  // 여기서도 방어적으로 다시 판정한다(결정 Y1).
+  function currentTheme(){
+    try{
+      var stored = localStorage.getItem(THEME_STORAGE_KEY);
+      return (stored === 'light' || stored === 'dark') ? stored : resolveSystemTheme();
+    }catch(e){
+      return resolveSystemTheme();
+    }
+  }
+
+  // data-theme 속성·글리프·aria-label·data-tooltip 을 한꺼번에 맞춘다.
+  function applyTheme(theme){
+    document.documentElement.setAttribute('data-theme', theme);
+    toggleButton.textContent = THEME_GLYPH[theme];
+    toggleButton.setAttribute('aria-label', THEME_ACTION_LABEL[theme]);
+    toggleButton.setAttribute('data-tooltip', THEME_ACTION_LABEL[theme]);
   }
 
   toggleButton.addEventListener('click', function(){
-    var next = THEME_CYCLE[(THEME_CYCLE.indexOf(currentThemeOverride()) + 1) % THEME_CYCLE.length];
-    try{
-      if(next === 'system') localStorage.removeItem(THEME_STORAGE_KEY);
-      else localStorage.setItem(THEME_STORAGE_KEY, next);
-    }catch(e){ /* 저장 실패 — 이번 페이지 로드 동안만 토글이 적용된다(결정 T3) */ }
-    if(next === 'system') document.documentElement.removeAttribute('data-theme');
-    else document.documentElement.setAttribute('data-theme', next);
-    applyThemeButtonLabel();
+    var next = THEME_CYCLE[(THEME_CYCLE.indexOf(currentTheme()) + 1) % THEME_CYCLE.length];
+    try{ localStorage.setItem(THEME_STORAGE_KEY, next); }
+    catch(e){ /* 저장 실패 — 이번 페이지 로드 동안만 토글이 적용된다(결정 Y3) */ }
+    applyTheme(next);
   });
-  applyThemeButtonLabel();
+  applyTheme(currentTheme());
 })();
 
 (function(){
@@ -335,6 +433,17 @@ try{var m=localStorage.getItem('dzh-theme');
   var tooltipDismissObserver = new MutationObserver(function(){ hideTooltip(); });
   if(appElForTooltipObserver) tooltipDismissObserver.observe(appElForTooltipObserver, {childList: true});
   if(usageBodyElForTooltipObserver) tooltipDismissObserver.observe(usageBodyElForTooltipObserver, {childList: true});
+
+  // 표시 중인 트리거의 data-tooltip 이 폴링·틱으로 갱신될 수 있다(#dzh-refresh 의 연결 상태
+  // 문구 등) — showTooltip 은 진입 시점에만 속성을 읽으므로, 포인터를 올려둔 채면 다음 진입
+  // 전까지 낡은 문구가 남는다. 속성 변경을 감시해 표시 중이면 그 자리에서 다시 그린다.
+  var tooltipTextRefreshObserver = new MutationObserver(function(mutations){
+    if(!currentTrigger) return;
+    for(var i = 0; i < mutations.length; i++){
+      if(mutations[i].target === currentTrigger){ showTooltip(currentTrigger); return; }
+    }
+  });
+  tooltipTextRefreshObserver.observe(document.body, {attributes: true, attributeFilter: ['data-tooltip'], subtree: true});
 })();
 
 (function(){
@@ -373,9 +482,15 @@ try{var m=localStorage.getItem('dzh-theme');
   // MS_PER_HOUR 선언 뒤에 둔다 — var 호이스팅은 선언만 끌어올리고 할당은 올리지 않으므로
   // 앞에 두면 12 * undefined = NaN 이 되어 컷오프가 조용히 죽는다(GOTCHA 2).
   var STALE_SESSION_HIDE_AFTER_MS = 12 * MS_PER_HOUR;
+  // 카드 순서 사용자 지정(R2, 결정 O1~O5).
+  var PROJECT_ORDER_STORAGE_KEY = 'dzh-project-order';
+  var MAX_STORED_PROJECT_ORDER = 200;
+  var DRAG_HANDLE_SELECTOR = '.card-drag-handle';
+  var DRAG_HANDLE_HINT = '드래그하거나 ←/→ 키로 순서 변경';
+  // 프로젝트 대시보드 모달(R3, 결정 N7) — file:// 모드는 클릭 대상에서 빠지고 사유를 안내한다.
+  var FILE_MODE_DASHBOARD_HINT = '허브 서버를 켜면(/hub server start) 카드에서 대시보드를 볼 수 있습니다';
 
   var app = document.getElementById('dzh-app');
-  var collectedAtLabel = document.getElementById('dzh-collected-at');
   var refreshButton = document.getElementById('dzh-refresh');
   var usageEl = document.getElementById('dzh-usage');
   var usageToggleButton = document.getElementById('dzh-usage-toggle');
@@ -388,9 +503,15 @@ try{var m=localStorage.getItem('dzh-theme');
   var initialParseError = initialDataParse.error;
   var lastHtml = '';
   // 서버(hub_model.build_project_views)는 매 수집마다 last_activity_at_ms 내림차순으로
-  // 재정렬한다 — 클라이언트는 그 순서를 그대로 쓰지 않고 path 기준 최초 등장 순서를
-  // 기억해 카드 위치를 고정한다(카드가 갱신마다 자리를 옮기면 읽기 흐름이 끊긴다).
-  var projectDisplayOrder = [];
+  // 재정렬한다 — 클라이언트는 그 순서를 그대로 쓰지 않고 사용자가 정한 순서를 기억해 카드
+  // 위치를 고정한다(카드가 갱신마다 자리를 옮기면 읽기 흐름이 끊긴다, 결정 O1~O2).
+  // 지금 화면에 없는 경로도 남아 있을 수 있다(결정 O3) — 표시 순서는 매 렌더 orderedProjectPaths()
+  // 로 따로 계산한다.
+  var storedProjectOrder = readStoredProjectOrder();
+  var isReordering = false;          // 참이면 render() 가 #dzh-app 을 건드리지 않는다(결정 O6)
+  var draggedProjectPath = null;
+  var focusHandleAfterRenderPath = null;   // 이동 뒤 재렌더가 날린 포커스를 복원할 대상(결정 O5)
+  var liveRegionEl = document.getElementById('dzh-live');
 
   // 데이터 블록이 깨지면(수동 편집·render_hub_html 결함 등) JSON.parse 가 던지고, try/catch 가
   // 없으면 이 IIFE 전체가 죽어 render() 가 한 번도 안 불려 "불러오는 중…" 이 영구 고정된다(검수 n4).
@@ -399,6 +520,99 @@ try{var m=localStorage.getItem('dzh-theme');
       return {snapshot: JSON.parse(rawText || '{}'), error: null};
     }catch(error){
       return {snapshot: {}, error: error};
+    }
+  }
+
+  // 저장된 카드 순서를 읽는다. 저장소 차단·깨진 값이면 빈 배열(=서버 활동순으로 시작, 결정 O1).
+  function readStoredProjectOrder(){
+    try{
+      var parsed = JSON.parse(localStorage.getItem(PROJECT_ORDER_STORAGE_KEY) || '[]');
+      return Array.isArray(parsed) ? parsed.filter(function(path){ return typeof path === 'string'; }) : [];
+    }catch(e){
+      return [];
+    }
+  }
+
+  // 카드 순서를 저장한다. 상한(MAX_STORED_PROJECT_ORDER)을 넘으면 뒤에서 잘라낸다(결정 O3).
+  // 저장 실패는 흡수한다 — 이번 페이지 로드 동안만 순서가 유효하다(테마·접힘과 동일 처리).
+  function persistProjectOrder(order){
+    try{
+      localStorage.setItem(PROJECT_ORDER_STORAGE_KEY, JSON.stringify(order.slice(0, MAX_STORED_PROJECT_ORDER)));
+    }catch(e){ /* 저장 실패 — 이번 로드 동안만 유효 */ }
+  }
+
+  // 이번 렌더에 실제로 그릴 카드 순서. 신규(서버 활동순으로 아직 저장 순서에 없는 경로)는
+  // 맨 앞에, 그 뒤로 저장 순서 중 지금 화면에 있는 것만 이어붙인다. 순수 함수 — DOM·저장소에
+  // 닿지 않는다(결정 O2).
+  function orderedProjectPaths(storedOrder, snapshotPaths){
+    var known = storedOrder.filter(function(path){ return snapshotPaths.indexOf(path) !== -1; });
+    var fresh = snapshotPaths.filter(function(path){ return storedOrder.indexOf(path) === -1; });
+    return fresh.concat(known);
+  }
+
+  // storedProjectOrder 와 이번 스냅샷으로 "다음에 저장할 전체 순서"를 계산한다 — 화면에 그릴
+  // 것(orderedProjectPaths) 뒤에, 지금은 화면에 없지만 저장소에는 남아 있던 경로를 이어붙인다
+  // (결정 O3 — 하루 쉰 프로젝트도 자리를 잃지 않는다). 순수 함수.
+  function nextStoredProjectOrder(storedOrder, snapshotPaths){
+    var displayOrder = orderedProjectPaths(storedOrder, snapshotPaths);
+    var hiddenPaths = storedOrder.filter(function(path){ return snapshotPaths.indexOf(path) === -1; });
+    return displayOrder.concat(hiddenPaths).slice(0, MAX_STORED_PROJECT_ORDER);
+  }
+
+  // path 를 targetIndex 로 옮긴 **새** 배열. 범위를 벗어나면 클램프. 순수 함수 — 원본을
+  // 변형하지 않는다.
+  function moveProjectPath(order, path, targetIndex){
+    var withoutPath = order.filter(function(candidate){ return candidate !== path; });
+    var clampedIndex = Math.max(0, Math.min(targetIndex, withoutPath.length));
+    return withoutPath.slice(0, clampedIndex).concat([path], withoutPath.slice(clampedIndex));
+  }
+
+  // #dzh-live 에 이동 결과를 넣어 스크린리더가 낭독하게 한다(결정 O5).
+  function announceProjectPosition(displayName, index, total){
+    if(!liveRegionEl) return;
+    liveRegionEl.textContent = displayName + ' — ' + (index + 1) + ' / ' + total + ' 번째';
+  }
+
+  // 지금 화면에 그려진 카드의 순서를 DOM 에서 직접 읽는다(드래그·키보드 이동의 기준).
+  function currentCardOrder(){
+    return Array.prototype.map.call(app.querySelectorAll('.card[data-project-path]'), function(card){
+      return card.getAttribute('data-project-path');
+    });
+  }
+
+  // 방향키·Home·End 를 목표 인덱스로 바꾼다. 해당 없는 키면 null(호출자가 무시한다). 순수 함수.
+  function keyboardMoveTargetIndex(key, currentIndex, totalCount){
+    if(key === 'ArrowLeft') return Math.max(0, currentIndex - 1);
+    if(key === 'ArrowRight') return Math.min(totalCount - 1, currentIndex + 1);
+    if(key === 'Home') return 0;
+    if(key === 'End') return totalCount - 1;
+    return null;
+  }
+
+  // 새 표시 순서를 저장 순서에 반영·영속화한다. 렌더는 호출자가 맡는다(드래그는 dragend 에서,
+  // 키보드는 이 자리에서 바로) — isReordering 이 걸린 도중에는 render() 가 조기 반환하기
+  // 때문이다(결정 O6).
+  function commitReorder(newDisplayOrder, focusPath){
+    var snapshotPaths = (snapshot.projects || []).map(function(project){ return project.path; });
+    var hiddenPaths = storedProjectOrder.filter(function(path){ return snapshotPaths.indexOf(path) === -1; });
+    var nextOrder = newDisplayOrder.concat(hiddenPaths).slice(0, MAX_STORED_PROJECT_ORDER);
+    persistProjectOrder(nextOrder);
+    storedProjectOrder = nextOrder;
+    focusHandleAfterRenderPath = focusPath;
+  }
+
+  // 이동 뒤 재렌더가 포커스를 날리므로, 렌더 직후 이동한 카드의 핸들로 포커스를 복원한다(결정 O5).
+  function restoreHandleFocusAfterRender(){
+    if(!focusHandleAfterRenderPath) return;
+    var path = focusHandleAfterRenderPath;
+    focusHandleAfterRenderPath = null;
+    var cards = app.querySelectorAll('.card[data-project-path]');
+    for(var i = 0; i < cards.length; i++){
+      if(cards[i].getAttribute('data-project-path') === path){
+        var handle = cards[i].querySelector(DRAG_HANDLE_SELECTOR);
+        if(handle) handle.focus();
+        return;
+      }
     }
   }
 
@@ -511,6 +725,21 @@ try{var m=localStorage.getItem('dzh-theme');
       + renderTier1ActiveStep(tier1) + renderTier1ImplProgress(tier1);
   }
 
+  // 드래그 핸들 하나. aria-label 은 결정 O5 의 스펙 그대로 "위치 이동: {프로젝트명}".
+  function renderDragHandle(project){
+    return '<button class="card-drag-handle" type="button" draggable="true" aria-label="'
+      + escapeHtml('위치 이동: ' + project.display_name) + '" data-tooltip="'
+      + escapeHtml(DRAG_HANDLE_HINT) + '">≡</button>';
+  }
+
+  // 클릭 가능(티어 1 + 서버 모드)이면 <button>, 아니면 <span> — 없는 기능을 있는 척하지
+  // 않는다(결정 N6). data-tooltip 은 R4 로 제거됐다: 보이는 텍스트와 같아 정보 손실이 없다.
+  function renderProjectNameEl(project, isClickable){
+    var tag = isClickable ? 'button' : 'span';
+    var typeAttr = isClickable ? ' type="button"' : '';
+    return '<' + tag + ' class="project-name"' + typeAttr + '>' + escapeHtml(project.display_name) + '</' + tag + '>';
+  }
+
   function renderProject(project){
     // 세션은 서버가 오래된 것부터 준다(§2.4-2, hub_model.compose_project_views) — 클라이언트가
     // 최신순으로 다시 정렬한다(결정 Z1 안 2). slice() 로 복제해 원본 project.sessions 를
@@ -521,9 +750,15 @@ try{var m=localStorage.getItem('dzh-theme');
       .filter(shouldRenderSession);
     var sessionsHtml = visibleSessions.length
       ? '<ul class="sessions">' + visibleSessions.map(renderSession).join('') + '</ul>' : '';
-    return '<div class="card">'
+    // 클릭 가능 ⇔ dashboard_key 존재 + 서버 모드(결정 N2·N7). file:// 에서는 안내 툴팁만 준다.
+    var isClickable = Boolean(project.dashboard_key) && isServed;
+    var cardAttrs = ' data-project-path="' + escapeHtml(project.path || '') + '"';
+    if(isClickable) cardAttrs += ' data-dashboard-key="' + escapeHtml(project.dashboard_key) + '"';
+    else if(project.dashboard_key) cardAttrs += ' data-tooltip="' + escapeHtml(FILE_MODE_DASHBOARD_HINT) + '"';
+    return '<div class="card"' + cardAttrs + '>'
       + '<div class="project-head">'
-      + '<span class="project-name" data-tooltip="' + escapeHtml(project.display_name) + '">' + escapeHtml(project.display_name) + '</span>'
+      + renderDragHandle(project)
+      + renderProjectNameEl(project, isClickable)
       + '<span class="badge tier" data-tooltip="' + escapeHtml(TIER_DESCRIPTION[project.tier] || '') + '">' + escapeHtml(TIER_LABEL[project.tier] || ('티어 ' + project.tier)) + '</span>'
       + renderStateBadge(project.state)
       + '<span class="last-activity">' + elapsedLabel(project.last_activity_at_ms) + '</span>'
@@ -679,47 +914,52 @@ try{var m=localStorage.getItem('dzh-theme');
     applyUsageCollapsedState();
   }
 
+  // 연결 상태 문구는 별도 span 이 아니라 새로고침 버튼의 data-tooltip 으로 제공한다 —
+  // 좁은 화면에서 헤더 우측 텍스트가 고정 버튼과 겹치던 문제의 해소책이다. aria-label
+  // ("새로고침")과 문구가 달라 전역 툴팁이 aria-describedby 를 붙여 준다(이중 낭독 없음).
   function renderConnectionStatus(){
     if(initialParseError) return;
     var lastChange = formatTimestamp(snapshot.collected_at_ms);
+    var statusText;
     if(!isServed){
-      collectedAtLabel.textContent = '마지막 변화: ' + lastChange + ' · 허브 서버 꺼짐';
-      return;
+      statusText = '마지막 변화: ' + lastChange + ' · 허브 서버 꺼짐';
+    } else if(connectionLost){
+      statusText = '서버 연결 끊김 — 화면이 ' + lastChange + ' 에 멈췄습니다';
+    } else {
+      var secondsSincePoll = lastPollSuccessAtMs ? Math.floor((Date.now() - lastPollSuccessAtMs) / 1000) : 0;
+      statusText = '마지막 변화: ' + lastChange + ' · 서버 연결됨 (' + secondsSincePoll + '초 전 확인)';
     }
-    if(connectionLost){
-      collectedAtLabel.textContent = '서버 연결 끊김 — 화면이 ' + lastChange + ' 에 멈췄습니다';
-      return;
-    }
-    var secondsSincePoll = lastPollSuccessAtMs ? Math.floor((Date.now() - lastPollSuccessAtMs) / 1000) : 0;
-    collectedAtLabel.textContent = '마지막 변화: ' + lastChange + ' · 서버 연결됨 (' + secondsSincePoll + '초 전 확인)';
+    refreshButton.setAttribute('data-tooltip', statusText);
+    refreshButton.classList.toggle('connection-lost', isServed && connectionLost);
   }
 
-  // projectDisplayOrder 를 IIFE 최상위에서 계속 갱신해 카드 순서를 고정한다 — render() 안에서
-  // 초기화하면 매 폴링마다 서버 정렬을 그대로 다시 따르게 되어 고정 효과가 사라진다.
-  function stableSortedProjects(projects){
-    var presentPaths = {};
-    for(var i = 0; i < projects.length; i++) presentPaths[projects[i].path] = true;
-    for(var j = 0; j < projects.length; j++){
-      if(projectDisplayOrder.indexOf(projects[j].path) === -1) projectDisplayOrder.push(projects[j].path);
-    }
-    projectDisplayOrder = projectDisplayOrder.filter(function(path){ return presentPaths[path]; });
-    var byPath = {};
-    for(var k = 0; k < projects.length; k++) byPath[projects[k].path] = projects[k];
-    return projectDisplayOrder.map(function(path){ return byPath[path]; });
+  // 이번 스냅샷으로 저장 순서를 갱신·영속화(필요할 때만)하고 화면에 그릴 순서를 돌려준다.
+  // 계산된 전체 순서가 저장된 것과 다를 때만 쓴다(결정 O4) — 정상 상태에서는 첫 렌더 1회만
+  // 쓰고 그 뒤로는 0회다(신규 프로젝트가 없는 한).
+  function syncProjectOrder(snapshotPaths){
+    var displayOrder = orderedProjectPaths(storedProjectOrder, snapshotPaths);
+    var nextOrder = nextStoredProjectOrder(storedProjectOrder, snapshotPaths);
+    if(JSON.stringify(nextOrder) !== JSON.stringify(storedProjectOrder)) persistProjectOrder(nextOrder);
+    storedProjectOrder = nextOrder;
+    return displayOrder;
   }
 
   function render(){
+    if(isReordering) return;    // 드래그 중에는 다시 그리지 않는다(결정 O6, 불변식 H1″)
     if(initialParseError){
       app.innerHTML = '<div class="empty">데이터를 읽지 못했습니다 ('
         + escapeHtml(String(initialParseError.message || initialParseError))
         + '). 페이지를 새로고침해 보세요.</div>';
-      collectedAtLabel.textContent = '';
       return;
     }
-    if(!snapshot.projects || !snapshot.projects.length){
+    var projects = snapshot.projects || [];
+    if(!projects.length){
       app.innerHTML = '<div class="empty">아직 프로젝트가 없습니다. 훅을 설치했나요? — /hub install</div>';
     } else {
-      app.innerHTML = stableSortedProjects(snapshot.projects).map(renderProject).join('');
+      var displayOrder = syncProjectOrder(projects.map(function(project){ return project.path; }));
+      var projectsByPath = {};
+      for(var i = 0; i < projects.length; i++) projectsByPath[projects[i].path] = projects[i];
+      app.innerHTML = displayOrder.map(function(path){ return renderProject(projectsByPath[path]); }).join('');
     }
     var extra = '';
     if(snapshot.warnings && snapshot.warnings.length){
@@ -728,6 +968,7 @@ try{var m=localStorage.getItem('dzh-theme');
     app.insertAdjacentHTML('beforeend', extra);
     renderConnectionStatus();
     renderUsagePanel(snapshot.usage, snapshot.rate_limit_resets);
+    restoreHandleFocusAfterRender();
   }
   // 펼치는 순간 다음 폴링(최대 5초)을 기다리지 않고 그 자리에서 한 번 더 갱신한다(요구 2).
   // ①은 file:// 모드에서도 동작하는 로컬 재계산, ②는 서버 모드에서만 가능한 즉시 fetch 다.
@@ -741,6 +982,65 @@ try{var m=localStorage.getItem('dzh-theme');
     if(isUsageCollapsed) return;
     renderUsagePanel(snapshot.usage, snapshot.rate_limit_resets);  // ① 라벨을 지금 시각으로 다시 계산
     if(isServed) poll();                                           // ② 서버에 최신 스냅샷을 즉시 요청
+  });
+
+  // 카드 순서 변경(R2) — #dzh-app 자식은 렌더마다 전멸하므로 전부 document 위임이다(결정 O7).
+  // HTML5 DnD: dragstart(핸들에서 시작) → dragover(카드 위, preventDefault 필수 — GOTCHA 3,
+  // 안 그러면 drop 이 아예 안 온다) → drop(순서 계산·저장, 렌더는 dragend 로 미룬다) →
+  // dragend(모든 경로 — 성공·취소·Escape — 에서 반드시 발화하므로 여기서 isReordering 을
+  // 해제하고 한 번만 다시 그린다).
+  document.addEventListener('dragstart', function(event){
+    var handle = event.target.closest(DRAG_HANDLE_SELECTOR);
+    var card = handle && handle.closest('[data-project-path]');
+    if(!card) return;
+    draggedProjectPath = card.getAttribute('data-project-path');
+    isReordering = true;
+    event.dataTransfer.effectAllowed = 'move';
+    event.dataTransfer.setData('text/plain', draggedProjectPath);   // Firefox 는 이게 없으면 드래그를 시작하지 않는다
+  });
+  document.addEventListener('dragover', function(event){
+    if(draggedProjectPath === null) return;
+    if(!event.target.closest('[data-project-path]')) return;
+    event.preventDefault();                        // GOTCHA 3
+  });
+  document.addEventListener('drop', function(event){
+    if(draggedProjectPath === null) return;
+    var targetCard = event.target.closest('[data-project-path]');
+    if(!targetCard) return;
+    event.preventDefault();
+    var targetPath = targetCard.getAttribute('data-project-path');
+    if(targetPath === draggedProjectPath) return;
+    var order = currentCardOrder();
+    // moveProjectPath 는 원본 배열(order) 기준 targetIndex 를 받아, path 를 먼저 뺀 배열에
+    // 그 인덱스로 다시 끼워 넣는다 — path 를 뺀 배열에서 인덱스를 다시 구하면(필터 후
+    // indexOf) 제거로 한 칸씩 당겨진 효과가 이중으로 반영돼 정방향 이동이 한 칸씩
+    // 모자라진다(인접 오른쪽 이동 무동작·마지막 자리 도달 불가). order.indexOf 그대로
+    // 넘기는 것이 정방향·역방향 모두 정답이다.
+    var targetIndex = order.indexOf(targetPath);
+    // 포커스 복원은 키보드 경로 전용이다(결정 O5) — 마우스 드롭은 포커스를 옮기지 않는다.
+    commitReorder(moveProjectPath(order, draggedProjectPath, targetIndex), null);
+  });
+  document.addEventListener('dragend', function(){
+    draggedProjectPath = null;
+    isReordering = false;
+    render();     // 드래그 중 억눌렸던 재렌더를 여기서 한 번 따라잡는다
+  });
+
+  // 키보드 이동(결정 O5, WCAG 2.1.1) — 핸들에 포커스가 있을 때 ←/→/Home/End. 순간적인
+  // 동작이라 isReordering 플래그를 쓰지 않는다.
+  document.addEventListener('keydown', function(event){
+    var handle = event.target.closest(DRAG_HANDLE_SELECTOR);
+    var card = handle && handle.closest('[data-project-path]');
+    if(!card) return;
+    var order = currentCardOrder();
+    var path = card.getAttribute('data-project-path');
+    var targetIndex = keyboardMoveTargetIndex(event.key, order.indexOf(path), order.length);
+    if(targetIndex === null) return;
+    event.preventDefault();      // 방향키의 페이지 스크롤을 막는다
+    var displayName = (card.querySelector('.project-name') || {}).textContent || '';
+    commitReorder(moveProjectPath(order, path, targetIndex), path);
+    render();
+    announceProjectPosition(displayName, targetIndex, order.length);
   });
 
   render();
@@ -783,6 +1083,61 @@ try{var m=localStorage.getItem('dzh-theme');
   document.addEventListener('visibilitychange', function(){ if(document.visibilityState==='visible') poll(); });
   window.addEventListener('focus', poll);
   refreshButton.addEventListener('click', poll);
+})();
+
+(function(){
+  // 프로젝트 대시보드 모달(R3) — 카드를 누르면 그 프로젝트의 dashboard.html 을 iframe 으로
+  // 띄운다. <dialog> 는 #dzh-app 바깥의 정적 마크업이라 폴링·틱과 무관하다(불변식 H1″).
+  // 카드가 data-dashboard-key 를 가졌는지만으로 클릭 가능 여부가 정해지므로(결정 N2·N7),
+  // 이 IIFE 는 snapshot 상태를 몰라도 된다 — 렌더 IIFE 와 완전히 분리된 독립 컴포넌트다.
+  var MODAL_ELEMENT_ID = 'dzh-dashboard-modal';
+  var PROJECT_DASHBOARD_PATH_PREFIX = '/project/';
+  var PROJECT_DASHBOARD_PATH_SUFFIX = '/dashboard.html';
+  var DASHBOARD_KEY_ATTRIBUTE = 'data-dashboard-key';
+  var CLICKABLE_CARD_SELECTOR = '[' + DASHBOARD_KEY_ATTRIBUTE + ']';
+
+  var modalEl = document.getElementById(MODAL_ELEMENT_ID);
+  var modalTitleEl = document.getElementById('dzh-modal-title');
+  var modalFrameEl = document.getElementById('dzh-modal-frame');
+  var modalCloseButton = document.getElementById('dzh-modal-close');
+  if(!modalEl || !modalTitleEl || !modalFrameEl || !modalCloseButton) return;
+
+  // 대시보드 키로 서버 경로를 만든다. 순수 함수.
+  function projectDashboardUrl(dashboardKey){
+    return PROJECT_DASHBOARD_PATH_PREFIX + dashboardKey + PROJECT_DASHBOARD_PATH_SUFFIX;
+  }
+
+  // 모달을 열고 iframe 에 프로젝트 대시보드를 싣는다. 제목은 textContent 로 넣는다.
+  function openDashboardModal(dashboardKey, displayName){
+    modalTitleEl.textContent = displayName;
+    modalFrameEl.src = projectDashboardUrl(dashboardKey);
+    modalEl.showModal();
+  }
+
+  // 모달을 닫고 iframe 을 비운다 — 숨은 iframe 의 5초 폴링을 반드시 멈춘다(리스크 R-6).
+  // src='' 는 일부 브라우저에서 about:blank 로의 실제 이동을 보장하지 않는다 — 명시적으로
+  // 'about:blank' 를 줘서 "폴링을 멈춘다"는 의도를 해석 여지 없이 못박는다.
+  function closeDashboardModal(){
+    modalFrameEl.src = 'about:blank';
+    if(modalEl.open) modalEl.close();
+  }
+
+  modalCloseButton.addEventListener('click', closeDashboardModal);
+  // <dialog> 자신에게 온 클릭은 곧 backdrop 클릭이다 — 내부 콘텐츠 클릭은 자식 요소가 받는다.
+  modalEl.addEventListener('click', function(event){
+    if(event.target === modalEl) closeDashboardModal();
+  });
+  // ESC·닫기 버튼·배경 클릭 세 경로가 모두 dialog 의 close 이벤트로 모인다.
+  modalEl.addEventListener('close', function(){ modalFrameEl.src = 'about:blank'; });
+
+  document.addEventListener('click', function(event){
+    if(event.target.closest('.card-drag-handle')) return;         // 결정 N6 — 드래그 핸들은 별도 조작
+    if((window.getSelection() || {}).toString()) return;          // 결정 N6 — 텍스트 선택 후 클릭 무시
+    var card = event.target.closest(CLICKABLE_CARD_SELECTOR);
+    if(!card) return;
+    var nameEl = card.querySelector('.project-name');
+    openDashboardModal(card.getAttribute(DASHBOARD_KEY_ATTRIBUTE), nameEl ? nameEl.textContent : '');
+  });
 })();
 </script>
 </body>

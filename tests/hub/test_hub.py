@@ -199,11 +199,16 @@ class CmdStatusServerSummaryTest(unittest.TestCase):
         self.original_config_path = hub_collect.CONFIG_PATH
         self.original_error_path = hub_collect.LAST_COLLECT_ERROR_PATH
         self.original_rate_limits_path = hub_collect.RATE_LIMITS_PATH
+        self.original_usage_api_error_path = hub_collect.LAST_USAGE_API_ERROR_PATH
         self.original_settings_path = hub_settings.SETTINGS_PATH
         hub_collect.HUB_HTML_PATH = self.temp_dir / "hub.html"  # 존재하지 않는 경로 — 실제 파일 미접근
         hub_collect.CONFIG_PATH = self.temp_dir / "config.json"  # 존재하지 않으면 기본값
         hub_collect.LAST_COLLECT_ERROR_PATH = self.temp_dir / "last_collect_error.json"
         hub_collect.RATE_LIMITS_PATH = self.temp_dir / "rate_limits.json"  # 존재하지 않으면 None
+        # R1 — cmd_status 가 read_last_usage_api_failure()·usage_api_last_attempt_age_ms 를
+        # 새로 호출하게 되면서 실제 ~/.claude/hub/last_usage_api_error.json 을 읽던 회귀가
+        # 생길 수 있었다(위 RATE_LIMITS_PATH·LAST_COLLECT_ERROR_PATH 격리와 같은 이유).
+        hub_collect.LAST_USAGE_API_ERROR_PATH = self.temp_dir / "last_usage_api_error.json"
         hub_settings.SETTINGS_PATH = self.temp_dir / "settings.json"  # 존재하지 않으면 미설치로 판정
 
     def tearDown(self) -> None:
@@ -211,6 +216,7 @@ class CmdStatusServerSummaryTest(unittest.TestCase):
         hub_collect.CONFIG_PATH = self.original_config_path
         hub_collect.LAST_COLLECT_ERROR_PATH = self.original_error_path
         hub_collect.RATE_LIMITS_PATH = self.original_rate_limits_path
+        hub_collect.LAST_USAGE_API_ERROR_PATH = self.original_usage_api_error_path
         hub_settings.SETTINGS_PATH = self.original_settings_path
         shutil.rmtree(self.temp_dir, ignore_errors=True)
 
@@ -295,6 +301,24 @@ class CmdStatusServerSummaryTest(unittest.TestCase):
         self.assertFalse(payload["usage_panel_enabled"])
         self.assertIsNone(payload["rate_limit_capture_age_ms"])
         self.assertIsNone(payload["rate_limit_resets_remaining_ms"])
+
+    def test_usage_api_fields_default_to_disabled_and_no_evidence(self) -> None:
+        """R1 — usage_api_enabled 기본값 false(결정 A6), 시도 흔적이 없으면 age·failure 는 null."""
+        payload = self._run_cmd_status(collect_stalled=False)
+        self.assertFalse(payload["usage_api_enabled"])
+        self.assertIsNone(payload["usage_api_last_attempt_age_ms"])
+        self.assertIsNone(payload["usage_api_last_failure"])
+
+    def test_usage_api_last_failure_is_surfaced_from_error_file(self) -> None:
+        hub_collect.LAST_USAGE_API_ERROR_PATH.write_text(json.dumps({"at_ms": 1, "reason": "network_error"}))
+        payload = self._run_cmd_status(collect_stalled=False)
+        self.assertEqual(payload["usage_api_last_failure"]["reason"], "network_error")
+        self.assertIsInstance(payload["usage_api_last_attempt_age_ms"], int)
+
+    def test_usage_api_enabled_reflects_config(self) -> None:
+        hub_collect.CONFIG_PATH.write_text(json.dumps({"usage_api_enabled": True}))
+        payload = self._run_cmd_status(collect_stalled=False)
+        self.assertTrue(payload["usage_api_enabled"])
 
 
 if __name__ == "__main__":

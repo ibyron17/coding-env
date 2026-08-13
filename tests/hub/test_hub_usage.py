@@ -7,6 +7,7 @@ import json
 import os
 import sys
 import unittest
+from datetime import datetime, timezone
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "hub", "bin"))
 
@@ -376,6 +377,132 @@ class FormatStatusLineSummaryTest(unittest.TestCase):
 
     def test_n26_capture_none(self) -> None:
         self.assertEqual(hub_usage.format_status_line_summary(None), "")
+
+
+def _resets_at_iso(hours_from_capture: float) -> str:
+    """RATE_LIMIT_CAPTURED_AT_MS 로부터 hours_from_capture 시간 뒤의 ISO 8601(UTC) 문자열."""
+    epoch_seconds = _resets_at_s(hours_from_capture)
+    return datetime.fromtimestamp(epoch_seconds, tz=timezone.utc).isoformat()
+
+
+def _usage_api_window(utilization=None, resets_at=None) -> dict:
+    window: dict = {}
+    if utilization is not None:
+        window["utilization"] = utilization
+    if resets_at is not None:
+        window["resets_at"] = resets_at
+    return window
+
+
+def _usage_api_text(five_hour: dict | None = None, seven_day: dict | None = None) -> str:
+    payload: dict = {}
+    if five_hour is not None:
+        payload["five_hour"] = five_hour
+    if seven_day is not None:
+        payload["seven_day"] = seven_day
+    return json.dumps(payload)
+
+
+class ParseUsageApiResponseTest(unittest.TestCase):
+    """U21~U25 — usage API 1차 대응표(SP3 생략 개정: five_hour/seven_day.utilization/resets_at)."""
+
+    def test_u21_normal_response_maps_all_four_values(self) -> None:
+        text = _usage_api_text(
+            _usage_api_window(utilization=23.5, resets_at=_resets_at_iso(2)),
+            _usage_api_window(utilization=41, resets_at=_resets_at_iso(48)),
+        )
+        result = hub_usage.parse_usage_api_response(text, RATE_LIMIT_CAPTURED_AT_MS)
+        self.assertEqual(result.session_used_percent, 23)
+        self.assertEqual(result.weekly_used_percent, 41)
+        self.assertIsNotNone(result.session_resets_at_ms)
+        self.assertIsNotNone(result.weekly_resets_at_ms)
+
+    def test_u22_broken_json_returns_none(self) -> None:
+        self.assertIsNone(hub_usage.parse_usage_api_response("{not json", RATE_LIMIT_CAPTURED_AT_MS))
+
+    def test_u22_top_level_array_returns_none(self) -> None:
+        self.assertIsNone(hub_usage.parse_usage_api_response("[1, 2, 3]", RATE_LIMIT_CAPTURED_AT_MS))
+
+    def test_u22_all_fields_missing_returns_none(self) -> None:
+        self.assertIsNone(hub_usage.parse_usage_api_response("{}", RATE_LIMIT_CAPTURED_AT_MS))
+
+    def test_u23_percentage_as_string_drops_that_field_only(self) -> None:
+        text = _usage_api_text(
+            _usage_api_window(utilization="23", resets_at=_resets_at_iso(2)),
+            _usage_api_window(utilization=41),
+        )
+        result = hub_usage.parse_usage_api_response(text, RATE_LIMIT_CAPTURED_AT_MS)
+        self.assertIsNone(result.session_used_percent)
+        self.assertIsNotNone(result.session_resets_at_ms)
+        self.assertEqual(result.weekly_used_percent, 41)
+
+    def test_u23_percentage_as_bool_drops_that_field_only(self) -> None:
+        text = _usage_api_text(_usage_api_window(utilization=True, resets_at=_resets_at_iso(2)))
+        result = hub_usage.parse_usage_api_response(text, RATE_LIMIT_CAPTURED_AT_MS)
+        self.assertIsNone(result.session_used_percent)
+        self.assertIsNotNone(result.session_resets_at_ms)
+
+    def test_u23_percentage_out_of_range_drops_that_field_only(self) -> None:
+        text = _usage_api_text(_usage_api_window(utilization=101, resets_at=_resets_at_iso(2)))
+        result = hub_usage.parse_usage_api_response(text, RATE_LIMIT_CAPTURED_AT_MS)
+        self.assertIsNone(result.session_used_percent)
+        self.assertIsNotNone(result.session_resets_at_ms)
+
+    def test_u24_resets_at_beyond_horizon_drops_that_window_only(self) -> None:
+        """단위 혼동(초/밀리초 등) 검출과 같은 지평선 검사를 ISO 8601 경로에도 적용한다."""
+        far_future_iso = _resets_at_iso(24 * 30)  # 30일 뒤 — RATE_LIMIT_MAX_HORIZON_DAYS(8일) 밖
+        text = _usage_api_text(_usage_api_window(utilization=23, resets_at=far_future_iso))
+        result = hub_usage.parse_usage_api_response(text, RATE_LIMIT_CAPTURED_AT_MS)
+        self.assertIsNone(result.session_resets_at_ms)
+        self.assertEqual(result.session_used_percent, 23)
+
+    def test_u24_malformed_resets_at_string_drops_that_window_only(self) -> None:
+        text = _usage_api_text(_usage_api_window(utilization=23, resets_at="not-a-date"))
+        result = hub_usage.parse_usage_api_response(text, RATE_LIMIT_CAPTURED_AT_MS)
+        self.assertIsNone(result.session_resets_at_ms)
+        self.assertEqual(result.session_used_percent, 23)
+
+    def test_u25_never_raises_on_any_input(self) -> None:
+        malformed_inputs = (
+            "",
+            "null",
+            "42",
+            '{"five_hour": "not-a-dict"}',
+            '{"five_hour": {"utilization": null}}',
+            '{"five_hour": {"utilization": NaN}}',
+            '{"five_hour": {"resets_at": 12345}}',
+            '{"five_hour": {"resets_at": "9999-99-99T99:99:99"}}',
+            '{"five_hour": {"utilization": [1, 2, 3]}}',
+        )
+        for malformed_text in malformed_inputs:
+            with self.subTest(text=malformed_text):
+                try:
+                    hub_usage.parse_usage_api_response(malformed_text, RATE_LIMIT_CAPTURED_AT_MS)
+                except Exception as error:  # noqa: BLE001 -- 이 테스트 자체가 "예외 없음"을 검증한다
+                    self.fail(f"parse_usage_api_response 가 예외를 던짐: {error!r}")
+
+
+class DescribeJsonKeyStructureTest(unittest.TestCase):
+    """schema_mismatch 자기 진단(SP3 생략 개정) — 키 경로+타입만 담고 값은 절대 포함하지
+    않는다(불변식 A-SEC)."""
+
+    def test_values_never_appear_in_the_output(self) -> None:
+        secret_looking_value = "sk-ant-should-never-leak-1234567890"
+        text = json.dumps({"token": secret_looking_value, "nested": {"count": 42}, "list": ["x", "y"]})
+        described = hub_usage.describe_json_key_structure(text)
+        self.assertIsNotNone(described)
+        joined = " ".join(described)
+        self.assertNotIn(secret_looking_value, joined)
+        self.assertNotIn("42", joined)  # 값(int) 도 새어나오지 않는다 — 타입만 남는다
+        self.assertIn("/token <str>", described)
+        self.assertIn("/nested/count <int>", described)
+        self.assertIn("/list [list len=2]", described)
+
+    def test_broken_json_returns_none(self) -> None:
+        self.assertIsNone(hub_usage.describe_json_key_structure("{not json"))
+
+    def test_scalar_root_returns_type_only(self) -> None:
+        self.assertEqual(hub_usage.describe_json_key_structure("42"), [" <int>"])
 
 
 if __name__ == "__main__":

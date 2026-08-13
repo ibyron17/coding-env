@@ -6,6 +6,7 @@
 """
 
 import fnmatch
+import hashlib
 import json
 from dataclasses import asdict, dataclass
 from typing import Literal, Sequence
@@ -17,6 +18,13 @@ SessionState = Literal["working", "idle", "stale", "done"]
 Phase = Literal["설계", "구현", "검수"]
 
 SHORT_ID_LENGTH = 8
+DASHBOARD_KEY_LENGTH = 16          # sha256(경로) 앞 자리 수 — 대시보드 서빙용 불투명 키(결정 N1)
+# 프로젝트 루트 기준 .claude/dashboard.html 의 상대경로. 정본은 여기 하나뿐이다 —
+# hub_collect.py(I/O) 는 이 값을 pathlib 조인에, 이 모듈은 문자열 접합에 그대로 재사용한다
+# (검수 m3: hub_collect 가 이미 hub_model 을 import 하므로 중복 선언을 없앨 수 있다).
+# 앞에 "/" 를 붙이지 않는다 — 붙이면 pathlib 의 `/` 연산자가 뒤 조각을 절대경로로 취급해
+# 앞부분을 통째로 버리는 함정에 걸린다(예: 루트 / 슬래시로 시작하는 조각).
+PROJECT_DASHBOARD_RELATIVE_PATH = ".claude/dashboard.html"
 
 PHASE_BY_AGENT_TYPE: dict[str, Phase] = {
     "design-architect": "설계",
@@ -64,6 +72,8 @@ class HubConfig:
     server_port: int = 8794                        # 상주 서버 고정 포트(북마크 가능해야 한다)
     server_collect_interval_seconds: int = 5       # 수집 루프 주기
     show_usage_panel: bool = True                  # false 면 사용량 파일을 아예 읽지 않는다(결정 U4)
+    usage_api_enabled: bool = False                # 사용량 API 폴링 스위치, 기본 off(결정 A6 — 옵트인)
+    usage_api_poll_interval_seconds: int = 300     # 폴링 기본 주기(5분, 결정 A3)
 
 
 # ---- 사실(fact) ----
@@ -127,6 +137,7 @@ class ProjectView:
     sessions: tuple[SessionView, ...]
     tier1: Tier1Snapshot | None
     note: str | None
+    dashboard_key: str | None = None    # 티어 1 프로젝트만 값을 갖는다. None 이면 카드가 클릭 대상이 아니다
 
 
 @dataclass(frozen=True)
@@ -484,6 +495,16 @@ def _last_activity_at_ms(
     return max(candidates)
 
 
+def project_dashboard_key(project_path: str) -> str:
+    """프로젝트 절대경로 → 대시보드 서빙용 불투명 키(sha256 앞 16자리 hex, 결정 N1).
+
+    `encode_project_dir_name` 과 달리 서로 다른 두 경로가 같은 키가 되는 충돌이 실질적으로
+    없고, 문자 집합이 `[0-9a-f]` 뿐이라 경로로 오독될 여지가 없다.
+    """
+    digest = hashlib.sha256(project_path.encode("utf-8")).hexdigest()
+    return digest[:DASHBOARD_KEY_LENGTH]
+
+
 def compose_project_views(
     tier1_by_path: dict[str, Tier1Snapshot],
     sessions_by_path: dict[str, tuple[SessionFacts, ...]],
@@ -503,19 +524,35 @@ def compose_project_views(
         last_activity_at_ms = _last_activity_at_ms(
             tier1, session_views, tier3_last_activity_by_path.get(path, 0)
         )
+        tier = _project_tier(tier1, sessions)
         views.append(
             ProjectView(
                 display_name=_display_name(path),
                 path=path,
-                tier=_project_tier(tier1, sessions),
+                tier=tier,
                 state=_project_state(session_views, last_activity_at_ms, now_ms, stale_after_ms),
                 last_activity_at_ms=last_activity_at_ms,
                 sessions=session_views,
                 tier1=tier1,
                 note=None,
+                dashboard_key=project_dashboard_key(path) if tier == 1 else None,
             )
         )
     return tuple(sorted(views, key=lambda view: view.last_activity_at_ms, reverse=True))
+
+
+def build_dashboard_registry(snapshot: HubSnapshot) -> dict[str, str]:
+    """스냅샷에서 {대시보드 키: dashboard.html 절대경로} 를 만든다. 티어 1 프로젝트만 담는다.
+
+    서버(hub_server.py)가 요청 경로의 키를 이 딕셔너리에서만 조회하므로, 값은 전부 이 함수가
+    실제로 발견한 프로젝트 경로에서 나온다 — 요청 문자열이 경로 조립에 쓰이는 지점이 없다(결정 N3).
+    """
+    registry: dict[str, str] = {}
+    for project in snapshot.projects:
+        if project.tier != 1:
+            continue
+        registry[project_dashboard_key(project.path)] = project.path + "/" + PROJECT_DASHBOARD_RELATIVE_PATH
+    return registry
 
 
 # ---- 7. 상주 서버 (개정 1 rev2) ----
@@ -591,6 +628,61 @@ def should_spawn_collect(
         spawn_stamp_mtime_ms if spawn_stamp_mtime_ms is not None else hub_html_mtime_ms
     )
     return (now_ms - reference_mtime_ms) >= throttle_ms
+
+
+# ---- 9. 사용량 API 폴링 스케줄 (R1, 순수) ----
+USAGE_API_BACKOFF_MAX_MULTIPLIER = 12          # 기본 5분 기준 상한 60분
+USAGE_API_RATE_LIMITED_MULTIPLIER = 12         # 429 는 곧바로 상한(결정 A3)
+
+
+@dataclass(frozen=True)
+class UsageApiPollState:
+    """사용량 API 폴링의 스케줄 상태. 수집 루프의 지역 변수로만 산다(전역 상태 금지, 결정 A3)."""
+
+    last_attempt_at_ms: int | None = None
+    consecutive_failures: int = 0
+    forced_multiplier: int | None = None        # 429 가 요구한 즉시 상한
+
+
+def usage_api_poll_delay_ms(state: UsageApiPollState, base_interval_seconds: int) -> int:
+    """다음 시도까지 기다릴 시간(ms). 연속 실패마다 2배, 상한까지(결정 A3 — 5→10→20→40→60분).
+
+    `consecutive_failures` 가 0·1 이면 배수는 1(기본 주기 그대로) — 첫 실패 직후에는 아직
+    백오프를 태우지 않는다. `forced_multiplier`(429 특례)가 있으면 지수 계산을 건너뛰고
+    그 배수를 곧바로 쓴다 — 가장 강한 "그만 보내라" 신호에 가장 강하게 반응한다.
+    """
+    if state.forced_multiplier is not None:
+        multiplier = state.forced_multiplier
+    else:
+        multiplier = min(2 ** max(state.consecutive_failures - 1, 0), USAGE_API_BACKOFF_MAX_MULTIPLIER)
+    return base_interval_seconds * multiplier * MILLISECONDS_PER_SECOND
+
+
+def should_attempt_usage_api_poll(
+    now_ms: int, state: UsageApiPollState, base_interval_seconds: int
+) -> bool:
+    """지금 사용량 API 를 호출해도 되는가. 첫 시도(last_attempt_at_ms 가 None)는 항상 True."""
+    if state.last_attempt_at_ms is None:
+        return True
+    delay_ms = usage_api_poll_delay_ms(state, base_interval_seconds)
+    return (now_ms - state.last_attempt_at_ms) >= delay_ms
+
+
+def next_usage_api_poll_state(
+    now_ms: int, state: UsageApiPollState, failure_reason: str | None
+) -> UsageApiPollState:
+    """시도 결과를 반영한 **새** 상태를 돌려준다(원본은 불변). 성공(`failure_reason is None`)
+    이면 실패 카운트를 0 으로 되돌린다. `http_rate_limited` 는 곧바로 상한 배수로 점프한다
+    (결정 A3) — 그 외 실패 사유는 지수 백오프 카운터만 늘린다.
+    """
+    if failure_reason is None:
+        return UsageApiPollState(last_attempt_at_ms=now_ms, consecutive_failures=0, forced_multiplier=None)
+    forced_multiplier = USAGE_API_RATE_LIMITED_MULTIPLIER if failure_reason == "http_rate_limited" else None
+    return UsageApiPollState(
+        last_attempt_at_ms=now_ms,
+        consecutive_failures=state.consecutive_failures + 1,
+        forced_multiplier=forced_multiplier,
+    )
 
 
 def snapshot_content_key(snapshot: HubSnapshot) -> str:

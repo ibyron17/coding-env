@@ -1893,10 +1893,10 @@ test_hub_unit_tests() {
   ((passed_tests++))
 }
 
-# T25: 허브 문서·상수 정합성 (하위 검증 T25-1~T25-56)
+# T25: 허브 문서·상수 정합성 (하위 검증 T25-1~T25-64)
 test_hub_docs_and_constants() {
   local test_name="T25"
-  local test_desc="허브 문서·상수 정합성 (T25-1~T25-56)"
+  local test_desc="허브 문서·상수 정합성 (T25-1~T25-64)"
   log_test_name "$test_name" "$test_desc"
 
   local hub_settings_file="$REPO_ROOT/hub/bin/hub_settings.py"
@@ -2670,14 +2670,16 @@ PYEOF
     fi
   done
 
-  # T25-55(문서 정합 — 결정 P1): commands/hub.md 의 usage_sample_age_ms 설명에 데스크톱 앱
-  # 문구가 없고, statusLine 등록이 전제라는 점이 명시돼 있다.
+  # T25-55(문서 정합 — 결정 P1, R1 로 재개정): commands/hub.md 의 usage_sample_age_ms 설명에
+  # 데스크톱 앱 문구가 없고, 퍼센트 출처가 명시돼 있다. "유일한 출처"는 R1(사용량 API 폴링,
+  # 결정 A2)이 두 번째 생산자를 더하면서 더 이상 참이 아니게 됐다 — "퍼센트의 출처는" 으로
+  # 완화해 두 생산자를 모두 포괄한다(T25-54 가 이미 겪은 것과 같은 종류의 재개정).
   if grep -qF "macOS 데스크톱 앱" "$hub_command_file"; then
     record_failure "$test_name" "T25-55: commands/hub.md 에 macOS 데스크톱 앱 문구가 남아 있음(결정 P1 위반)"
     return 1
   fi
-  if ! grep -qF "퍼센트의 유일한 출처는" "$hub_command_file"; then
-    record_failure "$test_name" "T25-55: commands/hub.md 의 usage_sample_age_ms 설명에 statusLine 등록 전제가 없음"
+  if ! grep -qF "퍼센트의 출처는" "$hub_command_file"; then
+    record_failure "$test_name" "T25-55: commands/hub.md 의 usage_sample_age_ms 설명에 출처 설명이 없음"
     return 1
   fi
 
@@ -2698,6 +2700,135 @@ PYEOF
       return 1
     fi
   done
+
+  # T25-57(R3 서버 라우팅 회귀, hub-card-interactions-and-usage.md 결정 N3): 프로젝트
+  # 대시보드 라우트는 정규식으로만 해석되고, 기존 화이트리스트는 그대로 남으며, 요청
+  # 문자열(self.path)로 경로를 조립하는 코드가 없다.
+  if ! grep -qF "PROJECT_DASHBOARD_PATH_PATTERN" "$hub_server_file"; then
+    record_failure "$test_name" "T25-57: hub_server.py 에 PROJECT_DASHBOARD_PATH_PATTERN 이 없음"
+    return 1
+  fi
+  if ! grep -qF '[0-9a-f]{16}' "$hub_server_file"; then
+    record_failure "$test_name" "T25-57: hub_server.py 에 [0-9a-f]{16} 패턴이 없음"
+    return 1
+  fi
+  if ! grep -qF "ALLOWED_REQUEST_PATHS" "$hub_server_file"; then
+    record_failure "$test_name" "T25-57: hub_server.py 에 ALLOWED_REQUEST_PATHS 가 없음(T25-15 보강)"
+    return 1
+  fi
+  local path_concat_token
+  for path_concat_token in "os.path.join" "/ self.path" "+ self.path"; do
+    if grep -qF "$path_concat_token" "$hub_server_file"; then
+      record_failure "$test_name" "T25-57: hub_server.py 가 요청 문자열로 경로를 조립하는 것으로 보임($path_concat_token)"
+      return 1
+    fi
+  done
+
+  # T25-58(R4 회귀, 결정 X1): .project-name 에 data-tooltip 이 없다 — 보이는 텍스트와
+  # 같아 제거해도 정보 손실이 없다.
+  if grep -qF 'project-name" data-tooltip' "$hub_template_file"; then
+    record_failure "$test_name" "T25-58: hub_template.html 의 project-name 에 data-tooltip 잔재가 있음"
+    return 1
+  fi
+
+  # T25-59(R5 회귀, 결정 E1~E3): 헤더 버튼 클러스터가 고정 위치를 버리고 .head-row 문서
+  # 흐름 안으로 들어왔다.
+  if grep -qF "padding-right:150px" "$hub_template_file"; then
+    record_failure "$test_name" "T25-59: hub_template.html 에 padding-right:150px 잔재가 있음"
+    return 1
+  fi
+  if grep -qF "position:fixed;top:16px;right:16px" "$hub_template_file"; then
+    record_failure "$test_name" "T25-59: hub_template.html 에 .top-actions 고정 위치 잔재가 있음"
+    return 1
+  fi
+  if ! grep -qF ".head-row{display:flex" "$hub_template_file"; then
+    record_failure "$test_name" "T25-59: hub_template.html 에 .head-row{display:flex 가 없음"
+    return 1
+  fi
+  if ! grep -qF ".top-actions{margin-left:auto" "$hub_template_file"; then
+    record_failure "$test_name" "T25-59: hub_template.html 에 .top-actions{margin-left:auto 가 없음"
+    return 1
+  fi
+
+  # T25-60(R1 보안 불변식, 결정 A4): hub_usage_fetch.py 에 shell=True·print(·str(error) 가
+  # 없고, FAILURE_REASON_MESSAGES 고정 어휘가 있다(불변식 A-SEC).
+  local hub_usage_fetch_file="$REPO_ROOT/hub/bin/hub_usage_fetch.py"
+  local forbidden_token
+  for forbidden_token in "shell=True" "print(" "str(error)"; do
+    if grep -qF "$forbidden_token" "$hub_usage_fetch_file"; then
+      record_failure "$test_name" "T25-60: hub_usage_fetch.py 에 금지 토큰($forbidden_token)이 있음"
+      return 1
+    fi
+  done
+  if ! grep -qF "FAILURE_REASON_MESSAGES" "$hub_usage_fetch_file"; then
+    record_failure "$test_name" "T25-60: hub_usage_fetch.py 에 FAILURE_REASON_MESSAGES 가 없음"
+    return 1
+  fi
+
+  # T25-61(R1 구조): hub_usage.py 에 parse_usage_api_response, hub_model.py 에
+  # should_attempt_usage_api_poll·UsageApiPollState, hub_collect.py 에 usage_api_enabled
+  # 타입 등록이 있다(T25-10 이 hub_usage.py·hub_model.py 의 순수성을 이미 강제한다).
+  if ! grep -qF "parse_usage_api_response" "$hub_usage_file"; then
+    record_failure "$test_name" "T25-61: hub_usage.py 에 parse_usage_api_response 가 없음"
+    return 1
+  fi
+  local model_token
+  for model_token in "should_attempt_usage_api_poll" "UsageApiPollState"; do
+    if ! grep -qF "$model_token" "$hub_model_file"; then
+      record_failure "$test_name" "T25-61: hub_model.py 에 $model_token 이 없음"
+      return 1
+    fi
+  done
+  if ! grep -qF '"usage_api_enabled": bool' "$hub_collect_file"; then
+    record_failure "$test_name" "T25-61: hub_collect.py 의 _CONFIG_FIELD_TYPES 에 usage_api_enabled 등록이 없음"
+    return 1
+  fi
+
+  # T25-62(R2 회귀): 카드 순서 저장·드래그 핸들 관련 토큰이 존재하고, 구 함수
+  # stableSortedProjects 는 orderedProjectPaths 로 대체돼 사라졌다.
+  local order_token
+  for order_token in "'dzh-project-order'" "orderedProjectPaths" "isReordering" "card-drag-handle"; do
+    if ! grep -qF "$order_token" "$hub_template_file"; then
+      record_failure "$test_name" "T25-62: hub_template.html 에 $order_token 이 없음"
+      return 1
+    fi
+  done
+  if grep -qF "stableSortedProjects" "$hub_template_file"; then
+    record_failure "$test_name" "T25-62: hub_template.html 에 구 함수 stableSortedProjects 가 남아 있음"
+    return 1
+  fi
+
+  # T25-63(R3·R6 마크업 회귀, 결정 N5·Y1~Y4): 대시보드 모달 마크업과 .icon-btn 공통
+  # 클래스가 존재하고, 테마 토글은 라이트/다크 2상태만 남았다.
+  local modal_markup_token
+  for modal_markup_token in '<dialog id="dzh-dashboard-modal"' 'id="dzh-modal-frame"' ".icon-btn"; do
+    if ! grep -qF "$modal_markup_token" "$hub_template_file"; then
+      record_failure "$test_name" "T25-63: hub_template.html 에 $modal_markup_token 이 없음"
+      return 1
+    fi
+  done
+  if ! grep -qF "THEME_CYCLE = ['light', 'dark']" "$hub_template_file"; then
+    record_failure "$test_name" "T25-63: hub_template.html 의 THEME_CYCLE 이 2상태가 아님"
+    return 1
+  fi
+  if grep -qF "'system'" "$hub_template_file"; then
+    record_failure "$test_name" "T25-63: hub_template.html 에 3상태 테마 잔재('system')가 남아 있음"
+    return 1
+  fi
+
+  # T25-64(문서 정합, M5): hub/README.md 에 카드 순서·모달·usage_api_enabled 설명이 있고,
+  # commands/hub.md 에 usage_api_last_failure 설명이 있다.
+  local readme_doc_token
+  for readme_doc_token in "카드 순서" "모달" "usage_api_enabled"; do
+    if ! grep -qF "$readme_doc_token" "$hub_readme_file"; then
+      record_failure "$test_name" "T25-64: hub/README.md 에 $readme_doc_token 설명이 없음"
+      return 1
+    fi
+  done
+  if ! grep -qF "usage_api_last_failure" "$hub_command_file"; then
+    record_failure "$test_name" "T25-64: commands/hub.md 에 usage_api_last_failure 설명이 없음"
+    return 1
+  fi
 
   log_ok "$test_name 통과"
   ((passed_tests++))

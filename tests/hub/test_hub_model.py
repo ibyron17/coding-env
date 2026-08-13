@@ -441,6 +441,110 @@ class Tier1PriorityTest(unittest.TestCase):
         self.assertEqual(views[0].tier, 1)
 
 
+class ProjectDashboardKeyTest(unittest.TestCase):
+    """U1~U3 — project_dashboard_key 의 결정성·충돌 회피·형식(결정 N1)."""
+
+    def test_u1_same_path_always_same_key(self) -> None:
+        self.assertEqual(
+            hub_model.project_dashboard_key("/Users/b/repo"),
+            hub_model.project_dashboard_key("/Users/b/repo"),
+        )
+
+    def test_u2_different_paths_never_collide(self) -> None:
+        """구 인코딩(encode_project_dir_name)은 '/a.b' 와 '/a/b' 를 같은 키로 만들었다 —
+        sha256 기반은 그 충돌 사례를 포함해 서로 다른 경로가 다른 키를 갖는다."""
+        self.assertNotEqual(
+            hub_model.project_dashboard_key("/a.b"),
+            hub_model.project_dashboard_key("/a/b"),
+        )
+
+    def test_u3_key_matches_hex_pattern_and_length(self) -> None:
+        key = hub_model.project_dashboard_key("/Users/b/repo")
+        self.assertRegex(key, r"^[0-9a-f]{16}$")
+        self.assertEqual(len(key), hub_model.DASHBOARD_KEY_LENGTH)
+
+
+class BuildDashboardRegistryTest(unittest.TestCase):
+    """U4~U5 — build_dashboard_registry 는 티어 1 만 담고, 값은 <경로>/.claude/dashboard.html."""
+
+    def _project_view(self, path: str, tier: int) -> hub_model.ProjectView:
+        return hub_model.ProjectView(
+            display_name=path.rsplit("/", 1)[-1], path=path, tier=tier, state="idle",
+            last_activity_at_ms=BASE_TIME_MS, sessions=(), tier1=None, note=None,
+        )
+
+    def test_u4_only_tier1_projects_are_registered(self) -> None:
+        snapshot = hub_model.HubSnapshot(
+            collected_at_ms=BASE_TIME_MS,
+            projects=(
+                self._project_view("/repo/one", tier=1),
+                self._project_view("/repo/two", tier=2),
+                self._project_view("/repo/three", tier=3),
+            ),
+            unresolved_dir_names=(), warnings=(),
+        )
+        registry = hub_model.build_dashboard_registry(snapshot)
+        self.assertEqual(len(registry), 1)
+        self.assertIn(hub_model.project_dashboard_key("/repo/one"), registry)
+
+    def test_u5_registry_value_is_dashboard_html_path(self) -> None:
+        snapshot = hub_model.HubSnapshot(
+            collected_at_ms=BASE_TIME_MS,
+            projects=(self._project_view("/repo/one", tier=1),),
+            unresolved_dir_names=(), warnings=(),
+        )
+        registry = hub_model.build_dashboard_registry(snapshot)
+        key = hub_model.project_dashboard_key("/repo/one")
+        self.assertEqual(registry[key], "/repo/one/.claude/dashboard.html")
+
+
+class ComposeProjectViewsDashboardKeyTest(unittest.TestCase):
+    """U6 — compose_project_views 가 티어 1 에만 dashboard_key 를 채운다."""
+
+    def test_u6_only_tier1_view_has_dashboard_key(self) -> None:
+        tier1 = hub_parse.Tier1Snapshot(
+            title="t", subtitle="s", completed=1, total=2, percent=50, steps=(),
+            matrix_done=None, impl_done=0, impl_total=0, updated_text="-", file_mtime_ms=BASE_TIME_MS,
+        )
+        tier2_session = hub_model.SessionFacts(
+            session_id="s1", cwd="/repo/tier2", started_at_ms=BASE_TIME_MS,
+            last_event_at_ms=BASE_TIME_MS, last_event_name="Stop", turn_state="ended",
+            ended_at_ms=None, task_excerpt=None, subagents=(),
+        )
+        views = hub_model.compose_project_views(
+            tier1_by_path={"/repo/tier1": tier1},
+            sessions_by_path={"/repo/tier2": (tier2_session,)},
+            tier3_last_activity_by_path={"/repo/tier3": BASE_TIME_MS},
+            now_ms=BASE_TIME_MS, stale_after_ms=STALE_AFTER_MS,
+        )
+        by_path = {view.path: view for view in views}
+        self.assertEqual(
+            by_path["/repo/tier1"].dashboard_key, hub_model.project_dashboard_key("/repo/tier1")
+        )
+        self.assertIsNone(by_path["/repo/tier2"].dashboard_key)
+        self.assertIsNone(by_path["/repo/tier3"].dashboard_key)
+
+
+class SnapshotContentKeyDashboardKeyTest(unittest.TestCase):
+    """U13 — dashboard_key 필드 추가 후에도 snapshot_content_key 가 같은 입력에 결정적이다."""
+
+    def _snapshot(self) -> hub_model.HubSnapshot:
+        project = hub_model.ProjectView(
+            display_name="repo", path="/repo", tier=1, state="idle",
+            last_activity_at_ms=BASE_TIME_MS, sessions=(), tier1=None, note=None,
+            dashboard_key=hub_model.project_dashboard_key("/repo"),
+        )
+        return hub_model.HubSnapshot(
+            collected_at_ms=BASE_TIME_MS, projects=(project,), unresolved_dir_names=(), warnings=(),
+        )
+
+    def test_u13_same_input_yields_same_key(self) -> None:
+        self.assertEqual(
+            hub_model.snapshot_content_key(self._snapshot()),
+            hub_model.snapshot_content_key(self._snapshot()),
+        )
+
+
 class ShouldSpawnCollectTest(unittest.TestCase):
     """M21~M24 — 훅의 재수집 spawn 판정(개정 쟁점 R3)."""
 
@@ -612,6 +716,92 @@ class ParseServerRecordTest(unittest.TestCase):
 
     def test_d6_empty_file(self) -> None:
         self.assertIsNone(hub_model.parse_server_record(""))
+
+
+class ShouldAttemptUsageApiPollTest(unittest.TestCase):
+    """U7~U8 — 첫 시도는 항상 True, 이후로는 주기 도달 여부로 판정한다(결정 A3)."""
+
+    BASE_INTERVAL_SECONDS = 300
+
+    def test_u7_first_attempt_is_always_true(self) -> None:
+        state = hub_model.UsageApiPollState()
+        self.assertTrue(
+            hub_model.should_attempt_usage_api_poll(BASE_TIME_MS, state, self.BASE_INTERVAL_SECONDS)
+        )
+
+    def test_u8_before_delay_elapses_is_false(self) -> None:
+        state = hub_model.UsageApiPollState(last_attempt_at_ms=BASE_TIME_MS, consecutive_failures=0)
+        almost_five_minutes_ms = 5 * 60 * 1000 - 1
+        self.assertFalse(
+            hub_model.should_attempt_usage_api_poll(
+                BASE_TIME_MS + almost_five_minutes_ms, state, self.BASE_INTERVAL_SECONDS
+            )
+        )
+
+    def test_u8_exactly_at_delay_is_true(self) -> None:
+        state = hub_model.UsageApiPollState(last_attempt_at_ms=BASE_TIME_MS, consecutive_failures=0)
+        exactly_five_minutes_ms = 5 * 60 * 1000
+        self.assertTrue(
+            hub_model.should_attempt_usage_api_poll(
+                BASE_TIME_MS + exactly_five_minutes_ms, state, self.BASE_INTERVAL_SECONDS
+            )
+        )
+
+    def test_u8_past_delay_is_true(self) -> None:
+        state = hub_model.UsageApiPollState(last_attempt_at_ms=BASE_TIME_MS, consecutive_failures=0)
+        past_five_minutes_ms = 5 * 60 * 1000 + 1
+        self.assertTrue(
+            hub_model.should_attempt_usage_api_poll(
+                BASE_TIME_MS + past_five_minutes_ms, state, self.BASE_INTERVAL_SECONDS
+            )
+        )
+
+
+class UsageApiPollDelayMsTest(unittest.TestCase):
+    """U9~U11 — 연속 실패마다 지연이 2배씩 늘고 상한(60분)에서 멈춘다. 429 는 즉시 상한(결정 A3)."""
+
+    BASE_INTERVAL_SECONDS = 300  # 5분
+    ONE_MINUTE_MS = 60 * 1000
+
+    def _delay_minutes(self, consecutive_failures: int, forced_multiplier: int | None = None) -> float:
+        state = hub_model.UsageApiPollState(
+            consecutive_failures=consecutive_failures, forced_multiplier=forced_multiplier
+        )
+        return hub_model.usage_api_poll_delay_ms(state, self.BASE_INTERVAL_SECONDS) / self.ONE_MINUTE_MS
+
+    def test_u9_delay_doubles_per_consecutive_failure_up_to_the_cap(self) -> None:
+        self.assertEqual(self._delay_minutes(1), 5)
+        self.assertEqual(self._delay_minutes(2), 10)
+        self.assertEqual(self._delay_minutes(3), 20)
+        self.assertEqual(self._delay_minutes(4), 40)
+        self.assertEqual(self._delay_minutes(5), 60)
+
+    def test_u9_delay_stays_capped_beyond_the_fifth_failure(self) -> None:
+        self.assertEqual(self._delay_minutes(6), 60)
+        self.assertEqual(self._delay_minutes(20), 60)
+
+    def test_u10_success_resets_consecutive_failures_to_zero(self) -> None:
+        state = hub_model.UsageApiPollState(consecutive_failures=4)
+        next_state = hub_model.next_usage_api_poll_state(BASE_TIME_MS, state, failure_reason=None)
+        self.assertEqual(next_state.consecutive_failures, 0)
+        self.assertIsNone(next_state.forced_multiplier)
+
+    def test_u11_http_rate_limited_jumps_straight_to_the_cap(self) -> None:
+        state = hub_model.UsageApiPollState(consecutive_failures=0)
+        next_state = hub_model.next_usage_api_poll_state(BASE_TIME_MS, state, failure_reason="http_rate_limited")
+        self.assertEqual(
+            hub_model.usage_api_poll_delay_ms(next_state, self.BASE_INTERVAL_SECONDS) / self.ONE_MINUTE_MS, 60
+        )
+
+
+class NextUsageApiPollStateTest(unittest.TestCase):
+    """U12 — next_usage_api_poll_state 는 항상 새 객체를 돌려준다(원본 불변)."""
+
+    def test_u12_returns_a_new_object_not_the_original(self) -> None:
+        original = hub_model.UsageApiPollState()
+        updated = hub_model.next_usage_api_poll_state(BASE_TIME_MS, original, failure_reason="network_error")
+        self.assertIsNot(updated, original)
+        self.assertEqual(original, hub_model.UsageApiPollState())  # 원본 필드도 그대로
 
 
 if __name__ == "__main__":

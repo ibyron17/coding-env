@@ -1,0 +1,64 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<title>세션 진행 상황 대시보드</title>
+<!--
+DZ:DASHBOARD 갱신 맵 (동적 영역 — 셀렉터 기반 정밀 치환, commands/dashboard.md 참조)
+  9f32074 이후 세대: #dz-subtitle 없음 · data-started-at 없음 · 세션 탭 없음.
+  #dz-title            : 세션 제목 텍스트
+  #dz-progress-bar      : inline style width:N%
+  #dz-progress-pct      : 진행률 텍스트 (예: 3/6 · 50%)
+  #dz-step-{n}          : [그룹 1개] 각 단계 li — class(done|active|wait) + .chip 텍스트
+                          + .step-detail 텍스트(그 단계의 한 줄 상세. 비어 있으면 CSS 가 숨긴다)
+  #dz-cell-{g}-{p}      : [그룹 2+] 매트릭스 칸 td — data-state(done|active|wait|na) + 칸 텍스트
+  #dz-log               : 작업 추적 ul — li data-seq 앵커로 prepend / data-server-port 속성
+  #dz-updated           : 갱신 시각 텍스트
+  #dz-impl-{k}          : [선택] 구현 세부 작업 li — class(done|active|wait) + .chip 텍스트
+  #dz-impl-count        : [선택] 구현 세부 진행 텍스트
+  #dz-impl-tasks        : [선택] 세부 작업 ol — impl set 이 한 번 채운다
+-->
+<style>
+  :root{--ink:#172033;--muted:#5E6B7D;--line:#D9E2EC;--soft:#F4F7FB;--blue:#1E5AA8;--navy:#12335B;--green:#1F8A70;}
+  body{margin:0;font-family:sans-serif;color:var(--ink);background:#EEF3F8}
+  .step-detail:empty{display:none}
+  #dz-impl-card:not(:has(#dz-impl-tasks li)){display:none}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="card">
+    <h1 id="dz-title">신세대 대시보드 예시</h1>
+    <div class="bar-outer"><div class="bar-inner" id="dz-progress-bar" style="width:50%"></div></div>
+    <div class="pct" id="dz-progress-pct">2/4 · 50%</div>
+    <ol class="steps" id="dz-steps">
+    <li id="dz-step-1" class="done"><span class="num">1</span>설계<span class="chip">완료</span><span class="step-detail">PRP 승인 완료</span></li>
+    <li id="dz-step-2" class="done"><span class="num">2</span>구현<span class="chip">완료</span><span class="step-detail">단위 테스트 포함 구현 완료</span></li>
+    <li id="dz-step-3" class="active"><span class="num">3</span>검수<span class="chip">진행중</span><span class="step-detail">code-reviewer 1차 검수 중</span></li>
+    <li id="dz-step-4" class="wait"><span class="num">4</span>배포<span class="chip">대기</span><span class="step-detail"></span></li>
+    </ol>
+  </div>
+  <div class="card" id="dz-impl-card">
+    <div class="impl-title">구현 세부 작업 · 디스패치와 결과 보고 시점에만 갱신</div>
+    <div class="pct" id="dz-impl-count">1/2 · 50%</div>
+    <ol class="steps" id="dz-impl-tasks">
+    <li id="dz-impl-1" class="done"><span class="num">1</span>파서 수정<span class="chip">완료</span><span class="step-detail">정규식 갱신</span></li>
+    <li id="dz-impl-2" class="active"><span class="num">2</span>테스트 추가<span class="chip">진행중</span><span class="step-detail">fixture 작성</span></li>
+    </ol>
+  </div>
+  <div class="card" id="dz-log-card">
+    <div class="log-title">작업 추적</div>
+    <input type="radio" name="dzf" id="dzf-all" class="dzf" checked><label for="dzf-all">전체</label>
+    <input type="radio" name="dzf" id="dzf-impl" class="dzf"><label for="dzf-impl">구현</label>
+    <input type="radio" name="dzf" id="dzf-review" class="dzf"><label for="dzf-review">검수</label>
+    <ul class="log" id="dz-log" data-server-port=""></ul>
+  </div>
+  <div class="foot" id="dz-updated">2026-08-13 10:00</div>
+</div>
+<button id="dz-pip-btn" type="button">플로팅</button>
+<div id="dz-pip-hint" hidden></div>
+<script>
+(function(){ /* 폴링·PiP 스크립트 — 파서 계약 밖(정적 영역) */ })();
+</script>
+</body>
+</html>

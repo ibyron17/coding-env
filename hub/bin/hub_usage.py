@@ -15,6 +15,7 @@ hub-card-cleanup-and-usage-source.md 결정 P1~P8 이 정본이다.
 import json
 import math
 from dataclasses import dataclass, replace
+from datetime import datetime, timezone
 
 USAGE_SESSION_WINDOW_HOURS = 5          # rate_limits.five_hour 가 재는 창의 길이. 만료 기준의 근거(결정 U3)
 MILLISECONDS_PER_HOUR = 60 * 60 * 1000
@@ -289,3 +290,107 @@ def format_status_line_summary(capture: RateLimitCapture | None) -> str:
     if capture.weekly_used_percent is not None:
         parts.append(f"주간 {capture.weekly_used_percent}%")
     return " · ".join(parts)
+
+
+# ---- 사용량 API 응답 (R1, docs/prps/hub-card-interactions-and-usage.md 「SP3 생략」 개정) ----
+# 스파이크 SP3(사전 API 호출)가 생략되고 "첫 폴링이 스파이크를 겸한다" 방식이 승인됨에 따라,
+# 1차 대응표는 SP3 실측이 아니라 커뮤니티 사용량 도구들이 공통으로 쓰는 스키마를 따른다.
+# 실 스키마가 다르면 schema_mismatch 로 강등되고 describe_json_key_structure 의 결과가
+# 자기 진단 창구가 된다 — 대응표가 틀렸을 때 화면이 깨지는 대신 조용히 강등된다(결정 A7).
+def _valid_usage_api_percentage(window: object) -> int | None:
+    """usage API 창 하나의 utilization(0~100 숫자)을 검증해 내림한 정수를 돌려준다.
+
+    필드명만 다를 뿐(utilization vs used_percentage) 값 검증 규칙은 `_valid_used_percentage`
+    를 그대로 재사용한다 — 판정 규칙이 출처마다 갈리면 상태줄과 패널이 다른 숫자를 보이게
+    된다(결정 P7 과 같은 이유).
+    """
+    if not isinstance(window, dict):
+        return None
+    return _valid_used_percentage({"used_percentage": window.get("utilization")})
+
+
+def _valid_usage_api_resets_at_ms(window: object, captured_at_ms: int) -> int | None:
+    """usage API 창 하나의 resets_at(ISO 8601 문자열)을 ms 로 변환해 검증한다.
+
+    statusLine 경로의 `resets_at` 은 초 단위 epoch 정수지만 usage API 는 ISO 8601 문자열이다
+    (1차 대응표). 문자열을 초 단위 epoch 로 바꾼 뒤 `_valid_resets_at_ms` 에 그대로 넘겨
+    지평선(단위 혼동) 검사 로직을 두 곳에 중복시키지 않는다. 타임존이 없는 문자열은 UTC 로
+    간주한다 — usage API 응답은 UTC 라고 가정하는 것이 로컬 타임존을 추측하는 것보다 안전하다.
+    """
+    if not isinstance(window, dict):
+        return None
+    resets_at = window.get("resets_at")
+    if not isinstance(resets_at, str):
+        return None
+    try:
+        parsed = datetime.fromisoformat(resets_at)
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return _valid_resets_at_ms({"resets_at": int(parsed.timestamp())}, captured_at_ms)
+
+
+def parse_usage_api_response(text: str, captured_at_ms: int) -> RateLimitCapture | None:
+    """usage API 응답 JSON 에서 캡처를 만든다. 계약이 안 맞으면 None(예외를 던지지 않는다).
+
+    1차 대응표(SP3 생략 개정): 최상위 `five_hour`·`seven_day` 객체, 각각
+    `utilization`(0~100 숫자)·`resets_at`(ISO 8601 문자열). 반환 타입은 기존
+    `RateLimitCapture` 그대로다 — 기존 캡처 파일 포맷·소비자를 바꾸지 않는 것이 이 설계의
+    핵심이다(결정 A2).
+    """
+    try:
+        payload = json.loads(text)
+    except (json.JSONDecodeError, TypeError):
+        return None
+    if not isinstance(payload, dict):
+        return None
+    five_hour = payload.get("five_hour")
+    seven_day = payload.get("seven_day")
+    session_resets_at_ms = _valid_usage_api_resets_at_ms(five_hour, captured_at_ms)
+    weekly_resets_at_ms = _valid_usage_api_resets_at_ms(seven_day, captured_at_ms)
+    session_used_percent = _valid_usage_api_percentage(five_hour)
+    weekly_used_percent = _valid_usage_api_percentage(seven_day)
+    if (
+        session_resets_at_ms is None
+        and weekly_resets_at_ms is None
+        and session_used_percent is None
+        and weekly_used_percent is None
+    ):
+        return None
+    return RateLimitCapture(
+        captured_at_ms=captured_at_ms,
+        session_resets_at_ms=session_resets_at_ms,
+        weekly_resets_at_ms=weekly_resets_at_ms,
+        session_used_percent=session_used_percent,
+        weekly_used_percent=weekly_used_percent,
+    )
+
+
+def _describe_json_node(node: object, path: str) -> list[str]:
+    """JSON 값 하나를 경로+타입 문자열 목록으로 접는다(재귀, 값은 절대 포함하지 않는다)."""
+    if isinstance(node, dict):
+        described: list[str] = []
+        for key in sorted(node):
+            described.extend(_describe_json_node(node[key], f"{path}/{key}"))
+        return described
+    if isinstance(node, list):
+        described = [f"{path} [list len={len(node)}]"]
+        if node:
+            described.extend(_describe_json_node(node[0], f"{path}/0"))
+        return described
+    return [f"{path} <{type(node).__name__}>"]
+
+
+def describe_json_key_structure(text: str) -> list[str] | None:
+    """JSON 문자열의 키 경로 + 타입 목록을 만든다. **값은 절대 포함하지 않는다**(불변식 A-SEC).
+
+    schema_mismatch 실패 기록(`last_usage_api_error.json` 의 `response_keys`)에 실려
+    자기 진단 창구가 된다(SP3 생략 개정) — 실제 응답 스키마가 1차 대응표와 다를 때, 사람이
+    `/hub status` 로 그 구조를 보고 대응표를 고칠 수 있게 한다. JSON 이 아니면 None.
+    """
+    try:
+        payload = json.loads(text)
+    except (json.JSONDecodeError, TypeError):
+        return None
+    return _describe_json_node(payload, "")

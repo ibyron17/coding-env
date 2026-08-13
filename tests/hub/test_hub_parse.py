@@ -88,6 +88,30 @@ class ParseOldGenerationDashboardTest(unittest.TestCase):
         self.assertEqual(third_step.detail, "")
 
 
+class ParseNewGenerationDashboardTest(unittest.TestCase):
+    """P9 — 9f32074 이후 세대 픽스처(#dz-subtitle·data-started-at·세션 탭 없음). 파싱 성공."""
+
+    def setUp(self) -> None:
+        self.snapshot = hub_parse.parse_dashboard_html(_read_fixture("new_generation_dashboard.html"))
+
+    def test_parses_successfully_without_subtitle(self) -> None:
+        self.assertIsNotNone(self.snapshot)
+        self.assertEqual(self.snapshot.title, "신세대 대시보드 예시")
+        self.assertEqual(self.snapshot.subtitle, "")
+
+    def test_progress_and_steps(self) -> None:
+        self.assertEqual((self.snapshot.completed, self.snapshot.total, self.snapshot.percent), (2, 4, 50))
+        self.assertEqual(len(self.snapshot.steps), 4)
+        self.assertEqual([step.state for step in self.snapshot.steps], ["done", "done", "active", "wait"])
+
+    def test_missing_started_at_defaults_to_none(self) -> None:
+        for step in self.snapshot.steps:
+            self.assertIsNone(step.started_at)
+
+    def test_impl_counts(self) -> None:
+        self.assertEqual((self.snapshot.impl_done, self.snapshot.impl_total), (1, 2))
+
+
 class ParseInvalidInputTest(unittest.TestCase):
     """P7 — 대시보드가 아닌 HTML / 빈 문자열 / 잘린 파일 → None."""
 

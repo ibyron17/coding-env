@@ -27,6 +27,9 @@ TEMPLATE_PATH = SCRIPT_DIR / "hub_template.html"
 # 배경 spawn(hub_hook.py)의 stdout/stderr 는 DEVNULL 이라 실패가 완전히 무성음이 된다 — 마지막
 # collect 실패를 이 파일에 남겨 `/hub status` 가 읽을 수 있게 한다(검수 M7).
 LAST_COLLECT_ERROR_PATH = HUB_HOME / "last_collect_error.json"
+# 사용량 API 폴링(R1) 실패 기록 — last_collect_error.json 과 완전히 같은 모양이다(새 개념 0개,
+# 결정 A5). schema_mismatch 일 때만 response_keys(키 구조, 값 없음)가 더 실린다.
+LAST_USAGE_API_ERROR_PATH = HUB_HOME / "last_usage_api_error.json"
 # 훅 버스트(같은 5초 안에 여러 세션이 동시에 훅을 쏘는 경우) 디바운스용 스탬프(검수 n3).
 # hub.html 의 mtime 은 spawn 된 collect 가 끝나야 바뀌므로, 그 사이 도착하는 훅들은 여전히
 # 오래된 mtime 을 보고 각자 spawn 을 결정해 버린다 — spawn 직전에 이 파일을 touch 하면
@@ -50,7 +53,6 @@ class HubCollectError(Exception):
     하고 호출자(hub.py)가 `{"ok": false, "reason": ...}` 계약으로 변환한다.
     """
 
-DASHBOARD_RELATIVE_PATH = ".claude/dashboard.html"
 PROJECT_MARKER_NAMES = (".claude", ".git")
 MILLISECONDS_PER_DAY = 24 * 60 * 60 * 1000
 DATE_FORMAT = "%Y-%m-%d"
@@ -69,6 +71,8 @@ _CONFIG_FIELD_TYPES: dict[str, type | tuple[type, ...]] = {
     "server_port": int,
     "server_collect_interval_seconds": int,
     "show_usage_panel": bool,
+    "usage_api_enabled": bool,
+    "usage_api_poll_interval_seconds": int,
 }
 
 
@@ -218,7 +222,7 @@ def prune_old_event_files(now_ms: int, retention_days: int) -> None:
 # ---- 티어 1: /dashboard DOM ----
 def read_tier1_snapshot(project_path: str) -> tuple[hub_parse.Tier1Snapshot | None, str | None]:
     """프로젝트의 .claude/dashboard.html 을 읽어 판다. (스냅샷, 경고 메시지) 튜플을 돌려준다."""
-    dashboard_path = Path(project_path) / DASHBOARD_RELATIVE_PATH
+    dashboard_path = Path(project_path) / hub_model.PROJECT_DASHBOARD_RELATIVE_PATH
     if not dashboard_path.is_file():
         return None, None
     try:
@@ -459,6 +463,45 @@ def read_last_collect_failure() -> dict | None:
         return None
     try:
         return json.loads(LAST_COLLECT_ERROR_PATH.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+
+
+# ---- 사용량 API 폴링 실패 기록 (R1) — record_collect_failure 와 완전히 같은 형태(결정 A5) ----
+def record_usage_api_failure(reason: str, response_keys: list[str] | None = None) -> None:
+    """사용량 API 실패를 기록한다. 이 함수 자신은 절대 예외를 던지지 않는다
+    (`record_collect_failure` 와 완전히 같은 형태·같은 이유 — 기록 자체의 실패가 호출자의
+    예외 처리 범위를 뚫고 나가면 안 된다).
+
+    `response_keys` 는 `reason="schema_mismatch"` 일 때만 채운다(SP3 생략 개정의 자기 진단
+    창구) — 키 경로 + 타입 목록뿐이며 값은 절대 담지 않는다(불변식 A-SEC).
+    """
+    try:
+        HUB_HOME.mkdir(parents=True, exist_ok=True)
+        payload: dict = {"at_ms": int(time.time() * 1000), "reason": reason}
+        if response_keys is not None:
+            payload["response_keys"] = response_keys
+        _atomic_write_text(
+            LAST_USAGE_API_ERROR_PATH,
+            HUB_HOME,
+            "last_usage_api_error.json.",
+            json.dumps(payload, ensure_ascii=False),
+        )
+    except OSError as error:
+        print(f"사용량 API 실패 기록 자체가 실패했습니다: {reason} (기록 실패 사유: {error})", file=sys.stderr)
+
+
+def clear_usage_api_failure() -> None:
+    """사용량 API 폴링이 성공하면 이전 실패 기록을 지운다."""
+    LAST_USAGE_API_ERROR_PATH.unlink(missing_ok=True)
+
+
+def read_last_usage_api_failure() -> dict | None:
+    """마지막으로 기록된 사용량 API 실패(있으면)를 읽는다. 없거나 깨졌으면 None."""
+    if not LAST_USAGE_API_ERROR_PATH.exists():
+        return None
+    try:
+        return json.loads(LAST_USAGE_API_ERROR_PATH.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
         return None
 

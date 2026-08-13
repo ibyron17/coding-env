@@ -175,6 +175,38 @@ def _usage_sample_age_ms(now_ms: int, config: hub_model.HubConfig) -> int | None
     return now_ms - sample.sampled_at_ms
 
 
+def _usage_api_last_attempt_age_ms(now_ms: int) -> int | None:
+    """진단용 — 사용량 API(R1)의 마지막 시도로부터 지난 시간(ms).
+
+    폴링 스케줄(`UsageApiPollState`)은 상주 서버 수집 루프의 **지역 변수**라(결정 A3, 전역
+    상태 금지) 이 전경 명령 프로세스가 직접 읽을 수 없다. 새 "마지막 시도 시각" 상태 파일을
+    따로 만들지 않고(개념 추가 최소화), 이미 있는 관측 가능한 부수효과 두 곳 중 **더 최근
+    것**을 근거로 삼는다: 실패 기록(`last_usage_api_error.json`)의 `at_ms`, 또는 캡처 파일
+    (`rate_limits.json`)의 파일 mtime(성공 시 갱신됨).
+
+    알려진 한계는 **양방향**이다. (1) 연속 성공 폴링이 매번 **같은 값**을 관측하면
+    `same_capture_values` 게이트가 쓰기를 건너뛰어 mtime 이 갱신되지 않으므로, 이 필드가
+    실제 마지막 시도 시각보다 **오래된** 것처럼 보일 수 있다. (2) `rate_limits.json` 은
+    statusLine 생산자(`hub_statusline.py`)도 같은 파일에 쓴다(결정 A2, 공존 규칙) — 따라서
+    `usage_api_enabled:false` 여도 터미널에서 statusLine 이 활성이면 그 mtime 이 갱신되어,
+    **한 번도 시도하지 않은** 사용량 API 폴링이 방금 있었던 것처럼 이 필드가 non-None 으로
+    보일 수 있다(반대 방향의 교차오염). 상태 파일을 새로 만드는 비용보다 이 근사가 낫다고
+    판단했다 — 정확한 원인 판정은 `usage_api_enabled`·`usage_api_last_failure` 를 함께 봐야
+    한다. 시도 흔적이 전혀 없으면 None.
+    """
+    attempt_evidence_at_ms: list[int] = []
+    last_failure = hub_collect.read_last_usage_api_failure()
+    if isinstance(last_failure, dict) and isinstance(last_failure.get("at_ms"), int):
+        attempt_evidence_at_ms.append(last_failure["at_ms"])
+    try:
+        attempt_evidence_at_ms.append(int(hub_collect.RATE_LIMITS_PATH.stat().st_mtime * 1000))
+    except OSError:
+        pass
+    if not attempt_evidence_at_ms:
+        return None
+    return now_ms - max(attempt_evidence_at_ms)
+
+
 def cmd_status(args: argparse.Namespace) -> int:
     """훅 설치 상태 · 이벤트 · 마지막 수집 실패 · 서버 요약 · 사용량 진단을 보고한다(검수 R3-m2)."""
     now_ms = _now_ms()
@@ -201,6 +233,9 @@ def cmd_status(args: argparse.Namespace) -> int:
             "statusline_installed": hub_settings.statusline_install_status(),
             "rate_limit_capture_age_ms": _rate_limit_capture_age_ms(now_ms, config),
             "rate_limit_resets_remaining_ms": _rate_limit_resets_remaining_ms(now_ms, config),
+            "usage_api_enabled": config.usage_api_enabled,
+            "usage_api_last_attempt_age_ms": _usage_api_last_attempt_age_ms(now_ms),
+            "usage_api_last_failure": hub_collect.read_last_usage_api_failure(),
         },
         args.json,
     )
