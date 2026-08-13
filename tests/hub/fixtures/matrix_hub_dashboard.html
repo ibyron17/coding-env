@@ -1,0 +1,424 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<title>세션 진행 상황 대시보드</title>
+<!--
+DZ:DASHBOARD 갱신 맵 (동적 영역 — 셀렉터 기반 정밀 치환, commands/dashboard.md 참조)
+  #dz-title            : 세션 제목 텍스트
+  #dz-subtitle          : 단계 흐름 요약 · 작업 유형 텍스트
+  #dz-progress-bar      : inline style width:N%
+  #dz-progress-pct      : 진행률 텍스트 (예: 3/6 · 50%)
+  #dz-step-{n}          : [그룹 1개] 각 단계 li — class(done|active|wait) + .chip 텍스트
+                          + .step-detail 텍스트(그 단계의 한 줄 상세. 비어 있으면 CSS 가 숨긴다)
+                          + data-started-at 속성(그 단계가 active 로 전이한 시각. 선형 모드 전용)
+  #dz-cell-{g}-{p}      : [그룹 2+] 매트릭스 칸 td — data-state(done|active|wait|na) + 칸 텍스트
+                          {g}=행(그룹) 번호, {p}=열(단계) 번호. 한 파일에 step/cell 이 공존하지 않는다
+  #dz-group-{g}         : [그룹 2+] 행 머리 th — init 이 그룹명을 넣고 이후 치환하지 않는다
+  #dz-log               : 작업 추적 ul — li data-seq 앵커로 prepend / data-current-session 속성(현재 세션 번호)
+                          / data-server-port 속성(이 대시보드를 서빙 중인 로컬 서버 포트. 비어 있으면
+                            서버 없음. 오케스트레이터만 읽고 쓴다 — 스크립트는 건드리지 않는다)
+  #dz-updated           : 갱신 시각 텍스트
+  #dz-impl-{k}          : [선택] 구현 세부 작업 li — class(done|active|wait) + .chip 텍스트
+                          + .step-detail 텍스트. active 가 동시에 여러 개일 수 있다
+  #dz-impl-count        : [선택] 구현 세부 진행 텍스트 (예: 3/8 · 38%). 매크로 진행률과 별개다
+  #dz-impl-tasks        : [선택] 세부 작업 ol — impl set 이 한 번 채운다
+정적(불가침): 골격 · <style> · 제목 · 하단 스크립트
+  #dz-pip-btn / #dz-pip-hint : 플로팅 진입 버튼과 안내 한 줄. .wrap 바깥에 있으며
+                               init/step/log 도, 폴링 동기화도 이 둘을 건드리지 않는다
+  #dz-log-card               : 작업 추적 카드 div. PiP 압축 뷰가 CSS 로만 숨긴다
+                               (DOM 에서 제거하지 않는다 — 복귀 시 로그가 사라진다)
+  #dz-impl-card              : 구현 세부 작업 카드 div. 목록이 비면 CSS :has() 가 통째로 숨긴다
+                               (DOM 에서 제거하지 않는다 — 폴링이 outerHTML 로 동기화한다)
+  #dz-now-card               : 「지금」 카드 div. 안의 세 요소는 전부 스크립트가 그린다 —
+                               init/step/log 도, 폴링도 이 카드를 치환하지 않는다(불변식 7).
+                               진행중 단계가 없거나 매트릭스 세션이면 CSS 가 통째로 숨긴다
+-->
+<style>
+  :root{--ink:#172033;--muted:#5E6B7D;--line:#D9E2EC;--soft:#F4F7FB;--blue:#1E5AA8;--navy:#12335B;--green:#1F8A70;--orange:#F59E0B;--red:#C2410C;}
+  *{box-sizing:border-box}
+  body{margin:0;font-family:"Pretendard","Apple SD Gothic Neo","Malgun Gothic",sans-serif;color:var(--ink);background:#EEF3F8;line-height:1.55}
+  .wrap{max-width:860px;margin:32px auto;padding:0 16px}
+  .card{background:#fff;border:1px solid var(--line);border-radius:14px;padding:26px 30px;box-shadow:0 8px 24px rgba(19,51,91,.07);margin-bottom:16px}
+  h1{font-size:21px;margin:0 0 4px;color:var(--navy);letter-spacing:-.5px}
+  .sub{font-size:13px;color:var(--muted);margin-bottom:18px}
+  .bar-outer{height:14px;background:var(--soft);border-radius:999px;overflow:hidden;border:1px solid var(--line)}
+  .bar-inner{height:100%;background:linear-gradient(90deg,var(--blue),#2D78C8);border-radius:999px;transition:width .4s}
+  .pct{font-size:13px;font-weight:700;color:var(--blue);margin-top:6px}
+  ol.steps{list-style:none;margin:14px 0 0;padding:0}
+  ol.steps li{display:flex;align-items:center;gap:12px;padding:11px 4px;border-bottom:1px solid var(--soft);font-size:15px;flex-wrap:wrap;row-gap:3px}
+  ol.steps li:last-child{border-bottom:0}
+  .num{width:26px;height:26px;border-radius:8px;display:grid;place-items:center;font-size:13px;font-weight:800;background:var(--soft);color:var(--muted);flex:none}
+  li.done .num{background:var(--green);color:#fff}
+  li.active .num{background:var(--blue);color:#fff}
+  li.done{color:var(--muted)}
+  li.active{font-weight:700;color:var(--navy)}
+  .chip{margin-left:auto;font-size:12px;font-weight:800;padding:3px 10px;border-radius:999px;background:var(--soft);color:var(--muted);flex:none}
+  li.done .chip{background:#E5F3EE;color:var(--green)}
+  li.active .chip{background:#EAF2FB;color:var(--blue)}
+  .step-detail{flex-basis:100%;margin-left:38px;font-size:12.5px;font-weight:400;color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .step-detail:empty{display:none}
+  .now-line{display:flex;align-items:baseline;gap:10px;flex-wrap:wrap;row-gap:3px}
+  .now-label{font-size:11px;font-weight:800;letter-spacing:.3px;color:var(--muted);flex:none}
+  #dz-now-phase{font-size:16px;font-weight:700;color:var(--navy)}
+  #dz-now-elapsed{margin-left:auto;font-size:12px;font-weight:700;color:var(--blue);flex:none}
+  #dz-now-elapsed:empty{display:none}
+  .wrap:not(:has(#dz-steps li.active)) #dz-now-card{display:none}
+  #dz-impl-card:not(:has(#dz-impl-tasks li)){display:none}
+  table.matrix{width:100%;border-collapse:collapse;margin:14px 0 0;font-size:14px}
+  .matrix th,.matrix td{border:1px solid var(--line);padding:9px 10px}
+  .matrix thead th{font-size:12px;font-weight:800;background:var(--soft);color:var(--muted);text-align:center}
+  .matrix th.corner{text-align:left}
+  .matrix th.group{text-align:left;font-weight:700;color:var(--navy);width:34%}
+  .matrix td.cell{text-align:center;font-size:12px;font-weight:800;background:var(--soft);color:var(--muted)}
+  .matrix td.cell[data-state="done"]{background:#E5F3EE;color:var(--green)}
+  .matrix td.cell[data-state="active"]{background:#EAF2FB;color:var(--blue)}
+  .matrix td.cell[data-state="na"]{background:#fff;color:var(--line)}
+  .badge{display:inline-block;font-size:11px;font-weight:800;padding:2px 8px;border-radius:999px;margin-right:6px}
+  .badge.round{background:var(--soft);color:var(--muted)}
+  .badge.impl{background:#EAF2FB;color:var(--blue)}
+  .badge.pass{background:#E5F3EE;color:var(--green)}
+  .badge.fail{background:#FBE9E2;color:var(--red)}
+  .badge.commit{background:#E7EAF3;color:var(--navy)}
+  .dzf{position:absolute;opacity:0;pointer-events:none}
+  label[for^="dzf-"]{display:inline-block;font-size:12px;font-weight:700;padding:4px 12px;margin:8px 6px 8px 0;border-radius:999px;background:var(--soft);color:var(--muted);cursor:pointer;border:1px solid var(--line)}
+  .dzf:checked + label{background:var(--blue);color:#fff;border-color:var(--blue)}
+  #dzf-impl:checked   ~ #dz-log .entry:not([data-kind="impl"]){display:none}
+  #dzf-review:checked ~ #dz-log .entry:not([data-kind="review"]){display:none}
+  .dzs{position:absolute;opacity:0;pointer-events:none}
+  label[for^="dzs-"]{display:inline-block;font-size:12px;font-weight:700;padding:5px 13px;margin:0 4px 6px 0;border-radius:8px 8px 0 0;color:var(--muted);cursor:pointer;border-bottom:2px solid transparent}
+  .dzs:checked + label{color:var(--navy);background:var(--soft);border-bottom-color:var(--navy)}
+  input[name="dzs"]:checked:not(#dzs-all) ~ #dz-log .session-head{display:none}
+  /* DZ:SESSION-RULES — 세션 탭 필터 규칙. init 이 세션마다 아래에 1줄씩 추가한다 */
+  ul.log{list-style:none;margin:6px 0 0;padding:0;font-size:13px;color:#4B5A6D}
+  .entry{border-bottom:1px solid var(--soft);padding:8px 4px}
+  .entry:last-child{border-bottom:0}
+  .entry summary{cursor:pointer;display:flex;align-items:center;gap:8px;list-style:none}
+  .entry summary::-webkit-details-marker{display:none}
+  .entry summary::marker{content:""}
+  .entry .time{font-size:11px;color:var(--muted);flex:none;width:40px}
+  .entry .lead{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-weight:600;color:var(--ink)}
+  .entry .detail{margin:6px 0 0 48px;font-size:12.5px;color:var(--muted);white-space:pre-wrap}
+  .session-head{margin:14px 0 6px;padding:0 4px 6px;border-bottom:2px solid var(--line);font-size:11px;font-weight:800;letter-spacing:.3px;color:var(--navy)}
+  .session-head:first-child{margin-top:0}
+  .log-title,.impl-title{font-size:13px;font-weight:700;color:var(--muted);margin:0 0 10px}
+  .foot{font-size:12px;color:var(--muted);text-align:right}
+  #dz-pip-btn{position:fixed;top:18px;right:18px;z-index:9;font-family:inherit;font-size:12px;font-weight:700;padding:7px 14px;border-radius:999px;border:1px solid var(--line);background:#fff;color:var(--navy);cursor:pointer;box-shadow:0 2px 8px rgba(19,51,91,.10)}
+  #dz-pip-btn:disabled{color:var(--muted);cursor:not-allowed;box-shadow:none}
+  #dz-pip-hint{position:fixed;top:54px;right:18px;z-index:9;max-width:300px;font-size:11px;line-height:1.5;color:var(--muted);background:#fff;border:1px solid var(--line);border-radius:8px;padding:8px 10px;box-shadow:0 2px 8px rgba(19,51,91,.10)}
+  #dz-pip-hint[hidden]{display:none}
+  body.dz-pip .wrap{margin:10px auto;padding:0 10px}
+  body.dz-pip .card{padding:14px 16px;border-radius:10px;margin-bottom:10px}
+  body.dz-pip h1{font-size:16px}
+  body.dz-pip .sub{margin-bottom:12px}
+  body.dz-pip #dz-log-card{display:none}
+  body.dz-pip ol.steps li{padding:9px 4px}
+  body.dz-pip ol.steps li.active{background:#EAF2FB;border-radius:8px;padding-left:8px;padding-right:8px}
+  body.dz-pip ol.steps li:not(.active) .step-detail{display:none}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="card">
+    <h1 id="dz-title">worktree 격리 배포 파이프라인</h1>
+    <div class="sub" id="dz-subtitle">2개 영역 · 설계 → 구현 → 테스트 → 검수 · 전체 경로</div>
+    <div class="bar-outer"><div class="bar-inner" id="dz-progress-bar" style="width:50%"></div></div>
+    <div class="pct" id="dz-progress-pct">4/8 · 50%</div>
+    <table class="matrix" id="dz-matrix">
+      <thead>
+        <tr>
+          <th class="corner">영역</th>
+          <th>설계</th>
+          <th>구현</th>
+          <th>테스트</th>
+          <th>검수</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <th class="group" id="dz-group-1">worktree 격리</th>
+          <td class="cell" id="dz-cell-1-1" data-state="done">완료</td>
+          <td class="cell" id="dz-cell-1-2" data-state="done">완료</td>
+          <td class="cell" id="dz-cell-1-3" data-state="done">완료</td>
+          <td class="cell" id="dz-cell-1-4" data-state="active">진행중</td>
+        </tr>
+        <tr>
+          <th class="group" id="dz-group-2">G-1 PRP 승인</th>
+          <td class="cell" id="dz-cell-2-1" data-state="done">완료</td>
+          <td class="cell" id="dz-cell-2-2" data-state="active">진행중</td>
+          <td class="cell" id="dz-cell-2-3" data-state="wait">대기</td>
+          <td class="cell" id="dz-cell-2-4" data-state="wait">대기</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+  <div class="card" id="dz-now-card">
+    <div class="now-line"><span class="now-label">지금</span><span id="dz-now-phase"></span><span id="dz-now-elapsed"></span></div>
+    <div class="step-detail" id="dz-now-next"></div>
+  </div>
+  <div class="card" id="dz-impl-card">
+    <div class="impl-title">구현 세부 작업 · 디스패치와 결과 보고 시점에만 갱신</div>
+    <div class="pct" id="dz-impl-count">0/5 · 0%</div>
+    <ol class="steps" id="dz-impl-tasks">
+    <li id="dz-impl-1" class="active"><span class="num">1</span>M1 순수 로직 — hub_parse·hub_model + 단위 테스트<span class="chip">진행중</span><span class="step-detail">implementer 디스패치됨</span></li>
+    <li id="dz-impl-2" class="active"><span class="num">2</span>M2 수집·렌더 — hub_collect·hub_template + collect/open<span class="chip">진행중</span><span class="step-detail">implementer 디스패치됨</span></li>
+    <li id="dz-impl-3" class="active"><span class="num">3</span>M3 훅 — hub_hook·hub_settings + install/uninstall-hooks<span class="chip">진행중</span><span class="step-detail">implementer 디스패치됨</span></li>
+    <li id="dz-impl-4" class="active"><span class="num">4</span>M4 serve/stop + 페이지 폴링<span class="chip">진행중</span><span class="step-detail">implementer 디스패치됨</span></li>
+    <li id="dz-impl-5" class="active"><span class="num">5</span>M5 배포 — install.sh·tests·README·commands/hub.md<span class="chip">진행중</span><span class="step-detail">implementer 디스패치됨</span></li>
+    </ol>
+  </div>
+  <div class="card" id="dz-log-card">
+    <div class="log-title">작업 추적</div>
+    <input type="radio" name="dzf" id="dzf-all" class="dzf" checked><label for="dzf-all">전체</label>
+    <input type="radio" name="dzf" id="dzf-impl" class="dzf"><label for="dzf-impl">구현</label>
+    <input type="radio" name="dzf" id="dzf-review" class="dzf"><label for="dzf-review">검수</label>
+    <ul class="log" id="dz-log" data-current-session="1" data-server-port="8791">
+<li class="entry" data-kind="impl" data-seq="1" data-session="1">
+  <details open>
+    <summary>
+      <span class="time">18:29</span>
+      <span class="badge impl">구현</span>
+      <span class="lead">PRP 설계 문서 작성 완료 — 3티어 데이터 모델 · 훅 6종 · /hub 커맨드</span>
+    </summary>
+    <div class="detail">design-architect(opus) 산출물 docs/prps/hub-dashboard.md. 핵심 결정: 티어1 DOM 직접 파싱(JSON 블록 기각), 훅은 command+append 서버리스(Notification 제외), 프로젝트 발견은 정방향 인코딩 정확일치(역디코딩 기각), 훅 설치는 /hub install 옵트인, 배포는 hub/bin 신설 + COMMANDS_FILE_COUNT 8→9.</div>
+  </details>
+</li>
+</ul>
+  </div>
+  <div class="foot" id="dz-updated">2026-08-10 18:36</div>
+</div>
+<button id="dz-pip-btn" type="button">플로팅</button>
+<div id="dz-pip-hint" hidden></div>
+<script>
+(function(){
+  var POLL_INTERVAL_MS = 5000;          // 로컬 파일 폴링 주기
+  var FAILURE_LIMIT = 3;                // 연속 실패 이 횟수부터 사용자에게 알린다
+  var PIP_WIDTH = 420;
+  var PIP_MIN_HEIGHT = 200, PIP_MAX_HEIGHT = 720;
+  // documentPictureInPicture 창의 요청 height 는 콘텐츠 높이가 아니라 outerHeight(제목
+  // 표시줄 포함) 로 해석된다(실측). 그 여백은 OS·브라우저마다 달라 미리 알 수 없다 — 창을
+  // 연 직후 outerHeight-innerHeight 를 재서 다음 열기부터 보정하는 방식도 시도했으나,
+  // .then() 시점엔 창 크기가 아직 안정되지 않아 값이 널뛰어 더 위험했다(실측: 두 번째
+  // 열기에서 요청 높이가 음수로 접혀 200px 바닥으로 떨어짐). 그래서 실측 보정 대신 여러
+  // 환경에서 관찰한 제목 표시줄 여백보다 넉넉한 고정값을 쓴다 — 몇십 px 여백이 남는 것이
+  // 콘텐츠가 잘리는 것보다 안전하다.
+  var PIP_CHROME_ALLOWANCE = 100;
+  var PIP_CONTENT_PADDING = 24;         // 콘텐츠 하단 여백(카드 그림자·라운딩 여유)
+  var NOW_TICK_MS = 30000;              // 「지금」 카드 경과 시간 갱신 주기
+  var MINUTES_PER_HOUR = 60;
+  var MS_PER_MINUTE = 60000;
+
+  var wrap = document.querySelector('.wrap');
+  var pipButton = document.getElementById('dz-pip-btn');
+  var pipHint = document.getElementById('dz-pip-hint');
+  var isServed = location.protocol === 'http:' || location.protocol === 'https:';
+  var hasPipSupport = 'documentPictureInPicture' in window;
+  var pipWindow = null;
+  var lastHtml = '';
+  var busy = false;
+  var failureCount = 0;
+  var reloadPending = false;
+  var reasonHint = '';            // 버튼이 비활성인 영구 사유. 해소되기 전까지 유지된다
+
+  function setHint(text){ pipHint.textContent = text || ''; pipHint.hidden = !text; }
+
+  // ── 「지금」 카드: #dz-steps 와 #dz-updated 에서 파생되는 표시 전용 뷰 (불변식 7) ──
+  var nowPhase = document.getElementById('dz-now-phase');
+  var nowElapsed = document.getElementById('dz-now-elapsed');
+  var nowNext = document.getElementById('dz-now-next');
+
+  // new Date(문자열) 은 ISO 8601 이 아닌 형식에서 파싱 결과가 구현 정의다 — 필드를 직접 뽑는다.
+  function parseStamp(text){
+    var f = /(\d{4})-(\d{2})-(\d{2})[ T](\d{2}):(\d{2})/.exec(text || '');
+    return f ? new Date(+f[1], +f[2]-1, +f[3], +f[4], +f[5]) : null;
+  }
+  function formatDuration(from, now){
+    var minutes = Math.floor((now - from) / MS_PER_MINUTE);
+    if(!isFinite(minutes) || minutes < 0) return '';
+    return minutes < MINUTES_PER_HOUR ? minutes + '분'
+      : Math.floor(minutes / MINUTES_PER_HOUR) + '시간 ' + (minutes % MINUTES_PER_HOUR) + '분';
+  }
+  function phaseLabel(item){
+    if(!item) return '';
+    var number = item.querySelector('.num'), name = '';
+    // 자식 span(.num/.chip/.step-detail)을 제외한 직계 텍스트만이 단계명이다.
+    Array.prototype.forEach.call(item.childNodes, function(node){
+      if(node.nodeType === 3) name += node.textContent;
+    });
+    return (number ? number.textContent + '. ' : '') + name.trim();
+  }
+  function elapsedLabel(active, now){
+    var parts = [];
+    var startedAt = parseStamp(active.getAttribute('data-started-at'));
+    var updatedAt = parseStamp(wrap.querySelector('#dz-updated').textContent);
+    // formatDuration 은 손상/미래 타임스탬프(시계 되감김 등)에 빈 문자열을 반환한다 —
+    // 그 경우 숫자 없는 라벨(" 경과")만 남지 않도록 조각 자체를 넣지 않는다.
+    var elapsed = startedAt ? formatDuration(startedAt, now) : '';
+    if(elapsed) parts.push(elapsed + ' 경과');
+    var sinceUpdate = updatedAt ? formatDuration(updatedAt, now) : '';
+    if(sinceUpdate) parts.push('마지막 기록 ' + sinceUpdate + ' 전');
+    return parts.join(' · ');
+  }
+  function renderNowCard(){
+    // 매트릭스 세션이거나 진행중 단계가 없으면 그릴 것이 없다 — 카드는 CSS 가 숨긴다.
+    var active = wrap.querySelector('#dz-steps li.active');
+    if(!active) return;
+    var now = Date.now();
+    nowPhase.textContent = phaseLabel(active);
+    nowElapsed.textContent = elapsedLabel(active, now);
+    nowNext.textContent = active.nextElementSibling
+      ? '다음 → ' + phaseLabel(active.nextElementSibling) : '';
+  }
+  renderNowCard();
+  setInterval(renderNowCard, NOW_TICK_MS);
+
+  // ── 갱신 경로 A: file:// — Phase 1 방식 그대로. 이 분기는 회귀 금지 대상이다 ──
+  if(!isServed){
+    var reloading = false;
+    var reloadOnce = function(){ if(reloading) return; reloading = true; location.reload(); };
+    document.addEventListener('visibilitychange', function(){ if(document.visibilityState==='visible') reloadOnce(); });
+    window.addEventListener('focus', reloadOnce);
+    pipButton.disabled = true;
+    setHint('플로팅 창은 로컬 서버에서만 동작합니다. /dashboard serve 를 실행하고 http://localhost:8791/dashboard.html 로 여세요.');
+    return;
+  }
+
+  // ── 갱신 경로 B: http(s):// — 폴링 + 부분 치환 ──
+  function syncText(fresh, id){
+    var live = wrap.querySelector('#'+id), next = fresh.getElementById(id);
+    if(live && next) live.textContent = next.textContent;
+  }
+  function syncProgressBar(fresh){
+    var live = wrap.querySelector('#dz-progress-bar'), next = fresh.getElementById('dz-progress-bar');
+    if(live && next) live.setAttribute('style', next.getAttribute('style') || '');
+  }
+  function syncVisualization(fresh){
+    // 선형(#dz-steps)과 매트릭스(#dz-matrix)는 한 파일에 하나만 존재한다(불변식 1).
+    var live = wrap.querySelector('#dz-steps,#dz-matrix'), next = fresh.querySelector('#dz-steps,#dz-matrix');
+    if(live && next) live.outerHTML = next.outerHTML;
+  }
+  function syncLog(fresh){
+    var live = wrap.querySelector('#dz-log'), next = fresh.getElementById('dz-log');
+    if(live && next) live.innerHTML = next.innerHTML;
+  }
+  function syncImplCard(fresh){
+    // 이 카드는 .wrap 안이지만 #dz-steps 동기화 대상이 아니다 — 별도 대입이 없으면 영구히 stale 된다.
+    var live = wrap.querySelector('#dz-impl-card'), next = fresh.getElementById('dz-impl-card');
+    if(live && next) live.outerHTML = next.outerHTML;
+  }
+  function sessionTabsChanged(fresh){
+    return fresh.querySelectorAll('input[name="dzs"]').length
+        !== wrap.querySelectorAll('input[name="dzs"]').length;
+  }
+  // 압축 뷰는 작업 추적 카드가 빠져 실제 콘텐츠가 훨씬 짧다 — 여는 시점의 크기를
+  // measureCompactHeight() 로 미리 맞추므로(아래), 이 함수는 열린 뒤 콘텐츠 높이가
+  // 바뀌었을 때(단계 상세 추가 등)의 보정 시도다. pipWindow.resizeTo() 는 Document PiP 창에서
+  // 사용자 제스처(transient activation)를 요구한다(Chrome 실측: NotAllowedError). 이 함수는
+  // rAF·폴링에서 호출되므로 제스처가 이미 소진된 뒤라 대개 조용히 실패한다 — 브라우저 API
+  // 한계이며 무해하게 catch 된다.
+  function resizePipToFit(){
+    if(!pipWindow) return;
+    var h = Math.ceil(wrap.getBoundingClientRect().height) + PIP_CONTENT_PADDING;
+    try{ pipWindow.resizeTo(PIP_WIDTH, Math.max(PIP_MIN_HEIGHT, Math.min(PIP_MAX_HEIGHT, h))); }
+    catch(e){ /* 리사이즈 불가 환경이어도 폴링·동기화는 계속돼야 한다 */ }
+  }
+  // .wrap 은 아직 메인 문서(body.dz-pip 아님)에 있다 — 압축 뷰 클래스를 순간적으로 얹어
+  // 실제 렌더 높이를 재고 즉시 되돌린다. 읽기와 되돌리기가 같은 동기 구간 안에서 끝나므로
+  // 브라우저가 그 사이의 레이아웃을 페인트할 기회가 없어 화면 깜빡임이 없다. PiP 창을 여는
+  // 호출은 열린 뒤의 resizeTo() 와 달리 사용자 제스처를 그대로 쓸 수 있으므로, 크기는 여기서
+  // "처음부터 맞게" 정한다 — resizePipToFit() 의 사후 보정에 기대지 않는다.
+  // 메인 창은 보통 .wrap 의 max-width(860px)만큼 넓어 PIP_WIDTH(420)보다 훨씬 넓게 렌더링된다
+  // — 폭을 강제하지 않으면 실제 PiP 창에서 줄바꿈되는 텍스트(제목·단계 상세 등)가 측정
+  // 시점엔 한 줄로 남아 높이를 과소평가한다. 그래서 측정 동안만 .wrap 폭도 함께 좁힌다.
+  function measureCompactHeight(){
+    document.body.classList.add('dz-pip');
+    wrap.style.width = PIP_WIDTH + 'px';
+    var h = Math.ceil(wrap.getBoundingClientRect().height) + PIP_CONTENT_PADDING + PIP_CHROME_ALLOWANCE;
+    wrap.style.width = '';
+    document.body.classList.remove('dz-pip');
+    return Math.max(PIP_MIN_HEIGHT, Math.min(PIP_MAX_HEIGHT, h));
+  }
+  function apply(html){
+    if(html === lastHtml) return;
+    lastHtml = html;
+    var fresh = new DOMParser().parseFromString(html, 'text/html');
+    // 라디오와 <style> 은 치환 대상이 아니다(사용자가 고른 필터·탭이 날아간다).
+    // 세션 탭 개수가 달라지면 전체 리로드가 유일하게 안전한 경로다. 플로팅 중에는
+    // 리로드가 PiP 참조를 죽이므로, 창을 먼저 강제로 닫는다 — opener 쪽에서
+    // pipWindow.close() 를 호출하는 것은 Document PiP 스펙이 지원하는 정상 동작이다
+    // (사용자 제스처 요건은 '여는' 쪽에만 적용되고 닫는 쪽에는 없다).
+    if(sessionTabsChanged(fresh)){
+      if(!pipWindow){ location.reload(); return; }
+      reloadPending = true;
+      pipWindow.close();   // pagehide 핸들러가 reloadPending 을 보고 즉시 리로드한다
+    }
+    syncText(fresh,'dz-title'); syncText(fresh,'dz-subtitle');
+    syncText(fresh,'dz-progress-pct'); syncText(fresh,'dz-updated');
+    syncProgressBar(fresh); syncVisualization(fresh); syncImplCard(fresh); syncLog(fresh);
+    renderNowCard();
+    resizePipToFit();
+  }
+  function poll(){
+    if(busy) return;
+    busy = true;
+    fetch(location.pathname, {cache:'no-store'})
+      .then(function(res){ if(!res.ok) throw new Error(res.status); return res.text(); })
+      .then(function(html){ failureCount = 0; if(!pipWindow) setHint(reasonHint); apply(html); })
+      .catch(function(){
+        if(++failureCount >= FAILURE_LIMIT)
+          setHint('대시보드를 읽지 못했습니다. /dashboard serve 로 로컬 서버가 켜져 있는지 확인하세요.');
+      })
+      .then(function(){ busy = false; });
+  }
+  setInterval(poll, POLL_INTERVAL_MS);
+  document.addEventListener('visibilitychange', function(){ if(document.visibilityState==='visible') poll(); });
+  window.addEventListener('focus', poll);
+
+  // ── 플로팅(Document PiP) — 반드시 사용자 제스처로만 진입한다 ──
+  if(!hasPipSupport){
+    pipButton.disabled = true;
+    reasonHint = '이 브라우저는 Document Picture-in-Picture 를 지원하지 않습니다 (Chrome·Edge 에서 동작).';
+    setHint(reasonHint);
+    return;
+  }
+  pipButton.addEventListener('click', function(){
+    if(pipWindow){ pipWindow.close(); return; }
+    window.documentPictureInPicture.requestWindow({width:PIP_WIDTH, height:measureCompactHeight()})
+      .then(function(win){
+        pipWindow = win;
+        var pipDocument = win.document;
+        pipDocument.title = document.title;
+        // PiP 창은 opener 의 CSS 를 상속하지 않는다(실측) — <style> 전문을 복사한다.
+        Array.prototype.forEach.call(document.querySelectorAll('style'), function(source){
+          var copy = pipDocument.createElement('style');
+          copy.textContent = source.textContent;
+          pipDocument.head.appendChild(copy);
+        });
+        pipDocument.body.className = 'dz-pip';
+        // 복제가 아니라 '이동'이다 — 폴링이 계속 같은 노드를 갱신하므로 동기화 코드가 하나로 유지된다.
+        pipDocument.body.appendChild(wrap);
+        // 숨은 탭의 타이머 스로틀링(최대 1분)을 보완한다: 창에 커서를 올리면 즉시 갱신.
+        pipDocument.body.addEventListener('pointerenter', poll);
+        // 이동 직후엔 새 문서가 아직 레이아웃을 못 잡았을 수 있어 프레임을 한 번 넘기고 잰다.
+        requestAnimationFrame(function(){ requestAnimationFrame(resizePipToFit); });
+        pipButton.textContent = '플로팅 닫기';
+        reasonHint = '';
+        setHint('플로팅 창에서 보는 중입니다. 창을 닫으면 여기로 돌아옵니다.');
+        win.addEventListener('pagehide', function(){
+          pipWindow = null;
+          document.body.insertBefore(wrap, pipButton);
+          pipButton.textContent = '플로팅';
+          setHint(reasonHint);
+          if(reloadPending) location.reload(); else poll();
+        });
+      })
+      .catch(function(err){
+        // 자동 재시도하지 않는다 — 창 열기는 사용자 제스처가 있어야만 허용된다.
+        reasonHint = '플로팅 창을 열 수 없습니다 (' + ((err && err.name) || 'error') + '). Claude 내장 브라우저 대신 Chrome 에서 열어 보세요.';
+        setHint(reasonHint);
+      });
+  });
+})();
+</script>
+</body>
+</html>

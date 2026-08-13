@@ -86,12 +86,12 @@ cd /path/to/my-project
 | CLAUDE.md | 1 | `./CLAUDE.md` | `~/.claude/CLAUDE.md` | **항상** |
 | rules/ | 37 | `./.claude/rules/` | `~/.claude/rules/` | 12개 항상 · 25개 조건부 |
 | agents/ | 4 | `./.claude/agents/` | `~/.claude/agents/` | 호출 시 |
-| commands/ | 8 | `./.claude/commands/` | `~/.claude/commands/` | 호출 시 |
+| commands/ | 9 | `./.claude/commands/` | `~/.claude/commands/` | 호출 시 |
 
-**합계**: 50개 파일
+**합계**: project·user 모두 51개 파일.
 
 상시 컨텍스트를 차지하는 것은 **CLAUDE.md 1개 + rules 12개 = 13개(약 34KB)** 뿐입니다.
-나머지는 조건이 맞을 때(rules 25개) 또는 호출할 때(agents 4개, commands 8개)만 로드됩니다.
+나머지는 조건이 맞을 때(rules 25개) 또는 호출할 때(agents 4개, commands 9개)만 로드됩니다.
 
 ### CLAUDE.md 구성
 
@@ -117,7 +117,8 @@ cd /path/to/my-project
 | `prp-commit` | 131 | 자연어로 파일 지정해 커밋 (컨벤션: 프로젝트 CLAUDE.md > commitlint 설정 > 기본 형식) |
 | `code-review` | 289 | 로컬 변경 또는 PR 검수 |
 | `env-update` | 184 | coding-env 레포 업데이트 (manifest 기반 자동 갱신) |
-| `dashboard` | 1221 | 세션 진행 상황을 프로젝트 로컬 HTML 대시보드로 기록 (init/step/impl/log + on/off 스위치, `serve`로 플로팅) |
+| `dashboard` | 1224 | 세션 진행 상황을 프로젝트 로컬 HTML 대시보드로 기록 (init/step/impl/log + on/off 스위치, `serve`로 플로팅) |
+| `hub` | 153 | 로컬 모든 프로젝트 진행 상황을 한 페이지에 집계 (**별도 설치** — [hub/README.md](hub/README.md)) |
 
 각 커맨드의 동작:
 
@@ -151,9 +152,13 @@ cd /path/to/my-project
 
   ![대시보드 예시 — 매크로 단계, 구현 세부 작업 패널, 작업 추적 로그](docs/images/dashboard-sample.png)
 
-**의존 사슬 7종 + 독립 커맨드 1종.** `prp-implement` 가 `/code-review`·`/prp-commit`·`/prp-pr` 을,
+- **`/hub`** — 로컬 머신에서 돌고 있는 **모든** 프로젝트의 진행 상황을 한 페이지에서
+  **읽기 전용**으로 봅니다. **coding-env 설치와 별개로 설치합니다** — 실행 코드·상주 서버·
+  전역 훅·프라이버시 고지·설정 전부는 [`hub/README.md`](hub/README.md) 를 참고하십시오.
+
+**의존 사슬 7종 + 독립 커맨드 2종.** `prp-implement` 가 `/code-review`·`/prp-commit`·`/prp-pr` 을,
 `prp-pr` 이 `/code-review`·`/prp-commit` 을 호출합니다. 일부만 설치하면 사슬이 끊기므로 전부 배포합니다.
-배포되는 `agents/code-reviewer.md` 도 `/code-review` 를 참조합니다. `dashboard` 는 이 사슬을
+배포되는 `agents/code-reviewer.md` 도 `/code-review` 를 참조합니다. `dashboard`·`hub` 는 이 사슬을
 호출하지도, 호출받지도 않는 독립 커맨드입니다.
 
 `--scope project` 로 설치하면 전역(`~/.claude/commands/`)과 비교해 상황을 보고합니다.
@@ -313,7 +318,7 @@ coding-env/
 │   ├── implementer.md
 │   ├── code-reviewer.md
 │   └── explore.md
-├── commands/                      # 8개 커맨드 (의존 사슬 7종 + 독립 커맨드 1종)
+├── commands/                      # 9개 커맨드 (의존 사슬 7종 + 독립 커맨드 2종)
 │   ├── prp-prd.md
 │   ├── prp-plan.md
 │   ├── prp-implement.md
@@ -321,11 +326,15 @@ coding-env/
 │   ├── prp-commit.md
 │   ├── code-review.md
 │   ├── env-update.md
-│   └── dashboard.md
+│   ├── dashboard.md
+│   └── hub.md
+├── hub/                            # 통합 허브 — 별도 설치(hub/README.md)
 ├── docs/prps/
-│   └── coding-env.md              # 설계 문서 (PRP rev4)
+│   ├── coding-env.md              # 설계 문서 (PRP rev4)
+│   └── hub-dashboard.md           # 통합 허브 대시보드 설계 문서
 └── tests/
-    └── run.sh                     # 테스트 스크립트
+    ├── run.sh                     # 테스트 스크립트 (install.sh·문서 정합성)
+    └── hub/                       # 허브 순수 로직 단위 테스트 (stdlib unittest)
 ```
 
 ## 설계 문서

@@ -158,6 +158,74 @@ Same conflict handling as above.
 
 ---
 
+## Phase 4b — HUB REINSTALL (conditional)
+
+**Goal**: Keep the independently-installed hub (if present) in sync with the repo, without ever
+starting a server the user didn't already have running. Hub is installed separately from
+coding-env (`hub/install.sh`), so this phase only acts when it detects an existing installation.
+
+### Detect
+
+```bash
+test -f "$repo_path/hub/bin/hub.py" && test -f "$HOME/.claude/hub/bin/hub.py"
+```
+
+Actually check the **installed target** (`~/.claude/hub/bin/hub.py`), not the repo copy:
+
+```bash
+test -f "$HOME/.claude/hub/bin/hub.py"
+```
+
+If not found:
+```
+[INFO] Hub is not installed. Skipping.
+```
+Continue to Phase 5. **Do not create anything.**
+
+### If found
+
+1. Check server status:
+   ```bash
+   python3 "$HOME/.claude/hub/bin/hub.py" server-status --json
+   ```
+   Read the `alive` field.
+
+2. If `alive == true`, ask for confirmation — **never stop a running server silently**:
+   ```
+   [INFO] Hub server is running. Stop it, update, and start it again? (y/n)
+   ```
+   - `n` → **skip reinstall entirely**. Warn: "[WARN] Hub server keeps running the old code until you rerun hub/install.sh manually." Continue to Phase 5.
+   - `y` → `python3 "$HOME/.claude/hub/bin/hub.py" server-stop --json`, remember that the server was running (`was_running_before_update=true`).
+
+   If `alive == false`, continue directly (no confirmation needed, nothing to stop).
+
+3. Reinstall:
+   ```bash
+   "$repo_path/hub/install.sh"
+   ```
+   - exit 0 → continue to step 4.
+   - exit 1 (modified-files conflict):
+     ```
+     [WARN] Hub install reported conflicts in modified files.
+     [INFO] Use --force to overwrite? (y/n)
+     ```
+     `y` → rerun `"$repo_path/hub/install.sh" --force` (same pattern as the root `install.sh` conflict handling in Phase 4). `n` → skip the rest of Phase 4b, warn that hub was not updated, continue to Phase 5.
+
+4. If the server was running before this phase started (`was_running_before_update=true`):
+   ```bash
+   python3 "$HOME/.claude/hub/bin/hub.py" server-start --json
+   ```
+   **This is not an automatic start** — it restores a state the user explicitly had and explicitly
+   confirmed stopping in step 2. A server that was off before `/env-update` stays off.
+
+5. Hooks are never touched here. If the hook command string ever changes, `install-hooks` is
+   idempotent, so just note:
+   ```
+   [INFO] If needed, run /hub install again to refresh the installed hook command.
+   ```
+
+---
+
 ## Phase 5 — VERIFY MANIFEST
 
 **Goal**: Confirm installation succeeded.
@@ -201,6 +269,8 @@ Exit 0.
 | Pull fails | ERROR: stop |
 | install.sh conflict | WARN: ask `--force?` |
 | install.sh force fails | ERROR: stop |
+| Hub not installed | INFO: skip Phase 4b, no error |
+| Hub server running, user declines stop | WARN: skip hub reinstall, note stale code is still running |
 | Manifest verification fails | WARN: report mismatch but exit 0 |
 
 ---

@@ -206,11 +206,11 @@ test_scope_project_new_install() {
     return 1
   fi
 
-  # commands 8개 확인
+  # commands 9개 확인
   local commands_count
   commands_count=$(count_files_recursive "./.claude/commands")
-  if ! assert_equals 8 "$commands_count" "commands 파일 개수"; then
-    record_failure "$test_name" "commands 파일 개수: 기대=8, 실제=$commands_count"
+  if ! assert_equals 9 "$commands_count" "commands 파일 개수"; then
+    record_failure "$test_name" "commands 파일 개수: 기대=9, 실제=$commands_count"
     return 1
   fi
 
@@ -799,10 +799,10 @@ test_unmanaged_files_preserved() {
   ((passed_tests++))
 }
 
-# T17: 커맨드 8종(의존 사슬 7종 + 독립 커맨드 1종)이 설치되고 의존 사슬이 닫히는지 확인
+# T17: 커맨드 9종(의존 사슬 7종 + 독립 커맨드 2종)이 설치되고 의존 사슬이 닫히는지 확인
 test_commands_installed() {
   local test_name="T17"
-  local test_desc="커맨드 8종 설치 및 의존 사슬 완결"
+  local test_desc="커맨드 9종 설치 및 의존 사슬 완결"
   log_test_name "$test_name" "$test_desc"
 
   local sandbox
@@ -813,7 +813,7 @@ test_commands_installed() {
   "$INSTALL_SCRIPT" --scope project > /dev/null 2>&1
 
   local command_name
-  for command_name in prp-prd prp-plan prp-implement prp-pr prp-commit code-review env-update dashboard; do
+  for command_name in prp-prd prp-plan prp-implement prp-pr prp-commit code-review env-update dashboard hub; do
     if [[ ! -f "./.claude/commands/$command_name.md" ]]; then
       record_failure "$test_name" "$command_name.md 미설치"
       return 1
@@ -862,8 +862,8 @@ test_global_command_overlap_report() {
     record_failure "$test_name" "우선순위 안내가 없거나 방향이 틀림 (전역>프로젝트여야 함)"
     return 1
   fi
-  if ! echo "$output" | grep -q "전역에 동일한 커맨드 7개"; then
-    record_failure "$test_name" "동일 7개 안내가 없음"
+  if ! echo "$output" | grep -q "전역에 동일한 커맨드 8개"; then
+    record_failure "$test_name" "동일 8개 안내가 없음"
     return 1
   fi
 
@@ -1872,6 +1872,837 @@ test_dashboard_option_docs() {
   ((passed_tests++))
 }
 
+# T24: 허브 순수 로직 단위 테스트 (stdlib unittest). 종료 코드만 검사하고,
+# 실패 시 출력을 그대로 흘려보내 원인을 바로 알 수 있게 한다.
+test_hub_unit_tests() {
+  local test_name="T24"
+  local test_desc="hub_parse·hub_model 단위 테스트 (python3 -m unittest discover)"
+  log_test_name "$test_name" "$test_desc"
+
+  local output
+  local exit_code=0
+  output=$(cd "$REPO_ROOT" && python3 -m unittest discover -s tests/hub -t "$REPO_ROOT" 2>&1) || exit_code=$?
+
+  if [[ "$exit_code" -ne 0 ]]; then
+    echo "$output"
+    record_failure "$test_name" "python3 -m unittest discover 실패 (exit $exit_code)"
+    return 1
+  fi
+
+  log_ok "$test_name 통과"
+  ((passed_tests++))
+}
+
+# T25: 허브 문서·상수 정합성 (하위 검증 T25-1~T25-56)
+test_hub_docs_and_constants() {
+  local test_name="T25"
+  local test_desc="허브 문서·상수 정합성 (T25-1~T25-56)"
+  log_test_name "$test_name" "$test_desc"
+
+  local hub_settings_file="$REPO_ROOT/hub/bin/hub_settings.py"
+  local hub_hook_file="$REPO_ROOT/hub/bin/hub_hook.py"
+  local hub_py_file="$REPO_ROOT/hub/bin/hub.py"
+  local hub_collect_file="$REPO_ROOT/hub/bin/hub_collect.py"
+  local hub_model_file="$REPO_ROOT/hub/bin/hub_model.py"
+  local hub_server_file="$REPO_ROOT/hub/bin/hub_server.py"
+  local hub_daemon_file="$REPO_ROOT/hub/bin/hub_daemon.py"
+  local hub_install_file="$REPO_ROOT/hub/install.sh"
+  local hub_command_file="$REPO_ROOT/commands/hub.md"
+  local env_update_command_file="$REPO_ROOT/commands/env-update.md"
+  local dashboard_command_file="$REPO_ROOT/commands/dashboard.md"
+  local readme_file="$REPO_ROOT/README.md"
+
+  # T25-1(개정 R-M5 — 대상 이동): HUB_FILE_COUNT 는 이제 hub/install.sh 가 갖는다(값 10)
+  local declared_count actual_count
+  declared_count=$(grep -oE '^readonly HUB_FILE_COUNT=[0-9]+' "$hub_install_file" | grep -oE '[0-9]+$')
+  actual_count=$(find "$REPO_ROOT/hub/bin" -maxdepth 1 -type f | wc -l | tr -d ' ')
+  if ! assert_equals "$actual_count" "$declared_count" "HUB_FILE_COUNT 일치"; then
+    record_failure "$test_name" "T25-1: HUB_FILE_COUNT=$declared_count, 실제 파일 수=$actual_count"
+    return 1
+  fi
+
+  # T25-2(개정 R-M5 — 반전): 루트 install.sh 는 hub 를 전혀 모른다. hub/install.sh 가 독립 설치한다
+  local sandbox_root sandbox_hub
+  sandbox_root=$(mktemp -d)
+  sandbox_hub=$(mktemp -d)
+  trap "rm -rf '$sandbox_root' '$sandbox_hub'" EXIT
+
+  HOME="$sandbox_root" "$INSTALL_SCRIPT" --scope user > /dev/null 2>&1
+  if [[ -d "$sandbox_root/.claude/hub" ]]; then
+    record_failure "$test_name" "T25-2: 루트 install.sh --scope user 후 .claude/hub 가 생성됨 (기대: 미생성)"
+    return 1
+  fi
+
+  HOME="$sandbox_hub" "$hub_install_file" > /dev/null 2>&1
+  local installed_hub_count
+  installed_hub_count=$(find "$sandbox_hub/.claude/hub/bin" -maxdepth 1 -type f 2>/dev/null | wc -l | tr -d ' ')
+  if [[ "$installed_hub_count" -ne "$declared_count" ]]; then
+    record_failure "$test_name" "T25-2: hub/install.sh 설치 후 hub/bin 파일 수=$installed_hub_count (기대 $declared_count)"
+    return 1
+  fi
+
+  # T25-3(개정 R-4 — 대상 이동): 마커 문서화는 이제 hub/README.md 가 맡는다(root README.md 는 분리됨)
+  local marker="# DZH_HUB_HOOK"
+  local hub_readme_file="$REPO_ROOT/hub/README.md"
+  local doc_file
+  for doc_file in "$hub_settings_file" "$hub_command_file" "$hub_readme_file"; do
+    if ! grep -qF "$marker" "$doc_file"; then
+      record_failure "$test_name" "T25-3: $marker 마커 미발견: $doc_file"
+      return 1
+    fi
+  done
+
+  # T25-4: 훅 커맨드 문자열에 || true 와 >/dev/null 이 모두 있다
+  if ! grep -F "|| true" "$hub_settings_file" | grep -qF ">/dev/null"; then
+    record_failure "$test_name" "T25-4: 훅 커맨드에 || true 와 >/dev/null 이 한 줄에 함께 없음"
+    return 1
+  fi
+
+  # T25-5: type: "http" 를 쓰지 말라는 근거 문구
+  if ! grep -qF 'type: "http"' "$hub_command_file"; then
+    record_failure "$test_name" "T25-5: type:\"http\" 관련 근거 문구 미발견"
+    return 1
+  fi
+
+  # T25-6: dashboard.md 에 불변식 2·5 문구가 여전히 존재한다 (티어 1 파서의 전제)
+  if ! grep -qF '<li id="dz-step-…">' "$dashboard_command_file"; then
+    record_failure "$test_name" "T25-6: 불변식 2 문구(dz-step) 미발견"
+    return 1
+  fi
+  if ! grep -qF '<li id="dz-impl-…">' "$dashboard_command_file"; then
+    record_failure "$test_name" "T25-6: 불변식 5 문구(dz-impl) 미발견"
+    return 1
+  fi
+
+  # T25-7: hub_hook.py 에 Notification 문자열이 없다 (미설치 결정의 회귀 방지)
+  if grep -q "Notification" "$hub_hook_file"; then
+    record_failure "$test_name" "T25-7: hub_hook.py 에 Notification 문자열이 존재함"
+    return 1
+  fi
+
+  # T25-8(개정 — 포트 상수가 hub_model.py 로 이동): 8794 정합, 8791 부재
+  if ! grep -q "8794" "$hub_model_file" || ! grep -q "8794" "$hub_command_file"; then
+    record_failure "$test_name" "T25-8: 포트 8794 가 hub_model.py 또는 commands/hub.md 에 없음"
+    return 1
+  fi
+  if grep -q "8791" "$hub_model_file" "$hub_command_file"; then
+    record_failure "$test_name" "T25-8: /dashboard 의 포트 8791 이 허브 파일에 등장함"
+    return 1
+  fi
+
+  # T25-9: README.md 가 "독립 커맨드 2종"으로 갱신됐다
+  if ! grep -qF "독립 커맨드 2종" "$readme_file"; then
+    record_failure "$test_name" "T25-9: README 에 '독립 커맨드 2종' 문구 미발견"
+    return 1
+  fi
+
+  # T25-10(+ T25-27 — hub_usage.py 추가): hub_model.py·hub_parse.py·hub_usage.py 에
+  # 파일시스템 접근이 없다 (순수 레이어 경계의 기계적 강제)
+  local pure_file
+  for pure_file in "$REPO_ROOT/hub/bin/hub_model.py" "$REPO_ROOT/hub/bin/hub_parse.py" "$REPO_ROOT/hub/bin/hub_usage.py"; do
+    if grep -qE 'open\(|Path\(|os\.' "$pure_file"; then
+      record_failure "$test_name" "T25-10: $pure_file 에 파일시스템 접근 흔적(open(/Path(/os.)이 있음"
+      return 1
+    fi
+  done
+
+  local hub_template_file="$REPO_ROOT/hub/bin/hub_template.html"
+
+  # T25-11(수정 — 세션 줄 재구성 반영): 세션 줄의 동적 값은 반드시 escapeHtml 을 통과한다.
+  # 기존 부정 검사(`+ session.short_id +` 리터럴 금지)는 그대로 둔다 — short_id 렌더가
+  # 폐기됐어도 되살아나는 것을 막는 값이 있다. 아래 긍정 검사만 새 렌더 대상으로 교체했다:
+  # session.short_id 는 더 이상 렌더되지 않고(세션 줄이 agent_runs 로 재구성됨), 대신 세션
+  # 줄이 실제로 넣는 동적 값(run.agent_type)이 escapeHtml 을 통과하는지 확인한다.
+  if grep -qF "+ session.short_id +" "$hub_template_file"; then
+    record_failure "$test_name" "T25-11: session.short_id 가 escapeHtml 없이 삽입됨(m9 회귀)"
+    return 1
+  fi
+  if ! grep -qF "escapeHtml(run.agent_type)" "$hub_template_file"; then
+    record_failure "$test_name" "T25-11: 서브에이전트 타입명이 escapeHtml 없이 삽입됨"
+    return 1
+  fi
+
+  # T25-12(검수 M6 회귀): 티어 1 렌더에 활성 단계·구현 진행·stale 병기가 반영됐다
+  if ! grep -qF "renderTier1ActiveStep" "$hub_template_file"; then
+    record_failure "$test_name" "T25-12: 티어 1 렌더에 활성 단계 표시가 없음"
+    return 1
+  fi
+  if ! grep -qF "renderTier1ImplProgress" "$hub_template_file"; then
+    record_failure "$test_name" "T25-12: 티어 1 렌더에 구현 진행(impl_done/impl_total) 표시가 없음"
+    return 1
+  fi
+  if ! grep -qF "직전 " "$hub_template_file"; then
+    record_failure "$test_name" "T25-12: stale 세션의 '직전 <base_state>' 병기 문구가 없음"
+    return 1
+  fi
+
+  # T25-13(검수 M1 회귀): JSON 유니코드 이스케이프로 교체됐고, HTML 엔티티 치환으로 되돌아가지 않았다
+  local render_hub_html_file="$REPO_ROOT/hub/bin/hub_model.py"
+  if ! grep -qF "u003c" "$render_hub_html_file"; then
+    record_failure "$test_name" "T25-13: render_hub_html 에 JSON 유니코드 이스케이프(u003c)가 없음"
+    return 1
+  fi
+  if grep -qF "&lt;" "$render_hub_html_file"; then
+    record_failure "$test_name" "T25-13: render_hub_html 이 HTML 엔티티 치환으로 회귀함(M1 회귀)"
+    return 1
+  fi
+
+  # T25-14: hub/bin/*.py·commands/hub.md 에 serve 잔재가 없다(폐기 회귀 방지, 개정 쟁점 R2)
+  local serve_leftover_pattern='start_serving|stop_serving|/hub serve[^r]|pkill'
+  local source_file
+  for source_file in "$REPO_ROOT"/hub/bin/*.py "$hub_command_file"; do
+    if grep -qE "$serve_leftover_pattern" "$source_file"; then
+      record_failure "$test_name" "T25-14: $source_file 에 폐기된 serve 잔재가 남아 있음"
+      return 1
+    fi
+  done
+
+  # T25-15: hub_server.py 가 SimpleHTTPRequestHandler 를 쓰지 않고 화이트리스트를 갖는다(노출 표면 회귀 방지)
+  if grep -qF "SimpleHTTPRequestHandler" "$hub_server_file"; then
+    record_failure "$test_name" "T25-15: hub_server.py 가 SimpleHTTPRequestHandler 를 사용함(디렉토리 전체 노출 위험)"
+    return 1
+  fi
+  if ! grep -qF "ALLOWED_REQUEST_PATHS" "$hub_server_file"; then
+    record_failure "$test_name" "T25-15: hub_server.py 에 ALLOWED_REQUEST_PATHS 화이트리스트가 없음"
+    return 1
+  fi
+
+  # T25-16(검수 Nit2 — AST 검사로 승격): hub_daemon.py 의 **같은 함수 안에서** os.kill 호출보다
+  # is_our_server_process 호출이 먼저 나와야 한다(PID 재사용 방어 회귀 방지). 텍스트 줄 번호
+  # 비교보다 엄밀하다 — 함수 경계를 실제로 구분하므로 무관한 함수의 신원 확인이 우연히
+  # 앞줄에 있다는 이유로 통과하는 오탐이 없다.
+  local ast_check_output
+  ast_check_output=$(python3 - "$hub_daemon_file" <<'PYEOF'
+import ast
+import sys
+
+source_path = sys.argv[1]
+tree = ast.parse(open(source_path, encoding="utf-8").read(), filename=source_path)
+
+
+def is_os_kill_call(node):
+    return (
+        isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Attribute)
+        and node.func.attr == "kill"
+        and isinstance(node.func.value, ast.Name)
+        and node.func.value.id == "os"
+    )
+
+
+def is_identity_check_call(node):
+    return (
+        isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Name)
+        and node.func.id == "is_our_server_process"
+    )
+
+
+violations = []
+kill_call_total = 0
+for func in ast.walk(tree):
+    if not isinstance(func, (ast.FunctionDef, ast.AsyncFunctionDef)):
+        continue
+    kill_calls = [n for n in ast.walk(func) if is_os_kill_call(n)]
+    if not kill_calls:
+        continue
+    kill_call_total += len(kill_calls)
+    check_lines = [n.lineno for n in ast.walk(func) if is_identity_check_call(n)]
+    for kill_call in kill_calls:
+        if not any(line < kill_call.lineno for line in check_lines):
+            violations.append(f"{func.name}() 의 {kill_call.lineno}번째 줄")
+
+if kill_call_total == 0:
+    print("NO_KILL_CALLS_FOUND")
+elif violations:
+    print("VIOLATIONS:" + "; ".join(violations))
+else:
+    print("OK")
+PYEOF
+)
+  if [[ "$ast_check_output" == "NO_KILL_CALLS_FOUND" ]]; then
+    record_failure "$test_name" "T25-16: hub_daemon.py 에서 os.kill 호출을 찾지 못함"
+    return 1
+  fi
+  if [[ "$ast_check_output" != "OK" ]]; then
+    record_failure "$test_name" "T25-16: 신원 확인 없이 os.kill 을 호출하는 지점 — $ast_check_output"
+    return 1
+  fi
+
+  # T25-17: hub_daemon.py 에 start_new_session=True 가 있다(세션 무관 수명, 요구 R-1 의 기계적 강제)
+  if ! grep -qF "start_new_session=True" "$hub_daemon_file"; then
+    record_failure "$test_name" "T25-17: hub_daemon.py 에 start_new_session=True 가 없음"
+    return 1
+  fi
+
+  # T25-18: _tier3_activity_by_encoded_name 이 except OSError 를 포함한다(R3-m1 회귀)
+  local tier3_function_body
+  tier3_function_body=$(awk '/^def _tier3_activity_by_encoded_name\(/{flag=1; next} flag && /^def /{exit} flag{print}' "$hub_collect_file")
+  if ! echo "$tier3_function_body" | grep -qF "except OSError"; then
+    record_failure "$test_name" "T25-18: _tier3_activity_by_encoded_name 에 except OSError 가드가 없음"
+    return 1
+  fi
+
+  # T25-19: commands/hub.md 에 last_collect_failure·event_read_warnings 등장(R3-m2 회귀)
+  if ! grep -qF "last_collect_failure" "$hub_command_file"; then
+    record_failure "$test_name" "T25-19: commands/hub.md 에 last_collect_failure 미언급"
+    return 1
+  fi
+  if ! grep -qF "event_read_warnings" "$hub_command_file"; then
+    record_failure "$test_name" "T25-19: commands/hub.md 에 event_read_warnings 미언급"
+    return 1
+  fi
+
+  # T25-20: hub.py 의 cmd_open 함수 본문에 서버 기동 호출이 없다(암묵 기동 회귀 방지, 요구 R-2)
+  local cmd_open_body
+  cmd_open_body=$(awk '/^def cmd_open\(/{flag=1; next} flag && /^def /{exit} flag{print}' "$hub_py_file")
+  if echo "$cmd_open_body" | grep -qE "start_server|server-start"; then
+    record_failure "$test_name" "T25-20: cmd_open 이 서버를 기동하는 것으로 보임(암묵 기동 회귀)"
+    return 1
+  fi
+
+  # T25-21: 루트 install.sh 에 hub 문자열이 등장하지 않는다(설치 분리의 기계적 강제, 요구 R-5)
+  local root_hub_mentions
+  root_hub_mentions=$(grep -c "hub" "$INSTALL_SCRIPT" || true)
+  if [[ "$root_hub_mentions" -ne 0 ]]; then
+    record_failure "$test_name" "T25-21: install.sh 에 hub 문자열이 ${root_hub_mentions}건 등장함(기대 0)"
+    return 1
+  fi
+
+  # T25-22(검수 Nit3 — 임계값 완화): README.md 의 허브 언급이 14줄 이하이고 hub/README.md
+  # 링크를 포함한다(문서 분리 회귀 방지). 대소문자 구분 검색이다 — case-insensitive 는
+  # "GitHub" 까지 세어 오탐한다. 10 은 소소한 문구 조정에도 쉽게 넘는 빡빡한 값이었다.
+  local readme_hub_mentions readme_hub_link_count
+  readme_hub_mentions=$(grep -c "hub" "$readme_file" || true)
+  readme_hub_link_count=$(grep -cF "hub/README.md" "$readme_file" || true)
+  if [[ "$readme_hub_mentions" -gt 14 ]]; then
+    record_failure "$test_name" "T25-22: README.md 의 허브 언급이 ${readme_hub_mentions}줄(기대 14줄 이하)"
+    return 1
+  fi
+  if [[ "$readme_hub_link_count" -eq 0 ]]; then
+    record_failure "$test_name" "T25-22: README.md 에 hub/README.md 링크가 없음"
+    return 1
+  fi
+
+  # T25-23: hub/install.sh --uninstall 절차에서 server-stop·uninstall-hooks 가 rm -rf 보다 앞에 온다
+  local server_stop_line uninstall_hooks_line rm_rf_line
+  server_stop_line=$(grep -n "server-stop" "$hub_install_file" | head -1 | cut -d: -f1)
+  uninstall_hooks_line=$(grep -n "uninstall-hooks" "$hub_install_file" | head -1 | cut -d: -f1)
+  rm_rf_line=$(grep -n 'rm -rf "\$TARGET_BIN_DIR"' "$hub_install_file" | head -1 | cut -d: -f1)
+  if [[ -z "$server_stop_line" || -z "$uninstall_hooks_line" || -z "$rm_rf_line" ]]; then
+    record_failure "$test_name" "T25-23: server-stop/uninstall-hooks/rm -rf 셋 중 하나를 hub/install.sh 에서 찾지 못함"
+    return 1
+  fi
+  if [[ "$server_stop_line" -ge "$rm_rf_line" || "$uninstall_hooks_line" -ge "$rm_rf_line" ]]; then
+    record_failure "$test_name" "T25-23: server-stop·uninstall-hooks 가 rm -rf 보다 앞에 있지 않음(순서 위반)"
+    return 1
+  fi
+
+  # T25-24: commands/env-update.md 에 조건부 허브 절과 판정 경로(hub/bin/hub.py)가 있다(R-5 연동 회귀)
+  if ! grep -qF "Phase 4b" "$env_update_command_file"; then
+    record_failure "$test_name" "T25-24: commands/env-update.md 에 Phase 4b 절이 없음"
+    return 1
+  fi
+  if ! grep -qF "hub/bin/hub.py" "$env_update_command_file"; then
+    record_failure "$test_name" "T25-24: commands/env-update.md 에 판정 경로(hub/bin/hub.py)가 없음"
+    return 1
+  fi
+
+  # T25-25: commands/hub.md 사전 조건이 install.sh --scope user 를 안내하지 않고 hub/install.sh 를 안내한다
+  if grep -qF "install.sh --scope user 를 먼저 실행" "$hub_command_file"; then
+    record_failure "$test_name" "T25-25: commands/hub.md 가 존재하지 않는 절차(install.sh --scope user)를 안내함"
+    return 1
+  fi
+  if ! grep -qF "hub/install.sh" "$hub_command_file"; then
+    record_failure "$test_name" "T25-25: commands/hub.md 사전 조건에 hub/install.sh 안내가 없음"
+    return 1
+  fi
+
+  # T25-26(검수 n1 회귀 — 2방향 실측): stop_server_or_abort 의 ok 판정은 문자열 매칭이 아니라
+  # 실제 JSON 파싱이다. 압축 JSON(`"ok":true`, 공백 없음)으로도 성공을 오판 없이 인식해야
+  # 한다 — 예전의 `grep -q '"ok": true'` 였다면 이 공백 없는 형태를 실패로 오판했을 것이다.
+  # 반대로 ok:false 면 --force 없이 반드시 중단하고 bin/ 을 보존해야 한다(정지 수단 소멸 방지).
+  local sandbox_stop_ok sandbox_stop_fail
+  sandbox_stop_ok=$(mktemp -d)
+  sandbox_stop_fail=$(mktemp -d)
+  trap "rm -rf '$sandbox_root' '$sandbox_hub' '$sandbox_stop_ok' '$sandbox_stop_fail'" EXIT
+
+  mkdir -p "$sandbox_stop_ok/.claude/hub/bin"
+  cat > "$sandbox_stop_ok/.claude/hub/bin/hub.py" << 'PYEOF'
+#!/usr/bin/env python3
+import sys
+subcommand = sys.argv[1] if len(sys.argv) > 1 else ""
+if subcommand == "server-stop":
+    print('{"ok":true,"was_running":true}')
+elif subcommand == "uninstall-hooks":
+    print('{"ok":true,"removed":[]}')
+else:
+    print('{"ok":true}')
+PYEOF
+
+  mkdir -p "$sandbox_stop_fail/.claude/hub/bin"
+  cat > "$sandbox_stop_fail/.claude/hub/bin/hub.py" << 'PYEOF'
+#!/usr/bin/env python3
+import sys
+subcommand = sys.argv[1] if len(sys.argv) > 1 else ""
+if subcommand == "server-stop":
+    print('{"ok":false,"reason":"테스트로 강제한 실패"}')
+elif subcommand == "uninstall-hooks":
+    print('{"ok":true,"removed":[]}')
+else:
+    print('{"ok":true}')
+PYEOF
+
+  HOME="$sandbox_stop_ok" "$hub_install_file" --uninstall > /dev/null 2>&1
+  if [[ -d "$sandbox_stop_ok/.claude/hub/bin" ]]; then
+    record_failure "$test_name" "T25-26: server-stop 성공(압축 JSON)인데 bin/ 이 삭제되지 않음(오판 의심)"
+    return 1
+  fi
+
+  if HOME="$sandbox_stop_fail" "$hub_install_file" --uninstall > /dev/null 2>&1; then
+    record_failure "$test_name" "T25-26: server-stop 실패인데 hub/install.sh --uninstall 이 성공(exit 0)으로 끝남"
+    return 1
+  fi
+  if [[ ! -f "$sandbox_stop_fail/.claude/hub/bin/hub.py" ]]; then
+    record_failure "$test_name" "T25-26: server-stop 실패 시 bin/ 이 보존되지 않음(정지 수단 소멸)"
+    return 1
+  fi
+
+  # T25-28(결정 T1·T3 회귀): 다크 테마는 미디어 쿼리 + data-theme 속성 오버라이드 둘 다로
+  # 성립하고, 'dzh-theme' 리터럴은 head FOUC 스크립트 + 본문 IIFE 두 곳에 각각 등장해야 한다
+  # (head 스크립트는 자족적이어야 해서 상수 공유가 불가능하다).
+  if ! grep -qF "prefers-color-scheme" "$hub_template_file"; then
+    record_failure "$test_name" "T25-28: hub_template.html 에 prefers-color-scheme 가 없음"
+    return 1
+  fi
+  if ! grep -qF "data-theme" "$hub_template_file"; then
+    record_failure "$test_name" "T25-28: hub_template.html 에 data-theme 가 없음"
+    return 1
+  fi
+  local dzh_theme_literal_count
+  dzh_theme_literal_count=$(grep -oF "'dzh-theme'" "$hub_template_file" | wc -l | tr -d ' ')
+  if [[ "$dzh_theme_literal_count" -lt 2 ]]; then
+    record_failure "$test_name" "T25-28: 'dzh-theme' 리터럴이 ${dzh_theme_literal_count}회만 등장(기대 2회 이상)"
+    return 1
+  fi
+
+  # T25-29(팔레트 회귀 방지): 색각 안전성이 없는 구형 초록·빨강·주황이 템플릿에서 완전히 사라져야 한다.
+  local legacy_color
+  for legacy_color in "#1F8A70" "#C2410C" "#F59E0B"; do
+    if grep -qF "$legacy_color" "$hub_template_file"; then
+      record_failure "$test_name" "T25-29: hub_template.html 에 색각 안전성 없는 팔레트($legacy_color)가 남아 있음"
+      return 1
+    fi
+  done
+
+  # T25-30(색 이외 채널 회귀 방지): 상태 배지가 색만이 아니라 글리프로도 구분되고,
+  # 그 글리프는 스크린리더에서 숨겨진다(aria-hidden).
+  if ! grep -qF "STATE_GLYPH" "$hub_template_file"; then
+    record_failure "$test_name" "T25-30: hub_template.html 에 STATE_GLYPH 가 없음"
+    return 1
+  fi
+  if ! grep -qF "aria-hidden" "$hub_template_file"; then
+    record_failure "$test_name" "T25-30: hub_template.html 에 aria-hidden 이 없음"
+    return 1
+  fi
+
+  # T25-31(문서 정합, 개정 — 죽은 전제를 테스트로 고정하지 않는다): show_usage_panel 스위치와
+  # 데이터 출처(statusLine 캡처의 used_percentage)가 hub/README.md 에 문서화돼 있다.
+  # plan-usage-history.json 은 결정 P1 로 사라진 경로라 더 이상 grep 대상이 아니다(승인 항목 5).
+  local hub_readme_usage_file="$REPO_ROOT/hub/README.md"
+  local usage_source_token
+  for usage_source_token in "show_usage_panel" "used_percentage" "statusLine"; do
+    if ! grep -qF "$usage_source_token" "$hub_readme_usage_file"; then
+      record_failure "$test_name" "T25-31: hub/README.md 에 $usage_source_token 언급이 없음"
+      return 1
+    fi
+  done
+
+  # T25-32(결정 G1~G5 회귀): 프로젝트 목록이 뷰포트 폭에 따라 열 수가 바뀌는 그리드이고,
+  # 카드가 행 높이에 맞춰 늘어나지 않으며, 비-카드 요소는 한 행을 다 쓴다.
+  local grid_token
+  for grid_token in "max-width:1440px" "display:grid" \
+                    "repeat(auto-fill,minmax(max(320px,calc((100% - 24px)/3 - 1px)),1fr))" \
+                    "align-items:start" "grid-column:1/-1"; do
+    if ! grep -qF "$grid_token" "$hub_template_file"; then
+      record_failure "$test_name" "T25-32: hub_template.html 에 그리드 규칙($grid_token)이 없음"
+      return 1
+    fi
+  done
+
+  # T25-33(결정 C1 · 불변식 H1′ 회귀 — 이 파일에서 가장 중요한 검사):
+  # 접기 버튼은 정적 마크업이어야 하고, 패널 컨테이너를 통째로 다시 그리는 코드가 되살아나면
+  # 접힘 상태가 30초 틱마다 초기화된다.
+  if ! grep -qF '<button id="dzh-usage-toggle"' "$hub_template_file"; then
+    record_failure "$test_name" "T25-33: 접기 버튼이 정적 마크업으로 존재하지 않음"
+    return 1
+  fi
+  if ! grep -qF 'id="dzh-usage-body"' "$hub_template_file"; then
+    record_failure "$test_name" "T25-33: 파생 본문 컨테이너(#dzh-usage-body)가 없음"
+    return 1
+  fi
+  if grep -qF "usageEl.innerHTML" "$hub_template_file"; then
+    record_failure "$test_name" "T25-33: usageEl.innerHTML 대입이 부활함 — 재렌더가 접기 버튼을 파괴한다"
+    return 1
+  fi
+
+  # T25-34(제약 C8 회귀): 접기 토글의 상태가 접근성 트리에 노출되고, 기존 막대의
+  # progressbar 시맨틱이 리팩토링 중 유실되지 않는다.
+  local a11y_token
+  for a11y_token in "aria-expanded" 'aria-controls="dzh-usage-body"' 'role="progressbar"'; do
+    if ! grep -qF "$a11y_token" "$hub_template_file"; then
+      record_failure "$test_name" "T25-34: hub_template.html 에 접근성 속성($a11y_token)이 없음"
+      return 1
+    fi
+  done
+
+  # T25-35(결정 L1·L3·C2 회귀): 패널은 우하단 고정이고(중앙 정렬 흔적이 남으면 안 된다),
+  # 하단 여백은 실측 커스텀 속성으로 주며, 접힘 상태는 전용 키에 저장된다.
+  if grep -qF "translateX(-50%)" "$hub_template_file"; then
+    record_failure "$test_name" "T25-35: 하단 중앙 정렬(translateX(-50%))이 남아 있음"
+    return 1
+  fi
+  local panel_token
+  for panel_token in "right:16px;bottom:16px" "--usage-clearance" "'dzh-usage-collapsed'"; do
+    if ! grep -qF -- "$panel_token" "$hub_template_file"; then
+      record_failure "$test_name" "T25-35: hub_template.html 에 패널 규칙($panel_token)이 없음"
+      return 1
+    fi
+  done
+
+  # T25-36(문서 정합): 화면 배치 변경이 hub/README.md 에 반영돼 있다.
+  local hub_readme_layout_file="$REPO_ROOT/hub/README.md"
+  local doc_token
+  for doc_token in "우하단" "접기" "그리드"; do
+    if ! grep -qF "$doc_token" "$hub_readme_layout_file"; then
+      record_failure "$test_name" "T25-36: hub/README.md 에 화면 배치 설명($doc_token)이 없음"
+      return 1
+    fi
+  done
+
+  # T25-37(검수 m3 회귀): escapeHtml 이 따옴표도 이스케이프한다. usage-meta 의 title="..." 이
+  # 이 함수의 첫 속성 자리 사용처라, 따옴표를 넘기면 그대로 속성이 끊길 수 있었다.
+  if ! grep -qF '.replace(/"/g' "$hub_template_file"; then
+    record_failure "$test_name" 'T25-37: escapeHtml 에 큰따옴표 이스케이프가 없음'
+    return 1
+  fi
+  if ! grep -qF ".replace(/'/g" "$hub_template_file"; then
+    record_failure "$test_name" "T25-37: escapeHtml 에 작은따옴표 이스케이프가 없음"
+    return 1
+  fi
+
+  # T25-38(GOTCHA 1 회귀): statusLine 커맨드 줄이 stdout 을 리다이렉트하지 않는다.
+  # `2>/dev/null` 은 `>/dev/null` 을 부분 문자열로 포함하므로 grep -F '>/dev/null' 로는
+  # 검사할 수 없다(정상 커맨드가 항상 걸린다) — `>` 앞 문자가 숫자가 아닌 경우만 잡는다(GOTCHA 6).
+  if grep -F 'hub_statusline.py' "$hub_settings_file" | grep -qE '(^|[^0-9])>/dev/null'; then
+    record_failure "$test_name" "T25-38: statusLine 커맨드가 stdout 을 리다이렉트함 — 상태줄이 사라진다"
+    return 1
+  fi
+  if ! grep -F 'hub_statusline.py' "$hub_settings_file" | grep -qF '2>/dev/null'; then
+    record_failure "$test_name" "T25-38: statusLine 커맨드 줄에 2>/dev/null 이 없음"
+    return 1
+  fi
+  if ! grep -F 'hub_statusline.py' "$hub_settings_file" | grep -qF '|| true'; then
+    record_failure "$test_name" "T25-38: statusLine 커맨드 줄에 || true 가 없음"
+    return 1
+  fi
+  # 마커(# DZH_HUB_STATUSLINE)는 STATUSLINE_MARKER 변수 참조로 이어붙는다(HOOK_MARKER 와
+  # 같은 관행) — 소스상 같은 줄에 리터럴로 나타나지 않는다. 마커 존재 자체는 T25-40 이
+  # 파일 전체를 대상으로 검사한다(T25-3 과 같은 방식).
+
+  # T25-39(T25-23 과 같은 방식): hub/install.sh --uninstall 에서 uninstall-statusline 이
+  # rm -rf "$TARGET_BIN_DIR" 보다 앞에 온다 — 없는 스크립트를 부르는 무성음 상태를 막는다.
+  local uninstall_statusline_line rm_rf_line_t39
+  uninstall_statusline_line=$(grep -n "uninstall-statusline" "$hub_install_file" | head -1 | cut -d: -f1)
+  rm_rf_line_t39=$(grep -n 'rm -rf "\$TARGET_BIN_DIR"' "$hub_install_file" | head -1 | cut -d: -f1)
+  if [[ -z "$uninstall_statusline_line" || -z "$rm_rf_line_t39" ]]; then
+    record_failure "$test_name" "T25-39: uninstall-statusline/rm -rf 중 하나를 hub/install.sh 에서 찾지 못함"
+    return 1
+  fi
+  if [[ "$uninstall_statusline_line" -ge "$rm_rf_line_t39" ]]; then
+    record_failure "$test_name" "T25-39: uninstall-statusline 이 rm -rf 보다 앞에 있지 않음(순서 위반)"
+    return 1
+  fi
+
+  # T25-40(T25-3 선례): statusLine 마커 문서화가 hub_settings.py·commands/hub.md·hub/README.md
+  # 세 곳에 존재한다.
+  local statusline_marker="# DZH_HUB_STATUSLINE"
+  for doc_file in "$hub_settings_file" "$hub_command_file" "$hub_readme_file"; do
+    if ! grep -qF "$statusline_marker" "$doc_file"; then
+      record_failure "$test_name" "T25-40: $statusline_marker 마커 미발견: $doc_file"
+      return 1
+    fi
+  done
+
+  # T25-43(세션 활동 노출 회귀 — 개정: agent-chip-more 부재 검사로 반전): 세션 표시가
+  # '실행 중인 것만' 으로 되돌아가지 않고, "+N" 오버플로 칩(agent-chip-more)도 되살아나지
+  # 않는다(결정 K1~K3).
+  if grep -qF "active_agent_types" "$hub_template_file" "$hub_model_file"; then
+    record_failure "$test_name" "T25-43: active_agent_types 가 부활함 — 완료 세션이 다시 빈 목록이 된다"
+    return 1
+  fi
+  if grep -qF "agent-chip-more" "$hub_template_file"; then
+    record_failure "$test_name" "T25-43: agent-chip-more 가 남아 있음 — +N 오버플로 칩은 결정 K3 로 삭제됨"
+    return 1
+  fi
+  local session_activity_token
+  for session_activity_token in "summarize_agent_runs" "agent_runs"; do
+    if ! grep -qF "$session_activity_token" "$hub_model_file"; then
+      record_failure "$test_name" "T25-43: hub_model.py 에 $session_activity_token 이 없음"
+      return 1
+    fi
+  done
+  for session_activity_token in "renderAgentRuns" "agent-chip" "MAX_VISIBLE_AGENT_CHIPS"; do
+    if ! grep -qF "$session_activity_token" "$hub_template_file"; then
+      record_failure "$test_name" "T25-43: hub_template.html 에 $session_activity_token 이 없음"
+      return 1
+    fi
+  done
+
+  # T25-41(요구 "주기는 유지"의 회귀 방지): 초기화 예정 시각 표시에 필요한 토큰이 전부
+  # hub_template.html 에 있고, 폴링 주기·사용량 갱신 주기 문구는 바뀌지 않았다.
+  local reset_time_token
+  for reset_time_token in "usage-reset" "rate_limit_resets" "초기화 " "renderUsageResetRow"; do
+    if ! grep -qF "$reset_time_token" "$hub_template_file"; then
+      record_failure "$test_name" "T25-41: hub_template.html 에 초기화 예정 시각 토큰($reset_time_token)이 없음"
+      return 1
+    fi
+  done
+  # 폴링 주기는 5초에서 1분으로 바뀌었다(사용자 요청 — 5초는 너무 짧다). 이 검사는 원래
+  # 5000 을 고정했는데, 그 커밋은 주기 변경을 모르는 상태에서 작성됐다. 값만 갱신하고
+  # "주기가 임의로 바뀌지 않는다"는 검사의 의도는 그대로 유지한다.
+  if ! grep -qF "POLL_INTERVAL_MS = 60000" "$hub_template_file"; then
+    record_failure "$test_name" "T25-41: POLL_INTERVAL_MS = 60000 회귀(폴링 주기가 바뀜)"
+    return 1
+  fi
+  # '약 15분 주기'는 데스크톱 앱 샘플링 주기 전제 문구였다. 퍼센트 출처가 statusLine 캡처로
+  # 바뀌며(결정 P1·P6) 그 전제 자체가 사라졌다 — 새 문구로 교체한다(승인 항목 5).
+  if ! grep -qF "세션 진행 중에만 갱신" "$hub_template_file"; then
+    record_failure "$test_name" "T25-41: '세션 진행 중에만 갱신' 문구 회귀(사용량 갱신 주기 고지 유실)"
+    return 1
+  fi
+
+  # T25-42(문서 정합): hub/README.md·commands/hub.md 에 새 파일·서브커맨드가 문서화돼 있다.
+  if ! grep -qF "rate_limits.json" "$hub_readme_file"; then
+    record_failure "$test_name" "T25-42: hub/README.md 에 rate_limits.json 언급이 없음"
+    return 1
+  fi
+  if ! grep -qiF "statusline" "$hub_readme_file"; then
+    record_failure "$test_name" "T25-42: hub/README.md 에 statusline 언급이 없음"
+    return 1
+  fi
+  if ! grep -qF "install-statusline" "$hub_command_file"; then
+    record_failure "$test_name" "T25-42: commands/hub.md 에 install-statusline 이 없음"
+    return 1
+  fi
+  if ! grep -qF "uninstall-statusline" "$hub_command_file"; then
+    record_failure "$test_name" "T25-42: commands/hub.md 에 uninstall-statusline 이 없음"
+    return 1
+  fi
+
+  # T25-44(커스텀 툴팁 회귀): 네이티브 title 툴팁이 하나도 남지 않고, 커스텀 툴팁이 위임·
+  # 접근성·해제 경로를 모두 갖는다. (<title> 요소는 속성 형태가 아니라 이 검사에 걸리지 않는다)
+  if grep -qF 'title="' "$hub_template_file"; then
+    record_failure "$test_name" "T25-44: 네이티브 title 속성이 남아 있음 — data-tooltip 을 쓸 것"
+    return 1
+  fi
+  local tooltip_token
+  for tooltip_token in 'id="dzh-tooltip"' 'role="tooltip"' 'data-tooltip' 'aria-describedby' \
+                       "'mouseover'" "'focusin'" "Escape" "MutationObserver"; do
+    if ! grep -qF -- "$tooltip_token" "$hub_template_file"; then
+      record_failure "$test_name" "T25-44: hub_template.html 에 툴팁 계약($tooltip_token)이 없음"
+      return 1
+    fi
+  done
+
+  # T25-45(문서 정합): 세션 줄 구성과 툴팁 거동이 hub/README.md 에 반영돼 있다.
+  for doc_token in "서브에이전트" "툴팁"; do
+    if ! grep -qF "$doc_token" "$hub_readme_file"; then
+      record_failure "$test_name" "T25-45: hub/README.md 에 화면 설명($doc_token)이 없음"
+      return 1
+    fi
+  done
+
+  # T25-46(브라우저 타이틀 회귀): 탭 제목이 "Claude Agents Manager" 로 고정돼 있다.
+  if ! grep -qF '<title>Claude Agents Manager</title>' "$hub_template_file"; then
+    record_failure "$test_name" "T25-46: hub_template.html 에 <title>Claude Agents Manager</title> 가 없음"
+    return 1
+  fi
+
+  # T25-47(파비콘 회귀): 인라인 SVG data: URI 파비콘 링크가 유지돼 있다.
+  if ! grep -qF 'rel="icon"' "$hub_template_file"; then
+    record_failure "$test_name" "T25-47: hub_template.html 에 rel=\"icon\" 이 없음"
+    return 1
+  fi
+  if ! grep -qF 'data:image/svg+xml' "$hub_template_file"; then
+    record_failure "$test_name" "T25-47: hub_template.html 에 data:image/svg+xml 파비콘이 없음"
+    return 1
+  fi
+
+  # T25-48(재기동 계약 회귀): server-restart 가 CLI·데몬·커맨드 문서 세 곳에 있고,
+  # 그것을 만들면서 멱등 start 를 force 로 바꾸는 회귀(GOTCHA 1)가 없다.
+  local restart_token
+  for restart_token in "server-restart" "cmd_server_restart"; do
+    if ! grep -qF "$restart_token" "$hub_py_file"; then
+      record_failure "$test_name" "T25-48: hub.py 에 $restart_token 이 없음"
+      return 1
+    fi
+  done
+  for restart_token in "def restart_server" "def restart_note" "_wait_for_port_release"; do
+    if ! grep -qF "$restart_token" "$hub_daemon_file"; then
+      record_failure "$test_name" "T25-48: hub_daemon.py 에 $restart_token 이 없음"
+      return 1
+    fi
+  done
+  if ! grep -qF '"already_running": True' "$hub_daemon_file"; then
+    record_failure "$test_name" "T25-48: start_server 의 멱등(already_running)이 사라짐 — restart 와 별도 경로여야 한다"
+    return 1
+  fi
+  for restart_token in "server restart" "server-restart"; do
+    if ! grep -qF "$restart_token" "$hub_command_file"; then
+      record_failure "$test_name" "T25-48: commands/hub.md 에 $restart_token 이 없음"
+      return 1
+    fi
+  done
+  if ! grep -E '^argument-hint:' "$hub_command_file" | grep -qF "server restart"; then
+    record_failure "$test_name" "T25-48: argument-hint 에 'server restart' 미노출"
+    return 1
+  fi
+
+  # T25-49(브라우저 포커스 회귀): 포커스 경로가 hub_daemon 에 하나만 있고, 셸을 거치지 않으며,
+  # hub.py 에는 webbrowser 직접 호출이 남지 않는다(경로 이중화 방지).
+  local focus_token
+  for focus_token in "def browser_open_command" "/usr/bin/open" "darwin" "webbrowser"; do
+    if ! grep -qF "$focus_token" "$hub_daemon_file"; then
+      record_failure "$test_name" "T25-49: hub_daemon.py 에 $focus_token 이 없음"
+      return 1
+    fi
+  done
+  if grep -qF "shell=True" "$hub_daemon_file"; then
+    record_failure "$test_name" "T25-49: hub_daemon.py 가 shell=True 를 씀 — URL 을 셸에 넘기지 않는다"
+    return 1
+  fi
+  if grep -qF "webbrowser" "$hub_py_file"; then
+    record_failure "$test_name" "T25-49: hub.py 에 webbrowser 직접 호출이 남음 — hub_daemon.open_browser 로 단일화할 것"
+    return 1
+  fi
+  if ! grep -qF "browser_focus_requested" "$hub_command_file"; then
+    record_failure "$test_name" "T25-49: commands/hub.md 에 browser_focus_requested 보고 규칙이 없음"
+    return 1
+  fi
+  for focus_token in "restart" "포커스"; do
+    if ! grep -qF "$focus_token" "$hub_readme_file"; then
+      record_failure "$test_name" "T25-49: hub/README.md 에 서버 제어 설명($focus_token)이 없음"
+      return 1
+    fi
+  done
+
+  # T25-50(결정 W1 회귀): 그리드 트랙 최소폭이 3열 상한 계산식으로 바뀌었고, hub/README.md 의
+  # 열 수 고지가 1~3열로 갱신돼 있다.
+  if ! grep -qF "max(320px" "$hub_template_file"; then
+    record_failure "$test_name" "T25-50: hub_template.html 에 max(320px 트랙 계산이 없음"
+    return 1
+  fi
+  if ! grep -qF "/3 - 1px)" "$hub_template_file"; then
+    record_failure "$test_name" "T25-50: hub_template.html 에 3열 상한 계산(/3 - 1px)이 없음(GOTCHA 1)"
+    return 1
+  fi
+  if ! grep -qF "1~3열" "$hub_readme_file"; then
+    record_failure "$test_name" "T25-50: hub/README.md 의 열 수 고지가 1~3열로 갱신되지 않음"
+    return 1
+  fi
+
+  # T25-51(결정 V1 회귀): 완료 세션 숨김 필터는 클라이언트에만 있다 — 서버(hub_model)는
+  # 세션을 걸러내지 않는다(sessions=session_views 가 그대로 있다는 것이 그 증거다).
+  local client_filter_token
+  for client_filter_token in "shouldRenderSession" "visibleAgentRuns"; do
+    if ! grep -qF "$client_filter_token" "$hub_template_file"; then
+      record_failure "$test_name" "T25-51: hub_template.html 에 $client_filter_token 이 없음"
+      return 1
+    fi
+  done
+  if ! grep -qF "sessions=session_views" "$hub_model_file"; then
+    record_failure "$test_name" "T25-51: hub_model.py 가 세션을 걸러내는 것으로 보임(sessions=session_views 부재)"
+    return 1
+  fi
+
+  # T25-52(결정 K1~K3 회귀 — 안 A): "+N" 오버플로 칩 로직(overflowRuns)이 없고,
+  # summarize_agent_runs 의 정렬 키에 실행 중 우선순위(K2)가 반영돼 있다.
+  if grep -qF "overflowRuns" "$hub_template_file"; then
+    record_failure "$test_name" "T25-52: hub_template.html 에 오버플로 칩 흔적(overflowRuns)이 남아 있음"
+    return 1
+  fi
+  if ! grep -qF "0 if is_running_by_type[agent_type] else 1" "$hub_model_file"; then
+    record_failure "$test_name" "T25-52: hub_model.py 의 summarize_agent_runs 정렬 키에 실행 중 우선순위(K2)가 없음"
+    return 1
+  fi
+
+  # T25-53(GOTCHA 2 회귀 — 결정 Z1): STALE_SESSION_HIDE_AFTER_MS 가 존재하고, MS_PER_HOUR
+  # 선언보다 뒤에 선언돼 있다. var 호이스팅은 선언만 끌어올리고 할당은 올리지 않으므로 앞에
+  # 두면 12 * undefined = NaN 이 되어 컷오프가 조용히 죽는다.
+  local ms_per_hour_decl_line stale_cutoff_decl_line
+  ms_per_hour_decl_line=$(grep -n "var MS_PER_HOUR" "$hub_template_file" | head -1 | cut -d: -f1)
+  stale_cutoff_decl_line=$(grep -n "var STALE_SESSION_HIDE_AFTER_MS" "$hub_template_file" | head -1 | cut -d: -f1)
+  if [[ -z "$ms_per_hour_decl_line" || -z "$stale_cutoff_decl_line" ]]; then
+    record_failure "$test_name" "T25-53: MS_PER_HOUR/STALE_SESSION_HIDE_AFTER_MS 선언을 hub_template.html 에서 찾지 못함"
+    return 1
+  fi
+  if [[ "$stale_cutoff_decl_line" -le "$ms_per_hour_decl_line" ]]; then
+    record_failure "$test_name" "T25-53: STALE_SESSION_HIDE_AFTER_MS 가 MS_PER_HOUR 보다 앞서 선언됨(GOTCHA 2)"
+    return 1
+  fi
+
+  # T25-54(결정 P1 회귀 — 퍼센트 출처 교체): 데스크톱 앱 사용량 히스토리 경로·파서가
+  # 소스에 남아 있지 않고, 캡처 단일 출처의 새 계약(신규 필드·투영 함수·비교 함수)이 있다.
+  local hub_usage_file="$REPO_ROOT/hub/bin/hub_usage.py"
+  local desktop_usage_token
+  for desktop_usage_token in "plan-usage-history" "PLAN_USAGE_HISTORY_PATH" "parse_usage_history"; do
+    if grep -qF "$desktop_usage_token" "$hub_collect_file" || grep -qF "$desktop_usage_token" "$hub_usage_file"; then
+      record_failure "$test_name" "T25-54: hub_collect.py/hub_usage.py 에 데스크톱 앱 흔적($desktop_usage_token)이 남아 있음"
+      return 1
+    fi
+  done
+  local capture_source_token
+  for capture_source_token in "session_used_percent" "usage_sample_from_capture" "same_capture_values"; do
+    if ! grep -qF "$capture_source_token" "$hub_usage_file"; then
+      record_failure "$test_name" "T25-54: hub_usage.py 에 캡처 단일 출처 토큰($capture_source_token)이 없음"
+      return 1
+    fi
+  done
+
+  # T25-55(문서 정합 — 결정 P1): commands/hub.md 의 usage_sample_age_ms 설명에 데스크톱 앱
+  # 문구가 없고, statusLine 등록이 전제라는 점이 명시돼 있다.
+  if grep -qF "macOS 데스크톱 앱" "$hub_command_file"; then
+    record_failure "$test_name" "T25-55: commands/hub.md 에 macOS 데스크톱 앱 문구가 남아 있음(결정 P1 위반)"
+    return 1
+  fi
+  if ! grep -qF "퍼센트의 유일한 출처는" "$hub_command_file"; then
+    record_failure "$test_name" "T25-55: commands/hub.md 의 usage_sample_age_ms 설명에 statusLine 등록 전제가 없음"
+    return 1
+  fi
+
+  # T25-56(전제 2 회귀 — #dzh-data 계약 불변): HubSnapshot 의 usage·rate_limit_resets 두
+  # 필드가 그대로 있고, 템플릿이 여전히 snapshot.usage·snapshot.rate_limit_resets 를 읽는다.
+  if ! grep -qF "usage: UsageSample | None = None" "$hub_model_file"; then
+    record_failure "$test_name" "T25-56: hub_model.py 의 HubSnapshot.usage 필드가 계약과 다름"
+    return 1
+  fi
+  if ! grep -qF "rate_limit_resets: RateLimitResets | None = None" "$hub_model_file"; then
+    record_failure "$test_name" "T25-56: hub_model.py 의 HubSnapshot.rate_limit_resets 필드가 계약과 다름"
+    return 1
+  fi
+  local snapshot_field_token
+  for snapshot_field_token in "snapshot.usage" "snapshot.rate_limit_resets"; do
+    if ! grep -qF "$snapshot_field_token" "$hub_template_file"; then
+      record_failure "$test_name" "T25-56: hub_template.html 이 $snapshot_field_token 를 읽지 않음"
+      return 1
+    fi
+  done
+
+  log_ok "$test_name 통과"
+  ((passed_tests++))
+}
+
 register_and_run_tests() {
   test_scope_project_new_install || true
   test_scope_user_new_install || true
@@ -1895,6 +2726,8 @@ register_and_run_tests() {
   test_manifest_fields_complete || true
   test_dashboard_template_integrity || true
   test_dashboard_option_docs || true
+  test_hub_unit_tests || true
+  test_hub_docs_and_constants || true
 }
 
 # 테스트 결과 요약 출력
@@ -1944,7 +2777,7 @@ main() {
   echo ""
 
   # 전체 테스트 개수
-  total_tests=22  # T1~T23 (T11 결번)
+  total_tests=24  # T1~T25 (T11 결번)
 
   # 각 테스트 실행
   register_and_run_tests

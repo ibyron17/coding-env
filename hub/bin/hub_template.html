@@ -1,0 +1,789 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="color-scheme" content="light dark">
+<title>Claude Agents Manager</title>
+<!-- 파비콘은 허브 서버가 /, /hub.html 외 경로를 서빙하지 않고 file:// 로도 열려야 해서 인라인 data: URI 로 넣는다.
+     SVG 색은 data: URI 프래그먼트 구분자(#)로 오인되지 않게 rgb() 표기를 쓰고, 속성 인용은
+     바깥 href 의 큰따옴표와 겹치지 않도록 홑따옴표를 쓴다(둘 다 안전해 추가 퍼센트 인코딩은 불필요).
+     연결선은 넣지 않는다: 16px 실측 렌더에서 중앙 원과 겹쳐 "Y자/뿔" 모양으로 뭉개짐이 확인됐다. -->
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='6' fill='rgb(0,114,178)'/><circle cx='16' cy='16' r='4.6' fill='white'/><circle cx='16.0' cy='6.8' r='3.0' fill='white'/><circle cx='24.0' cy='20.6' r='3.0' fill='white'/><circle cx='8.0' cy='20.6' r='3.0' fill='white'/></svg>">
+<!--
+DZH:HUB 데이터 계약
+  #dzh-data : application/json 스크립트. HubSnapshot 을 그대로 담는다(snake_case 그대로).
+              hub_model.render_hub_html 이 이 블록 하나만 치환한다. 나머지는 정적이다.
+  갱신 모드는 /dashboard 와 같은 판정이다: location.protocol 이 http(s) 면 1분 폴링
+  (자기 URL 을 받아 문자열 전체 비교), 아니면 포커스 복귀 시 location.reload(). 두 모드
+  모두 #dzh-refresh 버튼과 포커스 복귀 시에도 같은 즉시 갱신 경로를 탄다.
+  폴링이 내용을 갱신하는 요소는 #dzh-app · #dzh-collected-at · #dzh-usage-body ·
+  #dzh-usage-summary 네 개뿐이다(불변식 H1′, docs/prps/hub-usage-collapse-and-grid.md).
+  #dzh-usage 와 그 안의 #dzh-usage-toggle 은 정적 노드이며 class·aria-expanded 속성만
+  갱신한다(노드 교체 금지). 테마 토글 버튼은 이 넷 바깥의 정적 마크업이라 폴링과 무관하게
+  DOM 이 그대로 유지된다. rate_limit_resets(있으면)는 펼침 본문에 초기화 예정 시각 줄로
+  더해진다(docs/prps/hub-usage-reset-time-and-refresh.md). usage·rate_limit_resets 의 값은
+  모두 같은 statusLine 캡처(rate_limits.json) 하나에서 온다 — 퍼센트와 초기화 예정 시각을
+  서로 다른 출처로 오해하지 말 것(docs/prps/hub-card-cleanup-and-usage-source.md 결정 P1·P3).
+  #dzh-tooltip 은 전역 커스텀 툴팁의 정적 싱글턴이다(위 네 요소 바깥, docs/prps/
+  hub-session-activity-and-tooltip.md). 폴링 대상이 아니다 — 사용자 상호작용(hover·focus)만
+  내용을 바꾼다. 트리거는 data-tooltip="…" 속성을 가진 임의의 요소이며, 리스너는 재렌더로
+  죽지 않도록 document 에 위임한다.
+-->
+<style>
+  :root{
+    color-scheme:light;
+    --bg:#EEF3F8;--surface:#FFFFFF;--ink:#172033;--head:#12335B;--muted:#5A6879;
+    --line:#D9E2EC;--soft:#F4F7FB;
+    --accent:#0072B2;--accent-ink:#005B8F;--accent-soft:#E4F0F8;
+    --attention:#B45309;--attention-soft:#FBEEDC;
+    --shadow:0 8px 24px rgba(19,51,91,.06);
+  }
+  @media (prefers-color-scheme:dark){
+    :root:not([data-theme="light"]){
+      color-scheme:dark;
+      --bg:#0E1621;--surface:#16202D;--ink:#E6EDF5;--head:#DCE7F2;--muted:#94A5B8;
+      --line:#26364A;--soft:#1B2634;
+      --accent:#56B4E9;--accent-ink:#8ACBF0;--accent-soft:#12324A;
+      --attention:#E69F00;--attention-soft:#3B2B0D;
+      --shadow:0 8px 24px rgba(0,0,0,.45);
+    }
+  }
+  :root[data-theme="dark"]{
+    color-scheme:dark;
+    --bg:#0E1621;--surface:#16202D;--ink:#E6EDF5;--head:#DCE7F2;--muted:#94A5B8;
+    --line:#26364A;--soft:#1B2634;
+    --accent:#56B4E9;--accent-ink:#8ACBF0;--accent-soft:#12324A;
+    --attention:#E69F00;--attention-soft:#3B2B0D;
+    --shadow:0 8px 24px rgba(0,0,0,.45);
+  }
+  *{box-sizing:border-box}
+  body{margin:0;font-family:"Pretendard","Apple SD Gothic Neo","Malgun Gothic",sans-serif;color:var(--ink);background:var(--bg);line-height:1.5}
+  .wrap{max-width:1440px;margin:32px auto;padding:0 16px}
+  /* 최대 3열 — 트랙 최소폭을 (콘텐츠폭 − gap 2개)/3 로 올리면 4열이 산술적으로 불가능해진다.
+     24px 은 같은 줄의 gap:12px 2개다(3열의 gap 개수) — gap 을 고치면 이 값도 같이 고쳐야 한다.
+     -1px 은 서브픽셀 반올림이 비율을 3 아래로 떨어뜨려 2열로 붕괴하는 것을 막는 여유다(GOTCHA 1).
+     max(320px, …) 가 좁은 폭에서는 종전 320px 을 그대로 쓰게 해 2·1열 반응형을 보존한다.
+     (결정 W1, docs/prps/hub-card-cleanup-and-usage-source.md) */
+  #dzh-app{display:grid;grid-template-columns:repeat(auto-fill,minmax(max(320px,calc((100% - 24px)/3 - 1px)),1fr));gap:12px;align-items:start}
+  #dzh-app>.empty,#dzh-app>.warnings{grid-column:1/-1}
+  .head-row{display:flex;align-items:baseline;justify-content:space-between;flex-wrap:wrap;gap:8px 16px;margin-bottom:18px}
+  .head-actions{display:flex;align-items:baseline;gap:12px;flex-wrap:wrap}
+  h1{font-size:20px;margin:0;color:var(--head);letter-spacing:-.4px}
+  /* 340px 는 헤더 블록(project-head+path+tier1) + 세션 약 3개가 스크롤 없이 들어가도록 고른
+     값이다 — 넘치는 세션은 .sessions 만 내부 스크롤된다. 카드 높이를 프로젝트마다 다르게
+     만들지 않기 위한 고정값이라 근거 없이 바꾸지 마라. */
+  .card{background:var(--surface);border:1px solid var(--line);border-radius:14px;padding:16px 20px;box-shadow:var(--shadow);height:340px;display:flex;flex-direction:column;overflow:hidden}
+  .project-head{display:flex;align-items:center;gap:10px;flex-wrap:nowrap}
+  .project-name{font-size:15px;font-weight:800;color:var(--head);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0;flex:1 1 auto}
+  /* inline-block 이던 시절엔 line-height 가 body(1.5)를 물려받아 패딩 위아래가 비대칭으로
+     보였다(글리프·텍스트가 위로 치우침) — inline-flex+align-items:center 로 박스 기준
+     중앙정렷하고 line-height:1 로 그 여백 자체를 없앤다. */
+  .badge{display:inline-flex;align-items:center;line-height:1;font-size:11px;font-weight:800;padding:4px 9px;border-radius:999px}
+  .badge .glyph{margin-right:3px}
+  .project-head .badge{flex:0 0 auto}
+  .badge.tier{background:var(--soft);color:var(--muted)}
+  /* 상태 배지: box-shadow 왼쪽 바 대신 배경/테두리 형태로 상태를 구분한다(색맹 안전 색상+글리프는
+     renderStateBadge 가 담당, 검수 M6). working 은 지금 진행 중이라 가장 눈에 띄어야 해서 채움
+     배지로, stale 은 경고성이라 점선 테두리로, idle·done 은 평상시라 플랫/윤곽선으로 낮춘다.
+     배경은 --accent-ink 를 쓴다 — 라이트 테마의 --accent(#0072B2)는 --bg 글자색과 대비가
+     4.6:1 로 WCAG AA(4.5:1) 여유가 거의 없다. --accent-ink 는 두 테마 모두 --bg 와의 대비를
+     넉넉히 확보하도록 이미 정의돼 있어(호버 텍스트용) 새 토큰 없이 재사용한다. */
+  .badge.state-working{background:var(--accent-ink);color:var(--bg)}
+  .badge.state-idle{background:var(--soft);color:var(--muted)}
+  .badge.state-stale{background:var(--attention-soft);color:var(--attention);border:1px dashed var(--attention)}
+  .badge.state-done{background:transparent;color:var(--muted);border:1px solid var(--line)}
+  .last-activity{margin-left:auto;font-size:11.5px;color:var(--muted);flex:0 0 auto;white-space:nowrap}
+  .path{font-size:11.5px;color:var(--muted);margin-top:2px;word-break:break-all}
+  .tier1-pct{font-size:12px;font-weight:700;color:var(--accent-ink);margin-top:8px}
+  .tier1-active{font-size:12px;color:var(--head);margin-top:3px;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+  .tier1-impl{font-size:11.5px;color:var(--muted);margin-top:2px}
+  .sessions{list-style:none;margin:10px 0 0;padding:0;font-size:13px;flex:1 1 auto;min-height:0;overflow-y:auto}
+  .sessions li{padding:7px 0;border-top:1px solid var(--soft)}
+  .session-line{display:flex;align-items:baseline;gap:8px;flex-wrap:wrap}
+  .session-time{font-size:11px;color:var(--muted)}
+  .agent-runs{display:inline-flex;flex-wrap:wrap;gap:4px}
+  .agent-chip{font-family:ui-monospace,monospace;font-size:11px;font-weight:700;line-height:1.3;
+              color:var(--muted);background:var(--soft);border-radius:6px;padding:2px 6px}
+  .agent-chip-running{color:var(--accent-ink);background:var(--accent-soft)}
+  .agent-chip .glyph{margin-right:2px}
+  .sr-only{position:absolute;width:1px;height:1px;margin:-1px;padding:0;overflow:hidden;
+           clip:rect(0,0,0,1px);white-space:nowrap;border:0}
+  .excerpt{color:var(--muted);font-size:12.5px;flex-basis:100%}
+  .empty{color:var(--muted);font-size:13px;padding:20px 4px;text-align:center}
+  .warnings{font-size:12px;color:var(--attention);margin-top:6px;border-left:3px solid var(--attention);padding-left:8px}
+  .warnings::before{content:"⚠ "}
+  .foot{font-size:11.5px;color:var(--muted)}
+  .theme-toggle{position:fixed;top:16px;right:16px;z-index:30;font-size:11.5px;font-weight:700;color:var(--muted);background:var(--surface);border:1px solid var(--line);border-radius:999px;padding:6px 12px;cursor:pointer;box-shadow:var(--shadow)}
+  .theme-toggle:hover{color:var(--accent-ink);border-color:var(--accent)}
+  /* 아이콘 전용 버튼 — 텍스트가 없어 aria-label 로 접근성 이름을 준다(마크업 참고). 정사각형
+     크기를 고정해 원형 배지처럼 보이게 한다(글자 수에 따라 늘어나던 이전 텍스트 버튼과 다름).
+     32px 는 유니코드 글리프(26px)가 너무 작다는 피드백을 반영해 키운 값이다. */
+  .refresh-btn{width:32px;height:32px;padding:0;color:var(--muted);background:var(--surface);border:1px solid var(--line);border-radius:999px;cursor:pointer;display:inline-flex;align-items:center;justify-content:center}
+  .refresh-btn:hover{color:var(--accent-ink);border-color:var(--accent)}
+  .refresh-btn svg{width:18px;height:18px}
+  /* 218px 은 JS 가 못 도는 경우에만 쓰이는 fallback 이다(펼침 실측 186 + 여유 32,
+     .usage-toggle 의 line-height:1 적용 이후 재실측 — 검수 LOW). 평소에는
+     applyUsageClearance() 가 --usage-clearance 를 실측값으로 덮어쓴다 —
+     USAGE_CLEARANCE_MARGIN_PX 를 고치면 이 숫자도 같이 봐야 한다. */
+  body.has-usage .wrap{padding-bottom:var(--usage-clearance,218px)}
+  .usage{position:fixed;right:16px;bottom:16px;width:min(420px, calc(100vw - 32px));z-index:20;background:var(--surface);border:1px solid var(--line);border-radius:14px;padding:14px 18px;box-shadow:var(--shadow)}
+  .usage.usage-collapsed{width:auto;max-width:calc(100vw - 32px);padding:10px 14px}
+  /* line-height:1 — font:inherit 가 body 의 1.5 를 그대로 물려받아 텍스트 줄상자에 여백(leading)이
+     남는다. 접힘 알약처럼 이 여백이 곧 버튼 높이가 되는 상황에서는 그 여백이 위아래로 고르게
+     안 나뉘어(글꼴 자체의 ascent/descent 비대칭) 아래쪽이 더 비어 보인다 — 실측 확인함. */
+  .usage-toggle{display:flex;align-items:center;gap:8px;width:100%;padding:0;border:0;background:none;font:inherit;line-height:1;color:inherit;text-align:left;cursor:pointer}
+  .usage-toggle:hover .usage-title{color:var(--accent-ink)}
+  .usage-toggle:focus-visible{outline:2px solid var(--accent);outline-offset:3px}
+  .usage-title{font-size:12.5px;font-weight:800;color:var(--head)}
+  .usage-summary{font-size:12.5px;font-weight:700;color:var(--accent-ink)}
+  .usage-caret{margin-left:auto;font-size:10px;color:var(--muted)}
+  .usage-caret::before{content:"▾"}
+  .usage.usage-collapsed .usage-caret::before{content:"▸"}
+  .usage:not(.usage-collapsed) .usage-summary{display:none}
+  .usage.usage-collapsed .usage-body{display:none}
+  .usage-body{margin-top:8px}
+  .usage-body>.usage-row:first-child{margin-top:0}
+  .usage-row{display:flex;justify-content:space-between;align-items:baseline;font-size:12.5px;color:var(--ink);margin-top:8px}
+  .usage-pct{font-weight:700;color:var(--accent-ink)}
+  .usage-bar{height:8px;border-radius:999px;background:var(--soft);margin-top:4px;overflow:hidden}
+  .usage-bar>span{display:block;height:100%;background:var(--accent);border-radius:999px}
+  .usage-reset{font-size:11px;color:var(--muted);margin-top:3px;text-align:right}
+  .usage-meta{font-size:11px;color:var(--muted);margin-top:10px;text-align:right}
+  .tooltip{position:fixed;left:0;top:0;z-index:40;max-width:min(280px,calc(100vw - 32px));
+           padding:6px 9px;border-radius:8px;font-size:11.5px;line-height:1.45;font-weight:600;
+           color:var(--bg);background:var(--ink);box-shadow:var(--shadow);
+           overflow-wrap:anywhere;visibility:hidden}
+  .tooltip.tooltip-visible{visibility:visible}
+</style>
+<script>
+/* body 파싱 전에 실행돼 첫 페인트부터 확정 테마로 그린다(FOUC 방지, 결정 T3).
+   localStorage 접근은 file:// 나 저장소 차단 환경에서 던질 수 있어 반드시 감싼다. */
+try{var m=localStorage.getItem('dzh-theme');
+    if(m==='light'||m==='dark')document.documentElement.setAttribute('data-theme',m);}catch(e){}
+</script>
+</head>
+<body>
+<button id="dzh-theme-toggle" class="theme-toggle" type="button">테마: 시스템</button>
+<div class="wrap">
+  <div class="head-row">
+    <h1>Claude Agents Manager</h1>
+    <div class="head-actions">
+      <span class="foot" id="dzh-collected-at"></span>
+      <button id="dzh-refresh" class="refresh-btn" type="button" aria-label="새로고침" data-tooltip="새로고침">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">
+          <path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8"/>
+          <path d="M21 3v5h-5"/>
+          <path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16"/>
+          <path d="M8 16H3v5"/>
+        </svg>
+      </button>
+    </div>
+  </div>
+  <div id="dzh-app"><div class="empty">불러오는 중…</div></div>
+</div>
+<aside id="dzh-usage" class="usage" hidden>
+  <button id="dzh-usage-toggle" class="usage-toggle" type="button"
+          aria-expanded="true" aria-controls="dzh-usage-body">
+    <span class="usage-title">Claude 사용 한도</span>
+    <span id="dzh-usage-summary" class="usage-summary"></span>
+    <span class="usage-caret" aria-hidden="true"></span>
+  </button>
+  <div id="dzh-usage-body" class="usage-body"></div>
+</aside>
+<div id="dzh-tooltip" class="tooltip" role="tooltip"></div>
+<script type="application/json" id="dzh-data">{}</script>
+<script>
+(function(){
+  // 테마 토글 — 3상태 순환(시스템 → 라이트 → 다크 → 시스템, 결정 T2). 버튼은 #dzh-app 밖의
+  // 정적 마크업이라 1분 폴링(불변식 H1)과 무관하게 이 IIFE 하나로 수명이 끝난다.
+  var THEME_STORAGE_KEY = 'dzh-theme';
+  var THEME_CYCLE = ['system', 'light', 'dark'];
+  var THEME_BUTTON_LABEL = {system:'테마: 시스템', light:'테마: 라이트', dark:'테마: 다크'};
+  var toggleButton = document.getElementById('dzh-theme-toggle');
+  if(!toggleButton) return;
+
+  function currentThemeOverride(){
+    try{
+      var stored = localStorage.getItem(THEME_STORAGE_KEY);
+      return (stored === 'light' || stored === 'dark') ? stored : 'system';
+    }catch(e){
+      return 'system';
+    }
+  }
+
+  function applyThemeButtonLabel(){
+    toggleButton.textContent = THEME_BUTTON_LABEL[currentThemeOverride()];
+  }
+
+  toggleButton.addEventListener('click', function(){
+    var next = THEME_CYCLE[(THEME_CYCLE.indexOf(currentThemeOverride()) + 1) % THEME_CYCLE.length];
+    try{
+      if(next === 'system') localStorage.removeItem(THEME_STORAGE_KEY);
+      else localStorage.setItem(THEME_STORAGE_KEY, next);
+    }catch(e){ /* 저장 실패 — 이번 페이지 로드 동안만 토글이 적용된다(결정 T3) */ }
+    if(next === 'system') document.documentElement.removeAttribute('data-theme');
+    else document.documentElement.setAttribute('data-theme', next);
+    applyThemeButtonLabel();
+  });
+  applyThemeButtonLabel();
+})();
+
+(function(){
+  // 전역 커스텀 툴팁 — data-tooltip 트리거 전체가 공유하는 position:fixed 싱글턴(결정 T1).
+  // 네이티브 title 은 지연·스타일·위치를 제어할 수 없고 .card{overflow:hidden} 안에서 잘리므로
+  // 이 파일 안의 바닐라 CSS/JS 로 대체한다(요구 2). 스냅샷 렌더와 무관한 범용 UI 컴포넌트라
+  // 테마 토글과 같은 층위의 독립 IIFE 로 둔다.
+  var TOOLTIP_SHOW_DELAY_MS = 120;          // 마우스 hover-intent (결정 T3)
+  var TOOLTIP_GAP_PX = 8;                   // 트리거와 툴팁 사이 간격
+  var TOOLTIP_VIEWPORT_MARGIN_PX = 8;       // 뷰포트 경계 최소 여백
+  var TOOLTIP_VISIBLE_CLASS = 'tooltip-visible';
+  var TOOLTIP_ELEMENT_ID = 'dzh-tooltip';
+  var TOOLTIP_TRIGGER_SELECTOR = '[data-tooltip]';
+
+  var tooltipEl = document.getElementById(TOOLTIP_ELEMENT_ID);
+  if(!tooltipEl) return;
+  var currentTrigger = null;                // 표시 중인 트리거(없으면 null)
+  var showTimerId = null;
+
+  // 트리거 사각형·툴팁 크기·뷰포트로 {left, top} 을 계산한다. 순수 함수 — DOM 에 닿지 않는다.
+  function tooltipPosition(triggerRect, tooltipWidth, tooltipHeight, viewportWidth, viewportHeight){
+    var left = triggerRect.left + triggerRect.width / 2 - tooltipWidth / 2;
+    left = Math.max(TOOLTIP_VIEWPORT_MARGIN_PX, Math.min(left, viewportWidth - tooltipWidth - TOOLTIP_VIEWPORT_MARGIN_PX));
+    var below = triggerRect.bottom + TOOLTIP_GAP_PX;
+    var above = triggerRect.top - tooltipHeight - TOOLTIP_GAP_PX;
+    var top = (below + tooltipHeight + TOOLTIP_VIEWPORT_MARGIN_PX <= viewportHeight) ? below : above;
+    top = Math.max(TOOLTIP_VIEWPORT_MARGIN_PX, Math.min(top, viewportHeight - tooltipHeight - TOOLTIP_VIEWPORT_MARGIN_PX));
+    return {left: left, top: top};
+  }
+
+  // 트리거의 접근성 이름 근사값. aria-label 이 있으면 그것, 없으면 textContent 를 다듬는다.
+  function accessibleNameOf(element){
+    var ariaLabel = element.getAttribute('aria-label');
+    if(ariaLabel) return ariaLabel.trim();
+    return (element.textContent || '').replace(/\s+/g, ' ').trim();
+  }
+
+  // 툴팁 문구가 접근성 이름과 다를 때만 true — 같으면 aria-describedby 가 이중 낭독이 된다.
+  function shouldDescribe(trigger, text){
+    return accessibleNameOf(trigger) !== text;
+  }
+
+  // 표시를 끄고 지연 타이머를 취소하고 aria-describedby 를 되돌린다. 언제 불려도 안전하다.
+  function hideTooltip(){
+    if(showTimerId !== null){ clearTimeout(showTimerId); showTimerId = null; }
+    tooltipEl.classList.remove(TOOLTIP_VISIBLE_CLASS);
+    if(currentTrigger && currentTrigger.getAttribute('aria-describedby') === TOOLTIP_ELEMENT_ID){
+      currentTrigger.removeAttribute('aria-describedby');
+    }
+    currentTrigger = null;
+  }
+
+  // 문구를 채우고 위치를 잡아 표시하고, 필요하면 aria-describedby 를 연결한다(표시 순서 GOTCHA).
+  function showTooltip(trigger){
+    if(showTimerId !== null){ clearTimeout(showTimerId); showTimerId = null; }
+    var text = trigger.getAttribute('data-tooltip') || '';
+    tooltipEl.textContent = text;                  // innerHTML 이 아니다 — 문구가 그대로 텍스트가 된다
+    tooltipEl.style.left = '0px';
+    tooltipEl.style.top = '0px';                    // GOTCHA 3 — 측정 전 좌표 리셋
+    var tooltipWidth = tooltipEl.offsetWidth;
+    var tooltipHeight = tooltipEl.offsetHeight;
+    var position = tooltipPosition(
+      trigger.getBoundingClientRect(), tooltipWidth, tooltipHeight,
+      window.innerWidth, window.innerHeight
+    );
+    tooltipEl.style.left = position.left + 'px';
+    tooltipEl.style.top = position.top + 'px';
+    tooltipEl.classList.add(TOOLTIP_VISIBLE_CLASS);
+    currentTrigger = trigger;
+    if(shouldDescribe(trigger, text)) trigger.setAttribute('aria-describedby', TOOLTIP_ELEMENT_ID);
+  }
+
+  // 표시 요청. 이미 다른 트리거를 보여주는 중이면 지연 없이 즉시 교체한다(결정 T3).
+  function requestTooltip(trigger, isImmediate){
+    if(trigger === currentTrigger) return;
+    if(showTimerId !== null){ clearTimeout(showTimerId); showTimerId = null; }
+    if(isImmediate || currentTrigger){ showTooltip(trigger); return; }
+    showTimerId = setTimeout(function(){ showTimerId = null; showTooltip(trigger); }, TOOLTIP_SHOW_DELAY_MS);
+  }
+
+  // 이벤트 배선 — 전부 document 위임이다(결정 T2). 폴링이 #dzh-app.innerHTML 을 통째로
+  // 교체하므로 개별 요소에 리스너를 붙이면 재렌더 후 전부 죽는다.
+  document.addEventListener('mouseover', function(event){
+    var trigger = event.target.closest(TOOLTIP_TRIGGER_SELECTOR);
+    if(trigger){ requestTooltip(trigger, false); return; }
+    if(event.target.closest('#' + TOOLTIP_ELEMENT_ID)) return;   // hoverable(WCAG 1.4.13)
+    hideTooltip();
+  });
+  document.addEventListener('mouseleave', function(){ hideTooltip(); });   // 포인터가 창 밖으로 나가면 mouseover 가 더 안 온다
+  document.addEventListener('focusin', function(event){
+    var trigger = event.target.closest(TOOLTIP_TRIGGER_SELECTOR);
+    if(trigger) requestTooltip(trigger, true);   // 포커스 이동은 의도적 행위다 — 지연 0
+  });
+  document.addEventListener('focusout', function(){ hideTooltip(); });
+  document.addEventListener('keydown', function(event){
+    if(event.key === 'Escape') hideTooltip();
+  });
+  document.addEventListener('click', function(){ hideTooltip(); });
+  document.addEventListener('scroll', function(){ hideTooltip(); }, {capture: true, passive: true});
+  window.addEventListener('resize', function(){ hideTooltip(); });
+
+  // 30초 틱이 트리거 노드를 파괴하는데 포인터가 멈춰 있으면 마우스 이벤트가 안 와 낡은 문구가
+  // 남는다(결정 T6) — #dzh-app·#dzh-usage-body 의 자식 교체(렌더의 innerHTML 통째 교체)를
+  // 감시해 고아 툴팁을 막는다.
+  var appElForTooltipObserver = document.getElementById('dzh-app');
+  var usageBodyElForTooltipObserver = document.getElementById('dzh-usage-body');
+  var tooltipDismissObserver = new MutationObserver(function(){ hideTooltip(); });
+  if(appElForTooltipObserver) tooltipDismissObserver.observe(appElForTooltipObserver, {childList: true});
+  if(usageBodyElForTooltipObserver) tooltipDismissObserver.observe(usageBodyElForTooltipObserver, {childList: true});
+})();
+
+(function(){
+  var POLL_INTERVAL_MS = 60000;
+  var TICK_MS = 30000;
+  var MS_PER_MINUTE = 60000;
+  var MINUTES_PER_HOUR = 60;
+  var STATE_LABEL = {working:'작업중', idle:'대기', stale:'소식 없음', done:'완료'};
+  var STATE_GLYPH = {working:'●', idle:'○', stale:'▲', done:'✓'};
+  var MAX_VISIBLE_AGENT_CHIPS = 2;            // 화면에 실을 칩 상한(결정 K1) — 상한 밖 타입은 표시하지 않는다
+  var AGENT_RUN_RUNNING_GLYPH = '●';          // 상태 배지의 working 글리프와 의도적으로 같은 모양
+  var AGENT_RUN_RUNNING_LABEL = '진행 중';
+  var AGENT_RUN_ENDED_LABEL = '종료';
+  var AGENT_RUN_NO_PHASE_LABEL = '워크플로우 단계 매핑 없음';
+  // "티어 N" 만으로는 의미가 안 드러나 사용자가 두 번 물었다 — 뱃지 텍스트 자체를 설명형으로
+  // 바꾼다. data-tooltip 으로 추가 설명을 보완한다(전역 커스텀 툴팁, 결정 T1).
+  var TIER_LABEL = {1: '대시보드 추적', 2: '세션 활동', 3: '세션 없음'};
+  var TIER_DESCRIPTION = {
+    1: '/dashboard 로 진행상황을 기록 중인 프로젝트',
+    2: '세션 활동은 있지만 /dashboard 기록은 없는 프로젝트',
+    3: '파일시스템에서만 발견됨 — 세션 활동 없음'
+  };
+  var USAGE_SESSION_LABEL = '세션 (5시간)';
+  var USAGE_WEEKLY_LABEL = '주간 (7일)';
+  // 퍼센트 출처가 statusLine 캡처로 바뀌면서(결정 P1) "주기" 개념 자체가 없어졌다 — 세션이
+  // 돌 때만 실시간으로 갱신되고 안 돌면 정지된다(결정 P6, docs/prps/hub-card-cleanup-and-usage-source.md).
+  var USAGE_CYCLE_NOTE = '· 세션 진행 중에만 갱신';
+  var USAGE_COLLAPSE_STORAGE_KEY = 'dzh-usage-collapsed';
+  var USAGE_COLLAPSED_FLAG = '1';
+  var USAGE_CLEARANCE_MARGIN_PX = 32;   // 패널 bottom 오프셋 16 + 여유 16
+  var USAGE_RESET_LABEL = '초기화';
+  var MS_PER_HOUR = 3600000;
+  var MS_PER_DAY = 86400000;
+  // 12시간 — stale_after_minutes(30분)와 이벤트 표시 창(약 24~48시간) 사이의 임의값이다(결정
+  // Z1). 더 나은 앵커가 없음을 인정하고 상수 1개로 둔다 — 되돌리기·값 변경 모두 1줄.
+  // MS_PER_HOUR 선언 뒤에 둔다 — var 호이스팅은 선언만 끌어올리고 할당은 올리지 않으므로
+  // 앞에 두면 12 * undefined = NaN 이 되어 컷오프가 조용히 죽는다(GOTCHA 2).
+  var STALE_SESSION_HIDE_AFTER_MS = 12 * MS_PER_HOUR;
+
+  var app = document.getElementById('dzh-app');
+  var collectedAtLabel = document.getElementById('dzh-collected-at');
+  var refreshButton = document.getElementById('dzh-refresh');
+  var usageEl = document.getElementById('dzh-usage');
+  var usageToggleButton = document.getElementById('dzh-usage-toggle');
+  var usageBodyEl = document.getElementById('dzh-usage-body');
+  var usageSummaryEl = document.getElementById('dzh-usage-summary');
+  var isUsageCollapsed = readStoredUsageCollapsed();
+  var isServed = location.protocol === 'http:' || location.protocol === 'https:';
+  var initialDataParse = parseSnapshotJson(document.getElementById('dzh-data').textContent);
+  var snapshot = initialDataParse.snapshot;
+  var initialParseError = initialDataParse.error;
+  var lastHtml = '';
+  // 서버(hub_model.build_project_views)는 매 수집마다 last_activity_at_ms 내림차순으로
+  // 재정렬한다 — 클라이언트는 그 순서를 그대로 쓰지 않고 path 기준 최초 등장 순서를
+  // 기억해 카드 위치를 고정한다(카드가 갱신마다 자리를 옮기면 읽기 흐름이 끊긴다).
+  var projectDisplayOrder = [];
+
+  // 데이터 블록이 깨지면(수동 편집·render_hub_html 결함 등) JSON.parse 가 던지고, try/catch 가
+  // 없으면 이 IIFE 전체가 죽어 render() 가 한 번도 안 불려 "불러오는 중…" 이 영구 고정된다(검수 n4).
+  function parseSnapshotJson(rawText){
+    try{
+      return {snapshot: JSON.parse(rawText || '{}'), error: null};
+    }catch(error){
+      return {snapshot: {}, error: error};
+    }
+  }
+
+  function elapsedLabel(fromMs){
+    var minutes = Math.floor((Date.now() - fromMs) / MS_PER_MINUTE);
+    if(!isFinite(minutes) || minutes < 0) return '방금';
+    if(minutes < 1) return '방금';
+    if(minutes < MINUTES_PER_HOUR) return minutes + '분 전';
+    return Math.floor(minutes / MINUTES_PER_HOUR) + '시간 ' + (minutes % MINUTES_PER_HOUR) + '분 전';
+  }
+
+  // stale 은 "소식 없음"만으로 부족하다 — 멈추기 전 마지막으로 뭘 하고 있었는지(base_state)를
+  // 병기해야 사용자가 "죽었나 아니면 그냥 조용한가"를 가늠할 수 있다(검수 M6 ③).
+  function stateLabel(state, baseState){
+    if(state === 'stale') return STATE_LABEL.stale + ' · 직전 ' + STATE_LABEL[baseState];
+    return STATE_LABEL[state];
+  }
+
+  // 색 + 형태(글리프) + 텍스트 3채널 배지(색각 안전 팔레트 보강). baseState 는 선택 인자다 —
+  // 세션 배지는 stale 이면 "직전 …"를 병기하고(stateLabel), 프로젝트 배지는 baseState 가 없어
+  // STATE_LABEL 을 그대로 쓴다. 여기서 baseState 를 필수로 만들면 stale 프로젝트에서
+  // "소식 없음 · 직전 undefined" 가 나온다.
+  function renderStateBadge(state, baseState){
+    var label = baseState ? stateLabel(state, baseState) : STATE_LABEL[state];
+    return '<span class="badge state-' + state + '">'
+         + '<span class="glyph" aria-hidden="true">' + STATE_GLYPH[state] + '</span>'
+         + label + '</span>';
+  }
+
+  // 칩 툴팁 문구. 순수 함수 — DOM 에 닿지 않는다. 예: "구현 단계 · 진행 중"
+  function agentRunTooltipText(run){
+    var phaseLabel = run.phase ? (run.phase + ' 단계') : AGENT_RUN_NO_PHASE_LABEL;
+    var statusLabel = run.is_running ? AGENT_RUN_RUNNING_LABEL : AGENT_RUN_ENDED_LABEL;
+    return phaseLabel + ' · ' + statusLabel;
+  }
+
+  // 서브에이전트 타입 칩 하나. 실행 중이면 글리프 + 보조기술용 텍스트가 붙는다(GOTCHA 2).
+  function renderAgentChip(run){
+    var runningClass = run.is_running ? ' agent-chip-running' : '';
+    var runningGlyph = run.is_running
+      ? '<span class="glyph" aria-hidden="true">' + AGENT_RUN_RUNNING_GLYPH + '</span>' : '';
+    var runningSrText = run.is_running
+      ? '<span class="sr-only"> ' + AGENT_RUN_RUNNING_LABEL + '</span>' : '';
+    return '<span class="agent-chip' + runningClass + '" data-tooltip="'
+      + escapeHtml(agentRunTooltipText(run)) + '">'
+      + runningGlyph + escapeHtml(run.agent_type) + runningSrText + '</span>';
+  }
+
+  // 화면에 실을 칩 목록의 유일한 판정자(결정 K1). renderAgentRuns 와 shouldRenderSession 이
+  // 이 함수를 공유한다 — shouldRenderSession 이 agent_runs.length 를 직접 보면 "칩은 없는데
+  // 줄은 남는" 어긋남이 생긴다(GOTCHA 3).
+  function visibleAgentRuns(runs){
+    if(!runs) return [];
+    return runs.slice(0, MAX_VISIBLE_AGENT_CHIPS);
+  }
+
+  // 칩 목록. 상한을 넘는 타입은 표시하지 않는다 — "+N" 오버플로 칩은 결정 K3 로 폐기됐다.
+  // summarize_agent_runs(서버)가 실행 중 타입을 항상 먼저 주므로(결정 K2) 상한 안에서도
+  // 지금 진행 중인 작업은 계속 보인다.
+  function renderAgentRuns(runs){
+    var visibleRuns = visibleAgentRuns(runs);
+    if(!visibleRuns.length) return '';
+    return '<span class="agent-runs">' + visibleRuns.map(renderAgentChip).join('') + '</span>';
+  }
+
+  function renderSession(session){
+    var excerpt = session.task_excerpt
+      ? '<span class="excerpt">' + escapeHtml(session.task_excerpt) + '</span>' : '';
+    return '<li><div class="session-line">'
+      + renderStateBadge(session.state, session.base_state)
+      + '<span class="session-time">' + elapsedLabel(session.last_event_at_ms) + '</span>'
+      + renderAgentRuns(session.agent_runs)
+      + '</div>' + excerpt + '</li>';
+  }
+
+  // 숨김 조건 = 완료 + 표시할 발췌 없음 + 보이는 칩 0개(결정 V2). visibleAgentRuns 를 반드시
+  // 경유한다(GOTCHA 3) — agent_runs.length 를 직접 보면 상한 밖으로 밀린 종료 타입 때문에
+  // 칩이 없는데도 줄이 남는 어긋남이 생긴다. stale 세션은 마지막 이벤트로부터
+  // STALE_SESSION_HIDE_AFTER_MS(결정 Z1) 넘게 조용하면 함께 숨긴다. 둘 다 클라이언트 전용
+  // 필터라 프로젝트 배지 집계(서버의 state)에는 영향을 주지 않는다(결정 V1).
+  function shouldRenderSession(session){
+    var hasVisibleChip = visibleAgentRuns(session.agent_runs).length > 0;
+    if(session.state === 'done' && !session.task_excerpt && !hasVisibleChip) return false;
+    if(session.state === 'stale' && (Date.now() - session.last_event_at_ms) >= STALE_SESSION_HIDE_AFTER_MS){
+      return false;
+    }
+    return true;
+  }
+
+  function renderTier1ActiveStep(tier1){
+    var steps = tier1.steps || [];
+    var activeStep;
+    for(var i = 0; i < steps.length; i++){
+      if(steps[i].state === 'active'){ activeStep = steps[i]; break; }
+    }
+    if(!activeStep) return '';
+    var detail = activeStep.detail ? ' — ' + escapeHtml(activeStep.detail) : '';
+    return '<div class="tier1-active">' + escapeHtml(activeStep.name) + detail + '</div>';
+  }
+
+  function renderTier1ImplProgress(tier1){
+    if(!tier1.impl_total) return '';
+    return '<div class="tier1-impl">구현 세부 ' + tier1.impl_done + '/' + tier1.impl_total + '</div>';
+  }
+
+  function renderTier1(tier1){
+    if(!tier1) return '';
+    return '<div class="tier1-pct">' + escapeHtml(tier1.title) + ' — '
+      + tier1.completed + '/' + tier1.total + ' · ' + tier1.percent + '%</div>'
+      + renderTier1ActiveStep(tier1) + renderTier1ImplProgress(tier1);
+  }
+
+  function renderProject(project){
+    // 세션은 서버가 오래된 것부터 준다(§2.4-2, hub_model.compose_project_views) — 클라이언트가
+    // 최신순으로 다시 정렬한다(결정 Z1 안 2). slice() 로 복제해 원본 project.sessions 를
+    // 변형하지 않는다 — 같은 snapshot 객체가 다음 TICK_MS 렌더에도 재사용된다.
+    var visibleSessions = project.sessions
+      .slice()
+      .sort(function(a, b){ return b.last_event_at_ms - a.last_event_at_ms; })
+      .filter(shouldRenderSession);
+    var sessionsHtml = visibleSessions.length
+      ? '<ul class="sessions">' + visibleSessions.map(renderSession).join('') + '</ul>' : '';
+    return '<div class="card">'
+      + '<div class="project-head">'
+      + '<span class="project-name" data-tooltip="' + escapeHtml(project.display_name) + '">' + escapeHtml(project.display_name) + '</span>'
+      + '<span class="badge tier" data-tooltip="' + escapeHtml(TIER_DESCRIPTION[project.tier] || '') + '">' + escapeHtml(TIER_LABEL[project.tier] || ('티어 ' + project.tier)) + '</span>'
+      + renderStateBadge(project.state)
+      + '<span class="last-activity">' + elapsedLabel(project.last_activity_at_ms) + '</span>'
+      + '</div>'
+      + (project.path ? '<div class="path">' + escapeHtml(project.path) + '</div>' : '')
+      + renderTier1(project.tier1) + sessionsHtml + '</div>';
+  }
+
+  // 따옴표도 이스케이프한다 — usage-meta 의 data-tooltip="..." 이 이 함수의 첫 속성 자리
+  // 사용처다(검수 m3). 텍스트 자리에서는 무해하고, 속성 자리로 재사용될 다음 호출부를 미리
+  // 방어한다.
+  function escapeHtml(text){
+    return String(text).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')
+      .replace(/"/g,'&quot;').replace(/'/g,'&#39;');
+  }
+
+  // 상주 서버(개정 쟁점 R3)는 내용이 바뀌지 않으면 hub.html 을 다시 쓰지 않는다 — 그래서
+  // collected_at_ms 는 "수집 시각"이 아니라 "마지막 변화 시각"이다. 폴링 성공/실패 자체가
+  // 서버 생존의 증거이므로, 그 상태를 별도로 표시해야 "멈춘 것"과 "변화가 없는 것"을 구별할 수
+  // 있다(초판 리스크 8 의 재발 방지).
+  var POLL_FAILURE_THRESHOLD = 2;
+  var consecutiveFailureCount = 0;
+  var lastPollSuccessAtMs = null;
+  var connectionLost = false;
+
+  function formatTimestamp(epochMs){
+    return new Date(epochMs).toLocaleString('ko-KR');
+  }
+
+  // #dzh-data 는 신뢰 가능한 서버 생성물이지만 템플릿의 관행대로 방어한다 — Number() 강제
+  // 변환 후 isFinite 가 아니면 막대를 그리지 않고, 표시 폭은 0~100 으로 클램프한다(레이아웃
+  // 붕괴·스타일 속성 주입 방지). 표시 숫자(rawValue)는 클램프하지 않은 원값을 쓴다.
+  function clampPercent(value){
+    var number = Number(value);
+    if(!isFinite(number)) return null;
+    return Math.max(0, Math.min(100, number));
+  }
+
+  function renderUsageBar(label, rawValue){
+    var clamped = clampPercent(rawValue);
+    if(clamped === null) return '';
+    return '<div class="usage-row"><span>' + label + '</span><span class="usage-pct">' + rawValue + '%</span></div>'
+      + '<div class="usage-bar" role="progressbar" aria-valuenow="' + clamped + '" aria-valuemin="0" aria-valuemax="100" aria-label="' + label + ' 사용률"><span style="width:' + clamped + '%"></span></div>';
+  }
+
+  // 남은 시간을 사람이 읽는 문자열로. 이미 지났으면(diffMs<=0) null — 호출자가 줄을 그리지
+  // 않는다(결정 R5 의 클라이언트 쪽 2차 필터가 바로 이 판정이다).
+  function remainingLabel(untilMs, nowMs){
+    var diffMs = untilMs - nowMs;
+    if(!isFinite(diffMs) || diffMs <= 0) return null;
+    if(diffMs < MS_PER_MINUTE) return '곧';
+    if(diffMs < MS_PER_HOUR) return Math.floor(diffMs / MS_PER_MINUTE) + '분 뒤';
+    if(diffMs < MS_PER_DAY){
+      var hours = Math.floor(diffMs / MS_PER_HOUR);
+      var minutes = Math.floor((diffMs % MS_PER_HOUR) / MS_PER_MINUTE);
+      return hours + '시간 ' + minutes + '분 뒤';
+    }
+    return Math.floor(diffMs / MS_PER_DAY) + '일 뒤';
+  }
+
+  // '초기화 18:32 · 2시간 12분 뒤'. 값이 없거나 이미 지났으면 null. 순수 — DOM 에 닿지 않는다.
+  function usageResetText(resetsAtMs, nowMs){
+    if(resetsAtMs === null || resetsAtMs === undefined) return null;
+    var value = Number(resetsAtMs);
+    if(!isFinite(value)) return null;
+    var remaining = remainingLabel(value, nowMs);
+    if(remaining === null) return null;
+    var resetDate = new Date(value);
+    var nowDate = new Date(nowMs);
+    var sameDay = resetDate.getFullYear() === nowDate.getFullYear()
+      && resetDate.getMonth() === nowDate.getMonth()
+      && resetDate.getDate() === nowDate.getDate();
+    var pad2 = function(n){ return (n < 10 ? '0' : '') + n; };
+    var timePart = pad2(resetDate.getHours()) + ':' + pad2(resetDate.getMinutes());
+    var absolutePart = sameDay ? timePart : (resetDate.getMonth() + 1) + '/' + resetDate.getDate() + ' ' + timePart;
+    return USAGE_RESET_LABEL + ' ' + absolutePart + ' · ' + remaining;
+  }
+
+  // 초기화 예정 시각 한 줄의 HTML. 그릴 값이 없으면 빈 문자열. capturedAtMs 는 툴팁의
+  // '이 정보를 확인한 시각'에 쓰인다(표시 규칙 표) — formatTimestamp 는 usage-meta 와 같은
+  // 기존 함수를 재사용한다(새 날짜 포맷 도입 없음).
+  // 네이티브 title 이 아니라 data-tooltip 을 쓴다 — 대시보드의 모든 툴팁은 #dzh-tooltip
+  // 커스텀 컴포넌트 하나로 통일한다(T25-39 가 title 속성 0건을 강제한다).
+  function renderUsageResetRow(resetsAtMs, capturedAtMs){
+    var text = usageResetText(resetsAtMs, Date.now());
+    if(text === null) return '';
+    var capturedAtNumber = Number(capturedAtMs);
+    var tooltipAttr = isFinite(capturedAtNumber)
+      ? ' data-tooltip="' + escapeHtml('이 정보를 확인한 시각: ' + formatTimestamp(capturedAtNumber)) + '"'
+      : '';
+    return '<div class="usage-reset"' + tooltipAttr + '>' + escapeHtml(text) + '</div>';
+  }
+
+  function hideUsagePanel(){
+    usageEl.hidden = true;
+    document.body.classList.remove('has-usage');
+  }
+
+  // 저장된 접힘 상태를 읽는다. 저장소 접근이 막힌 환경(file:// 등)에서는 펼침으로 본다(결정 C3).
+  function readStoredUsageCollapsed(){
+    try{
+      return localStorage.getItem(USAGE_COLLAPSE_STORAGE_KEY) === USAGE_COLLAPSED_FLAG;
+    }catch(e){
+      return false;
+    }
+  }
+
+  // 접힘이면 플래그를 쓰고 펼침이면 키를 지운다(결정 C2). 저장 실패는 무시한다 — 이번
+  // 페이지 로드 동안만 토글이 유효하다(결정 C3, 테마 토글과 동일 처리).
+  function persistUsageCollapsed(collapsed){
+    try{
+      if(collapsed) localStorage.setItem(USAGE_COLLAPSE_STORAGE_KEY, USAGE_COLLAPSED_FLAG);
+      else localStorage.removeItem(USAGE_COLLAPSE_STORAGE_KEY);
+    }catch(e){ /* 저장 실패 — 이번 로드 동안만 유효(결정 C3) */ }
+  }
+
+  // 접힘 상태에 보일 한 줄 요약 문자열. 순수 함수 — DOM 에 닿지 않는다(결정 C5).
+  function usageSummaryText(usage){
+    return '세션 ' + usage.session_percent + '% · 주간 ' + usage.weekly_percent + '%';
+  }
+
+  // 패널 실측 높이로 본문 하단 여백(--usage-clearance)을 맞춘다(결정 L3). hidden 상태에서는
+  // offsetHeight 가 0 이므로 반드시 내용 채우기 → hidden=false 이후에 호출해야 한다(GOTCHA 4).
+  function applyUsageClearance(){
+    document.body.style.setProperty('--usage-clearance', (usageEl.offsetHeight + USAGE_CLEARANCE_MARGIN_PX) + 'px');
+  }
+
+  // 접힘 상태를 클래스·aria-expanded·하단 여백에 반영한다. 재렌더 후 복원 경로다(불변식 H1′).
+  function applyUsageCollapsedState(){
+    usageEl.classList.toggle('usage-collapsed', isUsageCollapsed);
+    usageToggleButton.setAttribute('aria-expanded', isUsageCollapsed ? 'false' : 'true');
+    applyUsageClearance();
+  }
+
+  // 컨테이너(#dzh-usage)와 토글 버튼(#dzh-usage-toggle)은 정적, 내용(#dzh-usage-body ·
+  // #dzh-usage-summary)만 파생이다(불변식 H1′, 결정 C1). usage 가 없으면(스위치 off·파일
+  // 없음·계약 불일치·만료, 결정 U3·U4) 조용히 숨긴다 — 경고를 띄우지 않는다. resets 는 장식이다
+  // (결정 R3) — 없어도 usage 만 있으면 패널은 그려진다.
+  function renderUsagePanel(usage, resets){
+    if(!usage){ hideUsagePanel(); return; }
+    var sessionBar = renderUsageBar(USAGE_SESSION_LABEL, usage.session_percent);
+    var weeklyBar = renderUsageBar(USAGE_WEEKLY_LABEL, usage.weekly_percent);
+    if(!sessionBar || !weeklyBar){ hideUsagePanel(); return; }
+    var capturedAtMs = resets && resets.captured_at_ms;
+    var sessionResetRow = renderUsageResetRow(resets && resets.session_resets_at_ms, capturedAtMs);
+    var weeklyResetRow = renderUsageResetRow(resets && resets.weekly_resets_at_ms, capturedAtMs);
+    var meta = '마지막 갱신 ' + elapsedLabel(usage.sampled_at_ms) + ' ' + USAGE_CYCLE_NOTE;
+    usageSummaryEl.textContent = usageSummaryText(usage);
+    usageBodyEl.innerHTML = sessionBar + sessionResetRow + weeklyBar + weeklyResetRow
+      + '<div class="usage-meta" data-tooltip="' + escapeHtml(formatTimestamp(usage.sampled_at_ms)) + '">' + meta + '</div>';
+    usageEl.hidden = false;
+    document.body.classList.add('has-usage');
+    applyUsageCollapsedState();
+  }
+
+  function renderConnectionStatus(){
+    if(initialParseError) return;
+    var lastChange = formatTimestamp(snapshot.collected_at_ms);
+    if(!isServed){
+      collectedAtLabel.textContent = '마지막 변화: ' + lastChange + ' · 허브 서버 꺼짐';
+      return;
+    }
+    if(connectionLost){
+      collectedAtLabel.textContent = '서버 연결 끊김 — 화면이 ' + lastChange + ' 에 멈췄습니다';
+      return;
+    }
+    var secondsSincePoll = lastPollSuccessAtMs ? Math.floor((Date.now() - lastPollSuccessAtMs) / 1000) : 0;
+    collectedAtLabel.textContent = '마지막 변화: ' + lastChange + ' · 서버 연결됨 (' + secondsSincePoll + '초 전 확인)';
+  }
+
+  // projectDisplayOrder 를 IIFE 최상위에서 계속 갱신해 카드 순서를 고정한다 — render() 안에서
+  // 초기화하면 매 폴링마다 서버 정렬을 그대로 다시 따르게 되어 고정 효과가 사라진다.
+  function stableSortedProjects(projects){
+    var presentPaths = {};
+    for(var i = 0; i < projects.length; i++) presentPaths[projects[i].path] = true;
+    for(var j = 0; j < projects.length; j++){
+      if(projectDisplayOrder.indexOf(projects[j].path) === -1) projectDisplayOrder.push(projects[j].path);
+    }
+    projectDisplayOrder = projectDisplayOrder.filter(function(path){ return presentPaths[path]; });
+    var byPath = {};
+    for(var k = 0; k < projects.length; k++) byPath[projects[k].path] = projects[k];
+    return projectDisplayOrder.map(function(path){ return byPath[path]; });
+  }
+
+  function render(){
+    if(initialParseError){
+      app.innerHTML = '<div class="empty">데이터를 읽지 못했습니다 ('
+        + escapeHtml(String(initialParseError.message || initialParseError))
+        + '). 페이지를 새로고침해 보세요.</div>';
+      collectedAtLabel.textContent = '';
+      return;
+    }
+    if(!snapshot.projects || !snapshot.projects.length){
+      app.innerHTML = '<div class="empty">아직 프로젝트가 없습니다. 훅을 설치했나요? — /hub install</div>';
+    } else {
+      app.innerHTML = stableSortedProjects(snapshot.projects).map(renderProject).join('');
+    }
+    var extra = '';
+    if(snapshot.warnings && snapshot.warnings.length){
+      extra += '<div class="warnings">' + snapshot.warnings.map(escapeHtml).join('<br>') + '</div>';
+    }
+    app.insertAdjacentHTML('beforeend', extra);
+    renderConnectionStatus();
+    renderUsagePanel(snapshot.usage, snapshot.rate_limit_resets);
+  }
+  // 펼치는 순간 다음 폴링(최대 5초)을 기다리지 않고 그 자리에서 한 번 더 갱신한다(요구 2).
+  // ①은 file:// 모드에서도 동작하는 로컬 재계산, ②는 서버 모드에서만 가능한 즉시 fetch 다.
+  // 이 리스너는 반드시 아래 `if(!isServed){ … return; }` 앞에 등록돼야 한다 — 뒤로 옮기면
+  // file:// 모드에서 접기 기능 자체가 사라진다(GOTCHA 4). `poll` 을 여기서 참조할 수 있는
+  // 것은 `function poll(){}` 이 호이스팅되는 함수 선언이기 때문이다.
+  usageToggleButton.addEventListener('click', function(){
+    isUsageCollapsed = !isUsageCollapsed;
+    persistUsageCollapsed(isUsageCollapsed);
+    applyUsageCollapsedState();
+    if(isUsageCollapsed) return;
+    renderUsagePanel(snapshot.usage, snapshot.rate_limit_resets);  // ① 라벨을 지금 시각으로 다시 계산
+    if(isServed) poll();                                           // ② 서버에 최신 스냅샷을 즉시 요청
+  });
+
+  render();
+  setInterval(render, TICK_MS);
+
+  if(!isServed){
+    var reloading = false;
+    var reloadOnce = function(){ if(reloading) return; reloading = true; location.reload(); };
+    document.addEventListener('visibilitychange', function(){ if(document.visibilityState==='visible') reloadOnce(); });
+    window.addEventListener('focus', reloadOnce);
+    refreshButton.addEventListener('click', reloadOnce);
+    return;
+  }
+
+  var busy = false;
+  function poll(){
+    if(busy) return;
+    busy = true;
+    fetch(location.pathname, {cache:'no-store'})
+      .then(function(res){ if(!res.ok) throw new Error(res.status); return res.text(); })
+      .then(function(html){
+        consecutiveFailureCount = 0;
+        connectionLost = false;
+        lastPollSuccessAtMs = Date.now();
+        if(html === lastHtml){ renderConnectionStatus(); return; }
+        lastHtml = html;
+        var fresh = new DOMParser().parseFromString(html, 'text/html');
+        var freshData = fresh.getElementById('dzh-data');
+        if(freshData){ snapshot = JSON.parse(freshData.textContent || '{}'); }
+        render();
+      })
+      .catch(function(){
+        consecutiveFailureCount++;
+        if(consecutiveFailureCount >= POLL_FAILURE_THRESHOLD) connectionLost = true;
+        renderConnectionStatus();
+      })
+      .then(function(){ busy = false; });
+  }
+  setInterval(poll, POLL_INTERVAL_MS);
+  document.addEventListener('visibilitychange', function(){ if(document.visibilityState==='visible') poll(); });
+  window.addEventListener('focus', poll);
+  refreshButton.addEventListener('click', poll);
+})();
+</script>
+</body>
+</html>
