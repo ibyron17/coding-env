@@ -192,8 +192,8 @@ UpdateMode
 - `reload` 모드의 코드 경로는 **현재 스크립트와 의미상 동일**해야 한다. 플로팅 버튼은 비활성이다.
 - 플로팅 가능 조건 = `mode === "poll"` **AND** `'documentPictureInPicture' in window`.
   둘 중 하나라도 아니면 버튼은 `disabled` 이고 `#dz-pip-hint` 가 사유 한 줄을 보여준다.
-- 위 조건을 만족해도 허브 모달(iframe) 안에서 열린 문서는 `body.dz-embedded` 로 플로팅
-  버튼·안내 줄이 CSS 로 숨는다 — 모달을 닫으면 iframe 이 `about:blank` 로 가 opener 문서가
+- 위 조건을 만족해도 허브 상세 패널(iframe) 안에서 열린 문서는 `body.dz-embedded` 로 플로팅
+  버튼·안내 줄이 CSS 로 숨는다 — 패널을 닫으면 iframe 이 `about:blank` 로 가 opener 문서가
   파괴되므로, 그 안에서 플로팅에 진입하면 되돌아갈 곳이 사라진다. 폴링은 이 판정과 무관하게
   그대로 동작한다.
 - 창 높이는 고정값이 아니다. 압축 뷰는 작업 추적 카드가 빠져 콘텐츠가 짧으므로,
@@ -209,7 +209,7 @@ UpdateMode
 
 | 요소 | 역할 |
 |------|------|
-| `#dz-pip-btn` | 플로팅 진입/종료 버튼. `.wrap` **바깥**(`<body>` 직계)에 둔다. 허브 모달(iframe) 안에서는 `body.dz-embedded` 로 숨는다(R1) |
+| `#dz-pip-btn` | 플로팅 진입/종료 버튼. `.wrap` **바깥**(`<body>` 직계)에 둔다. 허브 상세 패널(iframe) 안에서는 `body.dz-embedded` 로 숨는다(R1) |
 | `#dz-pip-hint` | 상태·사유 한 줄. 기본 `hidden`, 스크립트가 텍스트를 넣을 때만 노출 |
 | `body.dz-pip` | PiP 창 문서의 `<body>` 에만 붙는 클래스. 좁은 창용 여백 축소 규칙의 스코프 |
 | `body.dz-embedded` | `window.self !== window.top` 이면 붙는 클래스. `#dz-pip-btn`·`#dz-pip-hint` 를 숨기는 스코프이며 폴링·동기화와 무관하다(R1) |
@@ -750,7 +750,7 @@ grep -c 'dz-impl-[0-9].*class="done"' .claude/dashboard.html
 
 | 티어 | URL | 조건 | 얻는 것 |
 |------|-----|------|--------|
-| 1 | `http://localhost:{포트}/dashboard.html` | 서버 재사용 또는 기동 성공 | 5초 폴링 자동 갱신 + 플로팅 버튼 활성(**단독 탭에서만** — 허브 모달 안에서는 숨는다) |
+| 1 | `http://localhost:{포트}/dashboard.html` | 서버 재사용 또는 기동 성공 | 5초 폴링 자동 갱신 + 플로팅 버튼 활성(**단독 탭에서만** — 허브 상세 패널 안에서는 숨는다) |
 | 2 | `file://{절대경로}/.claude/dashboard.html` | 서버 불가(python3 없음 · 후보 포트 전부 점유 · 기동 실패) | 포커스 시 갱신 |
 
 **브라우저 열기는 티어와 직교한다.** 티어 1·2 어느 쪽이든 아래 [3-a](#3-a-열기-대상-확정--허브가-살아-있으면-허브를-연다)
@@ -834,7 +834,7 @@ URL 은 아래 3-a 가 별도로 정한다).
 
 > 3번이 확정한 것은 **대시보드 URL**(보고·각인용)이다. 이 단계는 **브라우저로 열 URL** 만
 > 따로 정한다. 통합 허브(`/hub`) 서버가 살아 있으면 프로젝트 대시보드 대신 **허브 페이지**를
-> 연다 — 허브에서 이 프로젝트 카드를 클릭하면 같은 대시보드가 모달로 열리므로, 여러
+> 연다 — 허브에서 이 프로젝트 카드를 클릭하면 같은 대시보드가 상세 패널로 열리므로, 여러
 > 프로젝트를 함께 보는 화면이 진입점이 되는 편이 낫다.
 
 허브 생존 판정은 허브의 공개 인터페이스인 `hub.py server-status --json` 하나로 한다 — 그
@@ -871,9 +871,9 @@ except Exception:
 - 명령이 실패하거나(허브 미설치·`python3` 없음·타임아웃) 위 둘이 아닌 출력이 나오면
   **추측하지 말고 `NOHUB` 로 본다.** 이 단계의 어떤 실패도 `init` 을 중단시키지 않으며,
   실패하면 변경 전과 정확히 같은 동작이 남는다.
-- **로컬 서버(2번)와 포트 각인(3번)은 이 판정과 무관하게 그대로 수행한다.** 허브 모달은 디스크의
+- **로컬 서버(2번)와 포트 각인(3번)은 이 판정과 무관하게 그대로 수행한다.** 허브 상세 패널은 디스크의
   `.claude/dashboard.html` 을 허브 서버가 직접 읽어 서빙하므로 로컬 서버와 무관하고, 로컬 서버는
-  여전히 (a) 플로팅 창(허브 모달 안에서는 쓸 수 없다) (b) 단독 탭 열람 (c) `log commit` 의 자동
+  여전히 (a) 플로팅 창(허브 상세 패널 안에서는 쓸 수 없다) (b) 단독 탭 열람 (c) `log commit` 의 자동
   종료에 쓰인다.
 - 허브가 이 프로젝트 카드를 반영하기까지 최대 1 수집 주기(기본 5초) 걸린다. **강제 수집을
   부르지 않는다** — 허브 상주 서버가 스스로 따라잡는다.
@@ -972,7 +972,7 @@ fi
 
 | 상황 | 보고에 반드시 포함 |
 |------|------------------|
-| 허브를 연 경우(3-a `HUB`) | 허브 URL(`http://localhost:{포트}/hub.html`) · "허브 페이지를 열었습니다 — 이 프로젝트 카드를 클릭하면 이 대시보드가 모달로 열립니다" · **대시보드 URL 도 함께** 표기(플로팅 창은 이 단독 탭에서만 동작합니다) |
+| 허브를 연 경우(3-a `HUB`) | 허브 URL(`http://localhost:{포트}/hub.html`) · "허브 페이지를 열었습니다 — 이 프로젝트 카드를 클릭하면 이 대시보드가 상세 패널로 열립니다" · **대시보드 URL 도 함께** 표기(플로팅 창은 이 단독 탭에서만 동작합니다) |
 | 티어 1 · 기동함 | URL · "5초마다 자동 갱신됩니다" · `/dashboard serve stop {포트}` (끝나면 서버를 끄라는 안내) · 최초 1회라면 `Bash(python3 -m http.server:*)`·`Bash(open:*)` 등을 허용 목록에 추가하면 다음부터 권한 프롬프트가 사라진다는 안내 한 줄 |
 | 티어 1 · 재사용 | URL · "이미 떠 있는 서버를 재사용했습니다" · `/dashboard serve stop {포트}` |
 | 티어 2 | `file://` URL · "자동 갱신이 아니라 창에 포커스를 줄 때 갱신됩니다" · 내려앉은 사유 한 줄 |
@@ -1190,7 +1190,7 @@ DZ:DASHBOARD 갱신 맵 (동적 영역 — 셀렉터 기반 정밀 치환, comma
                                (DOM 에서 제거하지 않는다 — 복귀 시 로그가 사라진다)
   #dz-impl-card              : 구현 세부 작업 카드 div. 목록이 비면 CSS :has() 가 통째로 숨긴다
                                (DOM 에서 제거하지 않는다 — 폴링이 outerHTML 로 동기화한다)
-  body.dz-embedded           : 허브 모달(iframe) 안에서 열렸다는 표시. #dz-pip-btn/#dz-pip-hint 를
+  body.dz-embedded           : 허브 상세 패널(iframe) 안에서 열렸다는 표시. #dz-pip-btn/#dz-pip-hint 를
                                CSS 로만 숨기는 스코프일 뿐 폴링·동기화와는 무관하다
 -->
 <style>
@@ -1252,8 +1252,8 @@ DZ:DASHBOARD 갱신 맵 (동적 영역 — 셀렉터 기반 정밀 치환, comma
   #dz-pip-btn:disabled{color:var(--muted);cursor:not-allowed;box-shadow:none}
   #dz-pip-hint{position:fixed;top:54px;right:18px;z-index:9;max-width:300px;font-size:11px;line-height:1.5;color:var(--muted);background:#fff;border:1px solid var(--line);border-radius:8px;padding:8px 10px;box-shadow:0 2px 8px rgba(19,51,91,.10)}
   #dz-pip-hint[hidden]{display:none}
-  /* 허브 모달(iframe) 안에서 열린 문서는 body.dz-embedded 가 붙는다 — 플로팅은 iframe 안에서
-     구조적으로 깨진다(모달을 닫으면 iframe 이 about:blank 로 가 opener 문서 자체가 파괴된다).
+  /* 허브 상세 패널(iframe) 안에서 열린 문서는 body.dz-embedded 가 붙는다 — 플로팅은 iframe 안에서
+     구조적으로 깨진다(패널을 닫으면 iframe 이 about:blank 로 가 opener 문서 자체가 파괴된다).
      CSS 로만 숨긴다 — DOM 제거는 이 파일의 기존 불변식(id="dz-pip-*" 유지)을 어긴다. */
   body.dz-embedded #dz-pip-btn,body.dz-embedded #dz-pip-hint{display:none}
   body.dz-pip .wrap{margin:10px auto;padding:0 10px}
@@ -1318,9 +1318,9 @@ DZ:DASHBOARD 갱신 맵 (동적 영역 — 셀렉터 기반 정밀 치환, comma
   var failureCount = 0;
   var reasonHint = '';            // 버튼이 비활성인 영구 사유. 해소되기 전까지 유지된다
 
-  // 허브 모달(iframe) 로 열렸는지 판정(R1). self !== top 은 WindowProxy 신원 비교라 크로스
+  // 허브 상세 패널(iframe) 로 열렸는지 판정(R1). self !== top 은 WindowProxy 신원 비교라 크로스
   // 오리진에서도 예외를 던지지 않는다(top.location 을 읽으면 던진다 — 그건 하지 않는다).
-  // 표시(body.dz-embedded)에만 쓰고 폴링·동기화는 분기하지 않는다 — 모달 안 라이브 갱신이
+  // 표시(body.dz-embedded)에만 쓰고 폴링·동기화는 분기하지 않는다 — 패널 안 라이브 갱신이
   // 이 판정으로 죽으면 안 된다.
   var isEmbedded = window.self !== window.top;
   if(isEmbedded) document.body.classList.add('dz-embedded');

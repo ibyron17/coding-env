@@ -1811,14 +1811,14 @@ test_dashboard_template_integrity() {
     fi
   done
 
-  # T22-101(R2, 결정 F3): 허브 기본 포트를 하드코딩하지 않는다(역방향) + 보고 표에 모달
-  # 문구 존재(결정 F5 의 대시보드 URL 병기 회귀 방지).
+  # T22-101(R2, 결정 F3 → hub-detail-side-panel.md 승인 항목 6): 허브 기본 포트를 하드코딩하지
+  # 않는다(역방향) + 보고 표에 패널 문구 존재(결정 F5 의 대시보드 URL 병기 회귀 방지).
   if grep -qF '8794' "$dashboard_command_file"; then
     record_failure "$test_name" "T22-101: 허브 기본 포트(8794) 가 하드코딩됨"
     return 1
   fi
-  if ! grep -qF '모달' "$dashboard_command_file"; then
-    record_failure "$test_name" "T22-101: 보고 표에 '모달' 문구 미발견(대시보드 URL 병기 회귀)"
+  if ! grep -qF '패널' "$dashboard_command_file"; then
+    record_failure "$test_name" "T22-101: 보고 표에 '패널' 문구 미발견(대시보드 URL 병기 회귀)"
     return 1
   fi
 
@@ -2121,10 +2121,10 @@ test_hub_unit_tests() {
   ((passed_tests++))
 }
 
-# T25: 허브 문서·상수 정합성 (하위 검증 T25-1~T25-75)
+# T25: 허브 문서·상수 정합성 (하위 검증 T25-1~T25-81)
 test_hub_docs_and_constants() {
   local test_name="T25"
-  local test_desc="허브 문서·상수 정합성 (T25-1~T25-75)"
+  local test_desc="허브 문서·상수 정합성 (T25-1~T25-81)"
   log_test_name "$test_name" "$test_desc"
 
   local hub_settings_file="$REPO_ROOT/hub/bin/hub_settings.py"
@@ -3026,10 +3026,10 @@ PYEOF
     return 1
   fi
 
-  # T25-63(R3·R6 마크업 회귀, 결정 N5·Y1~Y4): 대시보드 모달 마크업과 .icon-btn 공통
-  # 클래스가 존재하고, 테마 토글은 라이트/다크 2상태만 남았다.
+  # T25-63(R3·R6 마크업 회귀, 결정 N5·Y1~Y4 → hub-detail-side-panel.md 결정 SP1·SP10): 상세
+  # 패널 마크업과 .icon-btn 공통 클래스가 존재하고, 테마 토글은 라이트/다크 2상태만 남았다.
   local modal_markup_token
-  for modal_markup_token in '<dialog id="dzh-dashboard-modal"' 'id="dzh-modal-frame"' ".icon-btn"; do
+  for modal_markup_token in '<aside id="dzh-detail-panel"' 'id="dzh-detail-frame"' ".icon-btn"; do
     if ! grep -qF "$modal_markup_token" "$hub_template_file"; then
       record_failure "$test_name" "T25-63: hub_template.html 에 $modal_markup_token 이 없음"
       return 1
@@ -3044,10 +3044,10 @@ PYEOF
     return 1
   fi
 
-  # T25-64(문서 정합, M5): hub/README.md 에 카드 순서·모달·usage_api_enabled 설명이 있고,
-  # commands/hub.md 에 usage_api_last_failure 설명이 있다.
+  # T25-64(문서 정합, M5 → hub-detail-side-panel.md 결정 SP10): hub/README.md 에 카드 순서·
+  # 상세 패널·usage_api_enabled 설명이 있고, commands/hub.md 에 usage_api_last_failure 설명이 있다.
   local readme_doc_token
-  for readme_doc_token in "카드 순서" "모달" "usage_api_enabled"; do
+  for readme_doc_token in "카드 순서" "상세 패널" "usage_api_enabled"; do
     if ! grep -qF "$readme_doc_token" "$hub_readme_file"; then
       record_failure "$test_name" "T25-64: hub/README.md 에 $readme_doc_token 설명이 없음"
       return 1
@@ -3079,8 +3079,8 @@ PYEOF
     record_failure "$test_name" "T25-66: closest('#dzh-usage') 가드 미발견"
     return 1
   fi
-  if ! grep -qF "closest('dialog')" "$hub_template_file"; then
-    record_failure "$test_name" "T25-66: closest('dialog') 가드 미발견"
+  if ! grep -qF "closest('#dzh-detail-panel')" "$hub_template_file"; then
+    record_failure "$test_name" "T25-66: closest('#dzh-detail-panel') 가드 미발견"
     return 1
   fi
   # if(!isServed){ 는 renderConnectionStatus() 안에도 한 번 더 나온다(무관한 기존 코드) —
@@ -3155,41 +3155,9 @@ PYEOF
     return 1
   fi
 
-  # T25-69(R8): 모달 depth·경계 — ::backdrop·테두리가 있고 옛 border:0 은 사라졌는지 확인한다.
-  if ! grep -qF '.modal::backdrop{' "$hub_template_file"; then
-    record_failure "$test_name" "T25-69: .modal::backdrop 규칙이 없음"
-    return 1
-  fi
-  local modal_rule_line
-  modal_rule_line=$(grep -n '^  \.modal{' "$hub_template_file" | head -1 | cut -d: -f1)
-  if [[ -z "$modal_rule_line" ]]; then
-    record_failure "$test_name" "T25-69: .modal{ 규칙을 찾지 못함"
-    return 1
-  fi
-  local modal_rule_text
-  modal_rule_text=$(sed -n "${modal_rule_line},+2p" "$hub_template_file")
-  if ! grep -qF 'border:1px solid var(--line)' <<< "$modal_rule_text"; then
-    record_failure "$test_name" "T25-69: .modal 규칙에 border:1px solid var(--line) 이 없음"
-    return 1
-  fi
-  if grep -qF 'border:0' <<< "$modal_rule_text"; then
-    record_failure "$test_name" "T25-69: .modal 규칙에 옛 border:0 이 남아 있음"
-    return 1
-  fi
-  if ! grep -qF '어둡' "$hub_readme_file"; then
-    record_failure "$test_name" "T25-69: hub/README.md 모달 절에 배경 어두워짐 설명이 없음"
-    return 1
-  fi
-
-  # T25-70: 모달 열기 애니메이션 — 애니메이션 규칙 2개와 reduced-motion 무효화가 세트로
-  # 있어야 한다(T25-65 의 card-working-glow 와 같은 원칙 — 하나만 지워지는 회귀를 막는다).
-  local modal_animation_token
-  for modal_animation_token in 'animation:modal-open' '@keyframes modal-open' '@keyframes backdrop-fade' '.modal[open],.modal[open]::backdrop{animation:none}'; do
-    if ! grep -qF -- "$modal_animation_token" "$hub_template_file"; then
-      record_failure "$test_name" "T25-70: hub_template.html 에 $modal_animation_token 이 없음"
-      return 1
-    fi
-  done
+  # T25-69·T25-70 은 폐기됐다(hub-detail-side-panel.md) — 대상인 모달 depth·경계 규칙과
+  # 모달 열기 애니메이션 자체가 사라졌다. 대체 검사는 T25-77(레이아웃)·T25-79(애니메이션 세트
+  # + 소스 순서)다.
 
   # T25-71(R-B 표시 + 툴팁 복원): 만료(조회되지 않음) 표시 토큰 4개가 있고, 그 툴팁 트리거를
   # 위해 tooltipDismissObserver 가 #dzh-usage-body 를 다시 관찰한다(GOTCHA 1 의 기계적 강제).
@@ -3287,6 +3255,107 @@ PYEOF
       return 1
     fi
   done
+
+  # T25-76(hub-detail-side-panel.md 결정 SP1 마크업 + 역방향): <aside id="dzh-detail-panel">
+  # 비모달 패널 마크업이 있고, 옛 <dialog> 모달 마크업·머리 주석 잔재는 전부 사라졌다.
+  local panel_markup_token
+  for panel_markup_token in '<aside id="dzh-detail-panel"' 'id="dzh-detail-frame"' 'role="dialog"' 'aria-labelledby="dzh-detail-title"'; do
+    if ! grep -qF -- "$panel_markup_token" "$hub_template_file"; then
+      record_failure "$test_name" "T25-76: hub_template.html 에 $panel_markup_token 이 없음"
+      return 1
+    fi
+  done
+  local removed_modal_markup_token
+  for removed_modal_markup_token in '<dialog id="dzh-dashboard-modal"' 'showModal(' 'dzh-modal-frame' '#dzh-dashboard-modal'; do
+    if grep -qF -- "$removed_modal_markup_token" "$hub_template_file"; then
+      record_failure "$test_name" "T25-76: hub_template.html 에 옛 모달 잔재($removed_modal_markup_token)가 남아 있음"
+      return 1
+    fi
+  done
+
+  # T25-77(결정 SP2·SP3 레이아웃 → T25-69 대체): 밀어내기·슬라이드 CSS 토큰이 있고, 옛 모달
+  # depth 규칙(::backdrop·backdrop-fade)은 대상 자체가 사라져 함께 없어졌다.
+  local panel_layout_token
+  for panel_layout_token in '--dzh-panel-width:' 'padding-right:var(--dzh-panel-width)' \
+      'translateX(calc(-1 * var(--dzh-panel-width)))' 'transform:translateX(100%)' 'visibility:hidden'; do
+    if ! grep -qF -- "$panel_layout_token" "$hub_template_file"; then
+      record_failure "$test_name" "T25-77: hub_template.html 에 $panel_layout_token 이 없음"
+      return 1
+    fi
+  done
+  local removed_modal_depth_token
+  for removed_modal_depth_token in '.modal::backdrop{' '@keyframes backdrop-fade'; do
+    if grep -qF -- "$removed_modal_depth_token" "$hub_template_file"; then
+      record_failure "$test_name" "T25-77: hub_template.html 에 옛 모달 잔재($removed_modal_depth_token)가 남아 있음"
+      return 1
+    fi
+  done
+
+  # T25-78(결정 SP3 브레이크포인트 일치, GOTCHA 2 기계적 강제): CSS @media (min-width:NNNNpx)
+  # 의 숫자와 JS PANEL_PUSH_MIN_WIDTH_PX 의 숫자가 같아야 한다 — 한쪽만 고치면 "밀어내는데
+  # 배경이 inert" 같은 조용한 어긋남이 생긴다.
+  local css_breakpoint js_breakpoint
+  css_breakpoint=$(grep -oE '@media \(min-width:[0-9]+px\)' "$hub_template_file" | head -1 | grep -oE '[0-9]+')
+  js_breakpoint=$(grep -oE 'PANEL_PUSH_MIN_WIDTH_PX = [0-9]+' "$hub_template_file" | grep -oE '[0-9]+')
+  if [[ -z "$css_breakpoint" || -z "$js_breakpoint" || "$css_breakpoint" != "$js_breakpoint" ]]; then
+    record_failure "$test_name" "T25-78: CSS 브레이크포인트($css_breakpoint)와 JS PANEL_PUSH_MIN_WIDTH_PX($js_breakpoint)가 다름"
+    return 1
+  fi
+
+  # T25-79(결정 SP5 애니메이션 세트 + 소스 순서 → T25-70 대체): 열기 슬라이드가 있고,
+  # prefers-reduced-motion 무효화 블록이 소스 순서상 열림 상태 규칙보다 뒤에 온다(명세도
+  # 함정, GOTCHA 3). 옛 모달 열기 애니메이션은 대상 자체가 사라져 함께 없어졌다.
+  if ! grep -qF -- 'transition:transform 180ms ease-out' "$hub_template_file"; then
+    record_failure "$test_name" "T25-79: hub_template.html 에 transition:transform 180ms ease-out 이 없음"
+    return 1
+  fi
+  local panel_open_rule_line reduced_motion_selector_line
+  panel_open_rule_line=$(grep -n 'body\.dzh-panel-open \.detail-panel{transform:none' "$hub_template_file" | head -1 | cut -d: -f1)
+  reduced_motion_selector_line=$(grep -n 'body\.dzh-panel-open \.detail-panel,' "$hub_template_file" | head -1 | cut -d: -f1)
+  if [[ -z "$panel_open_rule_line" || -z "$reduced_motion_selector_line" || "$reduced_motion_selector_line" -le "$panel_open_rule_line" ]]; then
+    record_failure "$test_name" "T25-79: prefers-reduced-motion 무효화가 body.dzh-panel-open .detail-panel 규칙보다 앞에 있음(GOTCHA 3)"
+    return 1
+  fi
+  local removed_modal_animation_token
+  for removed_modal_animation_token in 'animation:modal-open' '@keyframes modal-open'; do
+    if grep -qF -- "$removed_modal_animation_token" "$hub_template_file"; then
+      record_failure "$test_name" "T25-79: hub_template.html 에 옛 모달 잔재($removed_modal_animation_token)가 남아 있음"
+      return 1
+    fi
+  done
+
+  # T25-80(결정 SP7·SP9 폴링 정지): 닫힘·교체 모두 about:blank/loadPanelDocument 경로를 쓰고,
+  # openDashboardKey 가 열림 상태의 유일한 진실이다. src 대입으로의 회귀(뒤로가기 오염 재발)를 막는다.
+  local panel_stop_token
+  for panel_stop_token in 'about:blank' 'contentWindow.location.replace(' 'openDashboardKey'; do
+    if ! grep -qF -- "$panel_stop_token" "$hub_template_file"; then
+      record_failure "$test_name" "T25-80: hub_template.html 에 $panel_stop_token 이 없음"
+      return 1
+    fi
+  done
+  if grep -qF -- 'panelFrameEl.src' "$hub_template_file"; then
+    record_failure "$test_name" "T25-80: hub_template.html 에 panelFrameEl.src 대입(SP9 회귀)이 남아 있음"
+    return 1
+  fi
+
+  # T25-81(문서 정합): hub/README.md 가 패널로의 전환을 설명하고, hub_template.html 머리
+  # 주석이 불변식 개정(H1⁗)을 반영한다. 역방향 — README 에 '모달' 잔재가 없다(이관 표기
+  # 누락으로 옛 결정이 살아 있는 것처럼 읽히는 것을 막는다).
+  local readme_panel_token
+  for readme_panel_token in '상세 패널' '밀' '덮'; do
+    if ! grep -qF -- "$readme_panel_token" "$hub_readme_file"; then
+      record_failure "$test_name" "T25-81: hub/README.md 에 $readme_panel_token 토큰이 없음"
+      return 1
+    fi
+  done
+  if ! grep -qF -- 'H1⁗' "$hub_template_file"; then
+    record_failure "$test_name" "T25-81: hub_template.html 머리 주석에 H1⁗ 이 없음"
+    return 1
+  fi
+  if grep -qF '모달' "$hub_readme_file"; then
+    record_failure "$test_name" "T25-81: hub/README.md 에 '모달' 잔재가 남아 있음"
+    return 1
+  fi
 
   log_ok "$test_name 통과"
   ((passed_tests++))

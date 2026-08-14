@@ -17,12 +17,12 @@ DZH:HUB 데이터 계약
   (자기 URL 을 받아 문자열 전체 비교), 아니면 포커스 복귀 시 location.reload(). 두 모드
   모두 #dzh-refresh 버튼과 포커스 복귀 시에도 같은 즉시 갱신 경로를 탄다.
 
-  불변식 H1‴(정본: docs/prps/hub-first-entry-and-ui-signals.md). 폴링·틱이 내용을
+  불변식 H1⁗(정본: docs/prps/hub-detail-side-panel.md 결정 SP6). 폴링·틱이 내용을
   갱신하는 대상은 #dzh-app(자식 전체 교체) · #dzh-usage-body(innerHTML) ·
   #dzh-usage-summary(textContent) · #dzh-refresh 의 data-tooltip·class 속성뿐이다.
   다음 노드는 정적이며 폴링이 절대 교체하지 않는다: #dzh-usage, #dzh-usage-toggle,
-  #dzh-theme-toggle, #dzh-tooltip, #dzh-dashboard-modal(과 그 자식 전부).
-  이들의 갱신은 속성·textContent 단위로만 한다. 여기에 두 조항이 더해진다 —
+  #dzh-theme-toggle, #dzh-tooltip, #dzh-detail-panel(과 그 자식 전부).
+  이들의 갱신은 속성·textContent 단위로만 한다. 여기에 세 조항이 더해진다 —
   ① 순서는 데이터가 아니라 사용자 상태다: #dzh-app 자식의 배치 순서는 스냅샷이 아니라
   storedProjectOrder(모듈 스코프 + localStorage['dzh-project-order'])가 정한다. 서버의
   활동순 정렬은 아직 저장 순서에 없는 신규 프로젝트끼리의 상대 순서를 정할 때만 쓰인다.
@@ -30,8 +30,10 @@ DZH:HUB 데이터 계약
   그 사이 dragover 가 #dzh-app 자식의 순서를 직접 바꾸며(라이브 이동), 따라서 드래그
   구간에서는 DOM 이 저장 순서보다 앞서 있다. drop 이 그 DOM 순서를 커밋하고, dragend 가
   한 번 다시 그려 둘을 맞춘다. 취소·카드 밖 드롭은 drop 없이 dragend 만 발화하므로 재렌더가
-  라이브 이동을 자동으로 되돌린다. 원칙은 그대로다 — 사용자 상태(포커스·접힘·선택·순서·
-  열린 모달)를 가진 것은 재렌더 대상 밖에 둔다.
+  라이브 이동을 자동으로 되돌린다. ③ 밀어내기는 body 의 클래스 하나로만 표현한다 —
+  #dzh-app 이나 카드에는 패널 열림 상태를 반영하지 않는다. 반영하는 순간 매 렌더마다 그
+  상태를 다시 계산해야 하고, 두 IIFE 의 독립성이 깨진다. 원칙은 그대로다 — 사용자 상태
+  (포커스·접힘·선택·순서·열린 상세 패널)를 가진 것은 재렌더 대상 밖에 둔다.
 
   #dzh-usage 와 그 안의 #dzh-usage-toggle 은 정적 노드이며 class·aria-expanded 속성만
   갱신한다(노드 교체 금지). 접힘을 바꾸는 경로는 둘이다 — 제목 줄 클릭과 패널 바깥 클릭 —
@@ -47,9 +49,10 @@ DZH:HUB 데이터 계약
   hub-session-activity-and-tooltip.md). 폴링 대상이 아니다 — 사용자 상호작용(hover·focus)만
   내용을 바꾼다. 트리거는 data-tooltip="…" 속성을 가진 임의의 요소이며, 리스너는 재렌더로
   죽지 않도록 document 에 위임한다.
-  프로젝트 대시보드 모달(#dzh-dashboard-modal, docs/prps/hub-card-interactions-and-usage.md
-  결정 N5)은 <dialog>+showModal() 정적 싱글턴이다. 카드 클릭이 iframe.src 와 제목만 바꾸고,
-  닫힘(close 이벤트)에서 iframe.src 를 비워 숨은 폴링을 멈춘다.
+  프로젝트 상세 패널(#dzh-detail-panel, docs/prps/hub-detail-side-panel.md 결정 SP1)은
+  비모달 <aside> 정적 싱글턴이다. 카드 클릭이 iframe 문서와 제목만 바꾸고, 닫힘에서 iframe 을
+  about:blank 로 보내 숨은 폴링을 멈춘다. 열림 상태의 유일한 진실은 패널 IIFE 의
+  openDashboardKey 이며 body.dzh-panel-open 은 그 값의 CSS 투영이다.
 -->
 <style>
   :root{
@@ -59,6 +62,8 @@ DZH:HUB 데이터 계약
     --accent:#0072B2;--accent-ink:#005B8F;--accent-soft:#E4F0F8;
     --attention:#B45309;--attention-soft:#FBEEDC;
     --shadow:0 8px 24px rgba(19,51,91,.06);
+    /* 패널 폭(SP4). 밀어내기 폭·.usage 이동량이 같은 값을 쓰게 하는 단일 출처다. */
+    --dzh-panel-width:clamp(400px, 40vw, 720px);
   }
   @media (prefers-color-scheme:dark){
     :root:not([data-theme="light"]){
@@ -225,41 +230,47 @@ DZH:HUB 데이터 계약
            color:var(--bg);background:var(--ink);box-shadow:var(--shadow);
            overflow-wrap:anywhere;visibility:hidden}
   .tooltip.tooltip-visible{visibility:visible}
-  /* 프로젝트 대시보드 모달(R3) — 네이티브 <dialog>+showModal() 이 포커스 트랩·ESC 닫기·
-     배경 inert 를 공짜로 준다(결정 N5). display 오버라이드는 [open] 에만 걸어야 한다 —
-     .modal 만으로 걸면 dialog 가 닫혀 있어도(open 속성 없음) author 스타일이 UA 의
-     "dialog:not([open]){display:none}" 보다 우선해 화면에 그대로 남는 흔한 함정이 된다.
-     1040×760 은 /dashboard 원본 레이아웃이 데스크톱 화면에서 눌리지 않도록 넉넉히 잡은
-     임의값이다(실측 아님 — 문제가 되면 조정한다). 32px 뷰포트 여백은 .usage·.tooltip 이
-     이미 쓰는 것과 같은 관례. */
-  .modal{width:min(1040px, calc(100vw - 32px));height:min(760px, calc(100vh - 32px));
-         padding:0;border:1px solid var(--line);border-radius:14px;background:var(--surface);color:var(--ink);
-         box-shadow:0 24px 64px rgba(0,0,0,.35)}
-  .modal[open]{display:flex;flex-direction:column;animation:modal-open 180ms ease-out}
-  /* depth·경계(R8, 결정 MD1) — ::backdrop 의 어두운 오버레이가 depth 의 주역이고, 테마 토큰
-     테두리가 경계의 주역이다(카드용 --shadow 하나만으로는 이만한 표면을 띄우기엔 약했다).
-     오버레이·그림자 색은 라이트·다크 공통값을 원해 토큰화하지 않고 리터럴로 둔다(결정 MD2) —
-     T25-29 가 금지하는 것은 색각 안전성이 없는 범주 색 리터럴뿐이라 이 중성 검정 반투명은
-     걸리지 않는다. blur() 는 넣지 않는다 — 모달이 열린 동안에도 폴링·틱이 배경을 통째로
-     교체해 매번 재합성 비용이 든다(결정 MD3). */
-  .modal::backdrop{background:rgba(8,14,22,.55)}
-  /* 열기만 애니메이션한다(사용자 요구 2026-08-13) — 닫기는 여전히 안 만든다: <dialog>.close() 는
-     즉시라 페이드아웃엔 @starting-style·allow-discrete 신문법이 있어야 하고(결정 MD4 근거 유지),
-     showModal() 이 매번 [open] 을 새로 부여해 display:none→flex 전환에 애니메이션이 자연히
-     재생되므로 별도 JS 가 필요 없다. opacity·transform 만 써 컴포지터 합성 트랙을 탄다(card-working
-     pulse 와 같은 원칙). */
-  .modal[open]::backdrop{animation:backdrop-fade 180ms ease-out}
-  @keyframes modal-open{from{opacity:0;transform:translateY(8px) scale(.98)}to{opacity:1;transform:none}}
-  @keyframes backdrop-fade{from{opacity:0}to{opacity:1}}
-  /* .modal[open]·[open]::backdrop 의 animation 오버라이드는 위 두 규칙과 detail(0,2,0 / 0,2,1)이
-     같아 소스 순서가 이긴다 — 이 reduced-motion 오버라이드는 반드시 그 두 규칙보다 뒤에 와야
-     실제로 적용된다(검수 지적 반영, 앞쪽 card-working 전용 미디어 쿼리에서 분리함). */
-  @media (prefers-reduced-motion:reduce){.modal[open],.modal[open]::backdrop{animation:none}}
-  .modal-head{display:flex;align-items:center;justify-content:space-between;gap:12px;
-              padding:14px 18px;border-bottom:1px solid var(--line)}
-  .modal-title{font-size:14px;font-weight:800;color:var(--head);overflow:hidden;
-               text-overflow:ellipsis;white-space:nowrap}
-  .modal-frame{flex:1 1 auto;width:100%;border:0}
+  /* 프로젝트 상세 패널(SP1) — 카드 클릭 시 우측에서 밀려 들어오는 **비모달** 패널이다.
+     <dialog> 를 쓰지 않는 이유(결정 SP1): 넓은 화면에서는 배경 목록을 계속 써야 하므로
+     showModal 메서드의 포커스 트랩·inert 가 해가 되고, show() 는 ESC 를 주지 않으며
+     ::backdrop 도 렌더되지 않아 결정 N5 가 근거로 삼은 "공짜" 넷이 모두 사라진다.
+     기본 규칙이 좁은 화면(오버레이)이고 아래 min-width 쿼리가 넓은 화면(밀어내기)을
+     덧쓴다 — 브레이크포인트 리터럴을 한 곳에만 두기 위한 배치다(GOTCHA 2).
+     닫힌 상태를 visibility:hidden 으로 두는 것은 필수다 — transform 만으로 화면 밖에
+     내보내면 닫힌 패널의 버튼이 Tab 순서와 접근성 트리에 그대로 남는다. */
+  .detail-panel{position:fixed;top:0;right:0;bottom:0;left:0;z-index:30;
+                display:flex;flex-direction:column;
+                background:var(--surface);color:var(--ink);
+                border-left:1px solid var(--line);box-shadow:-16px 0 48px rgba(0,0,0,.28);
+                transform:translateX(100%);visibility:hidden}
+  /* 전이 선언을 "열린 상태" 규칙 안에만 둔다 — 클래스가 붙는 순간에는 슬라이드가 재생되고,
+     떨어지는 순간에는 전이 선언 자체가 사라져 즉시 닫힌다. 닫기 애니메이션을 만들지 않는
+     결정(SP5, MD4 승계)을 JS 타이머 없이 CSS 만으로 표현하는 방법이다. */
+  body.dzh-panel-open{overflow:hidden}
+  body.dzh-panel-open .detail-panel{transform:none;visibility:visible;
+                                    transition:transform 180ms ease-out}
+  /* 밀어내기 모드 — 이 값(1024)은 JS 의 PANEL_PUSH_MIN_WIDTH_PX 와 같아야 한다(T25-78). */
+  @media (min-width:1024px){
+    .detail-panel{left:auto;width:var(--dzh-panel-width);border-radius:14px 0 0 14px}
+    /* .usage 는 position:fixed 라 body 패딩을 따라오지 않는다 — 같은 폭만큼 직접 옮긴다. */
+    body.dzh-panel-open{overflow:visible;padding-right:var(--dzh-panel-width);
+                        transition:padding-right 180ms ease-out}
+    body.dzh-panel-open #dzh-usage{transform:translateX(calc(-1 * var(--dzh-panel-width)));
+                                   transition:transform 180ms ease-out}
+  }
+  /* 이 오버라이드는 위 세 규칙보다 반드시 뒤에 오고, 셀렉터를 그대로 반복해야 한다 —
+     body.dzh-panel-open .detail-panel 은 (0,2,1)이라 .detail-panel 단독으로는 못 덮는다
+     (모달 시절 같은 함정을 한 번 밟았다 — 옛 254~257행 주석). */
+  @media (prefers-reduced-motion:reduce){
+    body.dzh-panel-open,
+    body.dzh-panel-open .detail-panel,
+    body.dzh-panel-open #dzh-usage{transition:none}
+  }
+  .detail-head{display:flex;align-items:center;justify-content:space-between;gap:12px;
+               padding:14px 18px;border-bottom:1px solid var(--line)}
+  .detail-title{font-size:14px;font-weight:800;color:var(--head);overflow:hidden;
+                text-overflow:ellipsis;white-space:nowrap}
+  .detail-frame{flex:1 1 auto;width:100%;border:0}
 </style>
 <script>
 /* body 파싱 전에 실행돼 첫 페인트부터 확정 테마로 그린다(FOUC 방지).
@@ -303,15 +314,15 @@ try{
   <div id="dzh-usage-body" class="usage-body"></div>
 </aside>
 <div id="dzh-tooltip" class="tooltip" role="tooltip"></div>
-<dialog id="dzh-dashboard-modal" class="modal" aria-labelledby="dzh-modal-title">
-  <div class="modal-head">
-    <span id="dzh-modal-title" class="modal-title"></span>
-    <button id="dzh-modal-close" class="icon-btn" type="button"
+<aside id="dzh-detail-panel" class="detail-panel" role="dialog" aria-labelledby="dzh-detail-title">
+  <div class="detail-head">
+    <span id="dzh-detail-title" class="detail-title"></span>
+    <button id="dzh-detail-close" class="icon-btn" type="button"
             aria-label="닫기" data-tooltip="닫기 (Esc)">✕</button>
   </div>
-  <iframe id="dzh-modal-frame" class="modal-frame"
+  <iframe id="dzh-detail-frame" class="detail-frame"
           aria-label="프로젝트 진행 대시보드"></iframe>
-</dialog>
+</aside>
 <script type="application/json" id="dzh-data">{}</script>
 <script>
 (function(){
@@ -1025,7 +1036,7 @@ try{
     if(isUsageCollapsed) return;                       // 이미 접혀 있으면 할 일이 없다
     if(usageEl.hidden) return;                         // 패널이 없는 화면에서 접힘을 저장하지 않는다(결정 Q3)
     if(event.target.closest('#dzh-usage')) return;     // 패널 안(토글 버튼 포함)은 토글 리스너 소관(GOTCHA 1)
-    if(event.target.closest('dialog')) return;         // 모달·배경 클릭은 페이지 클릭이 아니다(결정 Q4)
+    if(event.target.closest('#dzh-detail-panel')) return;   // 상세 패널 클릭은 페이지 클릭이 아니다(결정 Q4 승계)
     isUsageCollapsed = true;
     persistUsageCollapsed(isUsageCollapsed);
     applyUsageCollapsedState();
@@ -1122,49 +1133,86 @@ try{
 })();
 
 (function(){
-  // 프로젝트 대시보드 모달(R3) — 카드를 누르면 그 프로젝트의 dashboard.html 을 iframe 으로
-  // 띄운다. <dialog> 는 #dzh-app 바깥의 정적 마크업이라 폴링·틱과 무관하다(불변식 H1″).
-  // 카드가 data-dashboard-key 를 가졌는지만으로 클릭 가능 여부가 정해지므로(결정 N2·N7),
-  // 이 IIFE 는 snapshot 상태를 몰라도 된다 — 렌더 IIFE 와 완전히 분리된 독립 컴포넌트다.
-  var MODAL_ELEMENT_ID = 'dzh-dashboard-modal';
+  // 프로젝트 상세 패널(SP1~SP9) — 카드를 누르면 그 프로젝트의 dashboard.html 을 우측 패널의
+  // iframe 으로 띄운다. <aside> 는 #dzh-app 바깥의 정적 마크업이라 폴링·틱과 무관하다
+  // (불변식 H1⁗). 카드가 data-dashboard-key 를 가졌는지만으로 클릭 가능 여부가 정해지므로
+  // (결정 N2·N7) 이 IIFE 는 snapshot 을 몰라도 된다 — 렌더 IIFE 와 완전히 분리돼 있다.
+  var PANEL_OPEN_BODY_CLASS = 'dzh-panel-open';
+  var PANEL_PUSH_MIN_WIDTH_PX = 1024;      // CSS 의 @media (min-width:1024px) 와 같은 값(GOTCHA 2)
   var PROJECT_DASHBOARD_PATH_PREFIX = '/project/';
   var PROJECT_DASHBOARD_PATH_SUFFIX = '/dashboard.html';
+  var BLANK_DOCUMENT_URL = 'about:blank';
   var DASHBOARD_KEY_ATTRIBUTE = 'data-dashboard-key';
   var CLICKABLE_CARD_SELECTOR = '[' + DASHBOARD_KEY_ATTRIBUTE + ']';
 
-  var modalEl = document.getElementById(MODAL_ELEMENT_ID);
-  var modalTitleEl = document.getElementById('dzh-modal-title');
-  var modalFrameEl = document.getElementById('dzh-modal-frame');
-  var modalCloseButton = document.getElementById('dzh-modal-close');
-  if(!modalEl || !modalTitleEl || !modalFrameEl || !modalCloseButton) return;
+  var panelEl = document.getElementById('dzh-detail-panel');
+  var panelTitleEl = document.getElementById('dzh-detail-title');
+  var panelFrameEl = document.getElementById('dzh-detail-frame');
+  var panelCloseButton = document.getElementById('dzh-detail-close');
+  var mainEl = document.querySelector('.wrap');
+  var usageEl = document.getElementById('dzh-usage');
+  if(!panelEl || !panelTitleEl || !panelFrameEl || !panelCloseButton || !mainEl) return;
+
+  var pushModeQuery = matchMedia('(min-width:' + PANEL_PUSH_MIN_WIDTH_PX + 'px)');
+  var openDashboardKey = null;      // 열림 상태의 유일한 진실. body 클래스는 이 값의 투영이다
+  var panelOpenerElement = null;    // 닫을 때 포커스를 되돌릴 요소
 
   // 대시보드 키로 서버 경로를 만든다. 순수 함수.
   function projectDashboardUrl(dashboardKey){
     return PROJECT_DASHBOARD_PATH_PREFIX + dashboardKey + PROJECT_DASHBOARD_PATH_SUFFIX;
   }
 
-  // 모달을 열고 iframe 에 프로젝트 대시보드를 싣는다. 제목은 textContent 로 넣는다.
-  function openDashboardModal(dashboardKey, displayName){
-    modalTitleEl.textContent = displayName;
-    modalFrameEl.src = projectDashboardUrl(dashboardKey);
-    modalEl.showModal();
+  // 패널 iframe 을 그 문서로 교체 이동시킨다(SP9) — src 대입은 부모 문서의 히스토리에 항목을
+  // 남겨, 카드를 옮겨 다닐수록 사용자의 뒤로가기가 허브가 아니라 iframe 을 되감게 된다.
+  function loadPanelDocument(url){
+    panelFrameEl.contentWindow.location.replace(url);
   }
 
-  // 모달을 닫고 iframe 을 비운다 — 숨은 iframe 의 5초 폴링을 반드시 멈춘다(리스크 R-6).
-  // src='' 는 일부 브라우저에서 about:blank 로의 실제 이동을 보장하지 않는다 — 명시적으로
-  // 'about:blank' 를 줘서 "폴링을 멈춘다"는 의도를 해석 여지 없이 못박는다.
-  function closeDashboardModal(){
-    modalFrameEl.src = 'about:blank';
-    if(modalEl.open) modalEl.close();
+  // 오버레이 모드로 열려 있을 때만 배경을 조작 불가로 만든다(SP3). 포커스 트랩 코드를 쓰지
+  // 않는 이유이자, aria-modal 을 상시로 붙이지 않는 이유다 — 실제로 막았을 때만 그렇게 말한다.
+  function applyBackgroundInert(){
+    var isOverlayOpen = openDashboardKey !== null && !pushModeQuery.matches;
+    mainEl.inert = isOverlayOpen;
+    if(usageEl) usageEl.inert = isOverlayOpen;
+    if(isOverlayOpen) panelEl.setAttribute('aria-modal', 'true');
+    else panelEl.removeAttribute('aria-modal');
   }
 
-  modalCloseButton.addEventListener('click', closeDashboardModal);
-  // <dialog> 자신에게 온 클릭은 곧 backdrop 클릭이다 — 내부 콘텐츠 클릭은 자식 요소가 받는다.
-  modalEl.addEventListener('click', function(event){
-    if(event.target === modalEl) closeDashboardModal();
+  // 패널을 열거나 이미 열린 패널의 내용을 바꾼다. 같은 프로젝트면 아무것도 하지 않는다 —
+  // 재로딩하면 읽던 대시보드의 스크롤 위치가 사라진다(결정 SP8).
+  function openDetailPanel(dashboardKey, displayName, openerElement){
+    if(dashboardKey === openDashboardKey) return;
+    var wasClosed = openDashboardKey === null;
+    openDashboardKey = dashboardKey;
+    panelTitleEl.textContent = displayName;
+    loadPanelDocument(projectDashboardUrl(dashboardKey));
+    document.body.classList.add(PANEL_OPEN_BODY_CLASS);
+    applyBackgroundInert();
+    if(!wasClosed) return;                  // 내용 교체일 뿐이면 포커스를 건드리지 않는다
+    panelOpenerElement = openerElement;
+    panelCloseButton.focus();
+  }
+
+  // 패널을 닫고 iframe 을 비운다 — 숨은 iframe 의 5초 폴링을 반드시 멈춘다(리스크 R-6).
+  // visibility:hidden 도 display:none 도 iframe 의 타이머를 멈추지 않는다.
+  function closeDetailPanel(){
+    if(openDashboardKey === null) return;
+    openDashboardKey = null;
+    document.body.classList.remove(PANEL_OPEN_BODY_CLASS);
+    applyBackgroundInert();                 // 포커스 복귀보다 먼저 — inert 안의 요소는 포커스를 못 받는다
+    loadPanelDocument(BLANK_DOCUMENT_URL);
+    if(panelOpenerElement && panelOpenerElement.isConnected) panelOpenerElement.focus();
+    panelOpenerElement = null;
+  }
+
+  panelCloseButton.addEventListener('click', closeDetailPanel);
+  // 비모달 패널이라 브라우저가 ESC 를 대신 처리해 주지 않는다(SP1). iframe 안에 포커스가
+  // 있으면 keydown 이 그 문서로 가 여기 오지 않는다 — 그래서 닫기 버튼이 1차 수단이다.
+  document.addEventListener('keydown', function(event){
+    if(event.key === 'Escape') closeDetailPanel();
   });
-  // ESC·닫기 버튼·배경 클릭 세 경로가 모두 dialog 의 close 이벤트로 모인다.
-  modalEl.addEventListener('close', function(){ modalFrameEl.src = 'about:blank'; });
+  // 열어 둔 채 창 크기를 바꾸면 모드가 바뀐다 — inert·aria-modal 을 다시 계산한다.
+  pushModeQuery.addEventListener('change', applyBackgroundInert);
 
   document.addEventListener('click', function(event){
     if(event.target.closest('.card-drag-handle')) return;         // 결정 N6 — 드래그 핸들은 별도 조작
@@ -1172,7 +1220,8 @@ try{
     var card = event.target.closest(CLICKABLE_CARD_SELECTOR);
     if(!card) return;
     var nameEl = card.querySelector('.project-name');
-    openDashboardModal(card.getAttribute(DASHBOARD_KEY_ATTRIBUTE), nameEl ? nameEl.textContent : '');
+    openDetailPanel(card.getAttribute(DASHBOARD_KEY_ATTRIBUTE),
+                    nameEl ? nameEl.textContent : '', nameEl || card);
   });
 })();
 </script>
