@@ -996,10 +996,10 @@ test_manifest_fields_complete() {
 }
 
 # T22: dashboard 템플릿 무결성 — LLM 지시문 방식이라 런타임 Edit 결과는 검증 대상이 아니고,
-# 설치·문서 정합성만 자동 검증한다 (하위 검증 T22-1~T22-104).
+# 설치·문서 정합성만 자동 검증한다 (하위 검증 T22-1~T22-110).
 test_dashboard_template_integrity() {
   local test_name="T22"
-  local test_desc="dashboard 템플릿 무결성 (T22-1~T22-104)"
+  local test_desc="dashboard 템플릿 무결성 (T22-1~T22-110)"
   log_test_name "$test_name" "$test_desc"
 
   local sandbox
@@ -1860,6 +1860,145 @@ test_dashboard_template_integrity() {
     return 1
   fi
 
+  # T22-105(R1): 템플릿의 #dz-log 여는 태그에 data-owner-token 속성이 추가됐다 —
+  # 속성 순서(id → data-owner-token → data-server-port)까지 고정한다(절차 (4)의 Edit
+  # old_string 이 이 순서를 전제한다). 역방향: 토큰 없는 옛 줄이 남아있지 않다.
+  if ! grep -qF 'id="dz-log" data-owner-token="" data-server-port=""' "$dashboard_command_file"; then
+    record_failure "$test_name" "T22-105: #dz-log 여는 태그에 data-owner-token 속성 미발견(순서 포함)"
+    return 1
+  fi
+  if grep -qF 'id="dz-log" data-server-port=""></ul>' "$dashboard_command_file"; then
+    record_failure "$test_name" "T22-105: 토큰 없는 옛 #dz-log 줄이 남아있음"
+    return 1
+  fi
+
+  # T22-106(R1·R2, GOTCHA 3): init 절 범위에 소유권 판정 어휘·토큰 생성 명령이 모두 있고,
+  # 8단계의 "Edit 하지 않는다" 문구가 완전히 사라졌는지 확인한다 — 남아있으면 각인이
+  # 실제로는 건너뛰어져 R3 전체가 SKIP 으로 죽는다. $init_section 은 T22-93 에서 이미
+  # 추출·검증했으므로 여기서 재사용한다(같은 sed 호출을 반복하지 않는다).
+  local init_ownership_token
+  for init_ownership_token in 'ABSENT' 'RECENT' 'STALE' '/dev/urandom' 'data-owner-token'; do
+    if ! grep -qF -- "$init_ownership_token" <<< "$init_section"; then
+      record_failure "$test_name" "T22-106: init 절 범위에서 토큰 미발견: $init_ownership_token"
+      return 1
+    fi
+  done
+  if grep -qF '**Edit 하지 않는다.**' <<< "$init_section"; then
+    record_failure "$test_name" "T22-106: init 절에 'Edit 하지 않는다' 문구가 남아있음(각인 단계 누락)"
+    return 1
+  fi
+
+  # T22-107(R3): step 절 0단계가 소유권 검증용 grep 패턴과 "항상 4줄" 문구를 갖는지, 그리고
+  # 옛 "결과는 항상 3줄" 문구(문구만 남고 grep 이 안 바뀌는, 또는 그 반대의 반쪽 구현)가
+  # 사라졌는지 확인한다.
+  local step_section
+  step_section=$(sed -n '/^## `step`/,/^## `impl`/p' "$dashboard_command_file")
+  if [[ -z "$step_section" ]]; then
+    record_failure "$test_name" "T22-107: step 절 범위 추출 실패 — 앵커가 깨졌다"
+    return 1
+  fi
+  if ! grep -qF -- "-e 'id=\"dz-log\"'" <<< "$step_section"; then
+    record_failure "$test_name" "T22-107: step 절에 소유권 검증용 grep 패턴 미발견"
+    return 1
+  fi
+  if ! grep -qF '항상 4줄' <<< "$step_section"; then
+    record_failure "$test_name" "T22-107: step 절에 '항상 4줄' 문구 미발견"
+    return 1
+  fi
+  if grep -qF '결과는 항상 3줄' <<< "$step_section"; then
+    record_failure "$test_name" "T22-107: step 절에 옛 '결과는 항상 3줄' 문구가 남아있음(반쪽 구현)"
+    return 1
+  fi
+
+  # T22-108(R3, GOTCHA 1 의 기계적 강제): impl 절(set·<k> 공통 범위)에 id="dz-log" 참조와
+  # "항상 3줄"·"그 줄을 뺀 나머지" 문구가 있고, 옛 "결과는 항상 2줄" 문구가 사라졌는지 확인한다.
+  local impl_section
+  impl_section=$(sed -n '/^## `impl`/,/^## `log`/p' "$dashboard_command_file")
+  if [[ -z "$impl_section" ]]; then
+    record_failure "$test_name" "T22-108: impl 절 범위 추출 실패 — 앵커가 깨졌다"
+    return 1
+  fi
+  if ! grep -qF 'id="dz-log"' <<< "$impl_section"; then
+    record_failure "$test_name" "T22-108: impl 절에 id=\"dz-log\" 미발견"
+    return 1
+  fi
+  if ! grep -qF '항상 3줄' <<< "$impl_section"; then
+    record_failure "$test_name" "T22-108: impl 절에 '항상 3줄' 문구 미발견"
+    return 1
+  fi
+  if ! grep -qF '그 줄을 뺀 나머지' <<< "$impl_section"; then
+    record_failure "$test_name" "T22-108: impl set 0단계에 '그 줄을 뺀 나머지' 문구 미발견(GOTCHA 1)"
+    return 1
+  fi
+  if grep -qF '결과는 항상 2줄' <<< "$impl_section"; then
+    record_failure "$test_name" "T22-108: impl 절에 옛 '결과는 항상 2줄' 문구가 남아있음(반쪽 구현)"
+    return 1
+  fi
+
+  # T22-109(R1, 가장 값진 검사): 불변식 9 문단에 필요한 토큰이 모두 있고, 스크립트가
+  # data-owner-token 을 읽는 코드가 어디에도 없어야 한다(불변식 9 위반 회귀 차단).
+  local invariant9_section
+  invariant9_section=$(sed -n '/^### 불변식 9/,/^### /p' "$dashboard_command_file")
+  if [[ -z "$invariant9_section" ]]; then
+    record_failure "$test_name" "T22-109: 불변식 9 절 추출 실패 — 앵커가 깨졌다"
+    return 1
+  fi
+  local invariant9_token
+  for invariant9_token in 'data-owner-token' 'init' '읽기만'; do
+    if ! grep -qF -- "$invariant9_token" <<< "$invariant9_section"; then
+      record_failure "$test_name" "T22-109: 불변식 9 문단에 토큰 미발견: $invariant9_token"
+      return 1
+    fi
+  done
+  local script_token_leak
+  for script_token_leak in "getAttribute('data-owner-token'" 'dataset.ownerToken' "querySelector('[data-owner-token"; do
+    if grep -qF -- "$script_token_leak" "$dashboard_command_file"; then
+      record_failure "$test_name" "T22-109: 스크립트가 토큰을 읽는 흔적 발견(불변식 9 위반): $script_token_leak"
+      return 1
+    fi
+  done
+
+  # T22-110(R3): 「소유권 검증」 공통 절이 있고, MINE·FOREIGN·SKIP 세 어휘와 "Bash 호출을
+  # 새로 만들지 않는다" 문구가 있는지 확인한다. 역방향은 문서 전체의 등장 횟수(집계값)에
+  # 기대지 않는다 — 공통 절 자체만으로 이미 FOREIGN 이 3회 등장하므로(표 1행 + 보고 문구
+  # 2줄) 집계 임계값은 절차 쪽 참조가 전부 사라져도 통과해 버리는 죽은 검사가 된다(뮤테이션
+  # 검증으로 실측함). 그래서 step·impl(set·<k> 공통 범위)·log 세 절차 범위 각각에 FOREIGN
+  # 참조가 실제로 있는지 개별로 확인한다 — 절만 만들고 절차를 안 고친 반쪽 구현을 절차 단위로
+  # 차단한다.
+  if ! grep -qF '## 소유권 검증' "$dashboard_command_file"; then
+    record_failure "$test_name" "T22-110: '## 소유권 검증' 절 미발견"
+    return 1
+  fi
+  local ownership_vocab
+  for ownership_vocab in 'MINE' 'FOREIGN' 'SKIP'; do
+    if ! grep -qF -- "$ownership_vocab" "$dashboard_command_file"; then
+      record_failure "$test_name" "T22-110: 소유권 검증 어휘 미발견: $ownership_vocab"
+      return 1
+    fi
+  done
+  if ! grep -qF 'Bash 호출을 새로 만들지 않는다' "$dashboard_command_file"; then
+    record_failure "$test_name" "T22-110: 'Bash 호출을 새로 만들지 않는다' 문구 미발견"
+    return 1
+  fi
+  local log_section
+  log_section=$(sed -n '/^## `log`/,/^## 자동 발행/p' "$dashboard_command_file")
+  if [[ -z "$log_section" ]]; then
+    record_failure "$test_name" "T22-110: log 절 범위 추출 실패 — 앵커가 깨졌다"
+    return 1
+  fi
+  if ! grep -qF 'FOREIGN' <<< "$step_section"; then
+    record_failure "$test_name" "T22-110: step 절에 FOREIGN(소유권 검증) 참조 미발견(반쪽 구현)"
+    return 1
+  fi
+  if ! grep -qF 'FOREIGN' <<< "$impl_section"; then
+    record_failure "$test_name" "T22-110: impl 절에 FOREIGN(소유권 검증) 참조 미발견(반쪽 구현)"
+    return 1
+  fi
+  if ! grep -qF 'FOREIGN' <<< "$log_section"; then
+    record_failure "$test_name" "T22-110: log 절에 FOREIGN(소유권 검증) 참조 미발견(반쪽 구현)"
+    return 1
+  fi
+
   log_ok "$test_name 통과"
   ((passed_tests++))
 }
@@ -1982,10 +2121,10 @@ test_hub_unit_tests() {
   ((passed_tests++))
 }
 
-# T25: 허브 문서·상수 정합성 (하위 검증 T25-1~T25-74)
+# T25: 허브 문서·상수 정합성 (하위 검증 T25-1~T25-75)
 test_hub_docs_and_constants() {
   local test_name="T25"
-  local test_desc="허브 문서·상수 정합성 (T25-1~T25-74)"
+  local test_desc="허브 문서·상수 정합성 (T25-1~T25-75)"
   log_test_name "$test_name" "$test_desc"
 
   local hub_settings_file="$REPO_ROOT/hub/bin/hub_settings.py"
@@ -3137,6 +3276,17 @@ PYEOF
     record_failure "$test_name" "T25-74: hub/README.md 에 R-B 이전의 낡은 숨김 서술이 남아 있음"
     return 1
   fi
+
+  # T25-75(허브 무변경 — 역방향 전용): hub/bin/*.py 와 hub_template.html 어디에도
+  # data-owner-token 문자열이 없다. 허브가 /dashboard 의 새 속성을 읽기 시작하면 두 도구의
+  # 계약이 다시 결합되고, "허브 코드 한 줄도 바꾸지 않는다"는 이번 설계가 조용히 무너진다.
+  local hub_source_file
+  for hub_source_file in "$REPO_ROOT"/hub/bin/*.py "$hub_template_file"; do
+    if grep -qF 'data-owner-token' "$hub_source_file"; then
+      record_failure "$test_name" "T25-75: $hub_source_file 에 data-owner-token 문자열이 있음(허브-대시보드 결합 회귀)"
+      return 1
+    fi
+  done
 
   log_ok "$test_name 통과"
   ((passed_tests++))
