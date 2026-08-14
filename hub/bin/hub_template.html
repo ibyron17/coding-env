@@ -38,6 +38,11 @@ DZH:HUB 데이터 계약
   about:blank 는 같은 시간만큼 지연 실행되고, 대기 중인 그 타이머가 존재하면
   openDashboardKey 는 반드시 null 이다 — 취소는 openDetailPanel 한 곳에서만 한다(SP15).
 
+  #dzh-detail-note 는 패널의 정적 자식이며 hidden·textContent 만 바뀐다(결정 GN6~GN7,
+  docs/prps/hub-session-revival-and-stale-tier1.md). 그 값의 출처는 스냅샷이 아니라 클릭된
+  카드의 data-tier1-previous 속성이다 — 패널 IIFE 가 스냅샷을 모른다는 결정 SP1 을 유지하기
+  위한 우회다.
+
   #dzh-usage 와 그 안의 #dzh-usage-toggle 은 정적 노드이며 class·aria-expanded 속성만
   갱신한다(노드 교체 금지). 접힘을 바꾸는 경로는 둘이다 — 제목 줄 클릭과 패널 바깥 클릭 —
   이며 둘 다 같은 함수(applyUsageCollapsedState)와 같은 저장 키를 쓴다. 패널 안에는 원칙적으로
@@ -162,6 +167,12 @@ DZH:HUB 데이터 계약
   .tier1-pct{font-size:12px;font-weight:700;color:var(--accent-ink);margin-top:8px}
   .tier1-active{font-size:12px;color:var(--head);margin-top:3px;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
   .tier1-impl{font-size:11.5px;color:var(--muted);margin-top:2px}
+  /* 이전 작업(결정 GN5, docs/prps/hub-session-revival-and-stale-tier1.md) — 새 색 토큰을
+     만들지 않는다(.usage-stale-note 와 같은 관례). */
+  .tier1-prev-label{color:var(--attention);font-weight:800}
+  .tier1-prev-label::after{content:" · "}
+  .card[data-tier1-previous] .tier1-pct{color:var(--muted)}
+  .card[data-tier1-previous] .tier1-active{color:var(--muted)}
   .sessions{list-style:none;margin:10px 0 0;padding:0;font-size:13px;flex:1 1 auto;min-height:0;overflow-y:auto}
   .sessions li{padding:7px 0;border-top:1px solid var(--soft)}
   .session-line{display:flex;align-items:baseline;gap:8px;flex-wrap:wrap}
@@ -298,6 +309,9 @@ DZH:HUB 데이터 계약
   .detail-close:hover{color:var(--accent-ink);border-color:var(--accent)}
   .detail-close:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
   .detail-frame{flex:1 1 auto;width:100%;border:0}
+  /* 이전 작업 안내 줄(결정 GN6) — display 를 선언하지 않는다. 선언하면 UA 의
+     [hidden]{display:none} 을 덮어써 항상 보이게 된다(GOTCHA 7). */
+  .detail-note{margin:0;padding:0 16px 10px;font-size:11.5px;color:var(--attention)}
 </style>
 <script>
 /* body 파싱 전에 실행돼 첫 페인트부터 확정 테마로 그린다(FOUC 방지).
@@ -347,6 +361,7 @@ try{
     <button id="dzh-detail-close" class="detail-close" type="button"
             aria-label="닫기" data-tooltip="닫기 (Esc)">»</button>
   </div>
+  <p id="dzh-detail-note" class="detail-note" hidden></p>
   <iframe id="dzh-detail-frame" class="detail-frame"
           aria-label="프로젝트 진행 대시보드"></iframe>
 </aside>
@@ -761,9 +776,12 @@ try{
     return '<div class="tier1-impl">구현 세부 ' + tier1.impl_done + '/' + tier1.impl_total + '</div>';
   }
 
-  function renderTier1(tier1){
+  // isPreviousTask(결정 GN5) — true 면 제목 앞에 "이전 작업 · " 라벨을 붙인다. 톤 다운은
+  // .card[data-tier1-previous] 스코프 CSS 가 renderProject 의 카드 속성을 보고 담당한다.
+  function renderTier1(tier1, isPreviousTask){
     if(!tier1) return '';
-    return '<div class="tier1-pct">' + escapeHtml(tier1.title) + ' — '
+    var prevLabel = isPreviousTask ? '<span class="tier1-prev-label">이전 작업</span>' : '';
+    return '<div class="tier1-pct">' + prevLabel + escapeHtml(tier1.title) + ' — '
       + tier1.completed + '/' + tier1.total + ' · ' + tier1.percent + '%</div>'
       + renderTier1ActiveStep(tier1) + renderTier1ImplProgress(tier1);
   }
@@ -799,6 +817,8 @@ try{
     var cardAttrs = ' data-project-path="' + escapeHtml(project.path || '') + '"';
     if(isClickable) cardAttrs += ' data-dashboard-key="' + escapeHtml(project.dashboard_key) + '"';
     else if(project.dashboard_key) cardAttrs += ' data-tooltip="' + escapeHtml(FILE_MODE_DASHBOARD_HINT) + '"';
+    // 속성 하나가 CSS 스코프와 패널 인계를 겸한다(결정 GN4 — data-dashboard-key 와 같은 관례).
+    if(project.tier1_is_previous_task) cardAttrs += ' data-tier1-previous="1"';
     // working 만 강조한다 — stale 은 base_state 가 working 이어도 "소식 없음"이므로 강조하면
     // 지금 돌고 있다고 오해하게 된다(R3, 결정 D2).
     var stateClass = project.state === 'working' ? ' card-working' : '';
@@ -811,7 +831,7 @@ try{
       + '<span class="last-activity">' + elapsedLabel(project.last_activity_at_ms) + '</span>'
       + '</div>'
       + (project.path ? '<div class="path">' + escapeHtml(project.path) + '</div>' : '')
-      + renderTier1(project.tier1) + sessionsHtml + '</div>';
+      + renderTier1(project.tier1, project.tier1_is_previous_task) + sessionsHtml + '</div>';
   }
 
   // 따옴표도 이스케이프한다 — usage-meta 의 data-tooltip="..." 이 이 함수의 첫 속성 자리
@@ -1172,14 +1192,19 @@ try{
   var BLANK_DOCUMENT_URL = 'about:blank';
   var DASHBOARD_KEY_ATTRIBUTE = 'data-dashboard-key';
   var CLICKABLE_CARD_SELECTOR = '[' + DASHBOARD_KEY_ATTRIBUTE + ']';
+  // 이전 작업 안내 줄(결정 GN6) — 카드의 data-tier1-previous 속성이 유일한 출처다. 이 IIFE 는
+  // 렌더 IIFE 가 쥔 스냅샷 데이터를 여전히 몰라도 된다(T25-89 가 기계적으로 강제한다).
+  var TIER1_PREVIOUS_TASK_ATTRIBUTE = 'data-tier1-previous';
+  var DETAIL_NOTE_TEXT = '이전 작업의 대시보드입니다 — 지금 진행 중인 세션이 시작된 뒤 갱신되지 않았습니다.';
 
   var panelEl = document.getElementById('dzh-detail-panel');
   var panelTitleEl = document.getElementById('dzh-detail-title');
+  var panelNoteEl = document.getElementById('dzh-detail-note');
   var panelFrameEl = document.getElementById('dzh-detail-frame');
   var panelCloseButton = document.getElementById('dzh-detail-close');
   var mainEl = document.querySelector('.wrap');
   var usageEl = document.getElementById('dzh-usage');
-  if(!panelEl || !panelTitleEl || !panelFrameEl || !panelCloseButton || !mainEl) return;
+  if(!panelEl || !panelTitleEl || !panelNoteEl || !panelFrameEl || !panelCloseButton || !mainEl) return;
 
   var pushModeQuery = matchMedia('(min-width:' + PANEL_PUSH_MIN_WIDTH_PX + 'px)');
   var openDashboardKey = null;      // 열림 상태의 유일한 진실. body 클래스는 이 값의 투영이다
@@ -1219,7 +1244,7 @@ try{
 
   // 패널을 열거나 이미 열린 패널의 내용을 바꾼다. 같은 프로젝트면 아무것도 하지 않는다 —
   // 재로딩하면 읽던 대시보드의 스크롤 위치가 사라진다(결정 SP8).
-  function openDetailPanel(dashboardKey, displayName, openerElement){
+  function openDetailPanel(dashboardKey, displayName, openerElement, isPreviousTask){
     if(dashboardKey === openDashboardKey) return;
     // 닫는 중(지연 창)에 들어온 클릭 — 예약을 취소하지 않으면 방금 연 패널의 문서를 그 타이머가
     // 지운다. 이 한 줄이 "대기 타이머 ⇒ 닫힘" 불변식의 유일한 보존 지점이다(SP15).
@@ -1227,6 +1252,9 @@ try{
     var wasClosed = openDashboardKey === null;
     openDashboardKey = dashboardKey;
     panelTitleEl.textContent = displayName;
+    // 열 때 1회 판정한다(결정 GN6, 승인 항목 5) — 다른 카드로 교체할 때도 함께 갱신된다.
+    panelNoteEl.hidden = !isPreviousTask;
+    panelNoteEl.textContent = isPreviousTask ? DETAIL_NOTE_TEXT : '';
     loadPanelDocument(projectDashboardUrl(dashboardKey));
     document.body.classList.add(PANEL_OPEN_BODY_CLASS);
     applyBackgroundInert();
@@ -1263,8 +1291,9 @@ try{
     var card = event.target.closest(CLICKABLE_CARD_SELECTOR);
     if(!card) return;
     var nameEl = card.querySelector('.project-name');
+    var isPreviousTask = card.getAttribute(TIER1_PREVIOUS_TASK_ATTRIBUTE) === '1';
     openDetailPanel(card.getAttribute(DASHBOARD_KEY_ATTRIBUTE),
-                    nameEl ? nameEl.textContent : '', nameEl || card);
+                    nameEl ? nameEl.textContent : '', nameEl || card, isPreviousTask);
   });
 })();
 </script>

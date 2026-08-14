@@ -2343,10 +2343,10 @@ test_hub_unit_tests() {
   ((passed_tests++))
 }
 
-# T25: 허브 문서·상수 정합성 (하위 검증 T25-1~T25-85)
+# T25: 허브 문서·상수 정합성 (하위 검증 T25-1~T25-90)
 test_hub_docs_and_constants() {
   local test_name="T25"
-  local test_desc="허브 문서·상수 정합성 (T25-1~T25-85)"
+  local test_desc="허브 문서·상수 정합성 (T25-1~T25-90)"
   log_test_name "$test_name" "$test_desc"
 
   local hub_settings_file="$REPO_ROOT/hub/bin/hub_settings.py"
@@ -2361,6 +2361,7 @@ test_hub_docs_and_constants() {
   local env_update_command_file="$REPO_ROOT/commands/env-update.md"
   local dashboard_command_file="$REPO_ROOT/commands/dashboard.md"
   local readme_file="$REPO_ROOT/README.md"
+  local hub_dashboard_prp_file="$REPO_ROOT/docs/prps/hub-dashboard.md"
 
   # T25-1(개정 R-M5 — 대상 이동): HUB_FILE_COUNT 는 이제 hub/install.sh 가 갖는다(값 10)
   local declared_count actual_count
@@ -3688,6 +3689,113 @@ PYEOF
       return 1
     fi
   done
+
+  # T25-86(RV1 부활 규칙 + 순서, GOTCHA 1, docs/prps/hub-session-revival-and-stale-tier1.md):
+  # SessionStart 분기가 ended_at_ms 를 해제한다. 기계적 검사 — 내부 이벤트 필터의 판정
+  # (if is_filtered:)이 _apply_tracked_event 호출보다 먼저 나와야 한다(선례: T25-83 의 줄
+  # 번호 비교) — 그래야 compact 가 이 함수에 도달하기 전에 걸러진다(GOTCHA 1).
+  if ! grep -qF 'elif event.hook_event_name == "SessionStart":' "$hub_model_file"; then
+    record_failure "$test_name" "T25-86: hub_model.py 에 SessionStart 부활 분기가 없음"
+    return 1
+  fi
+  if ! grep -qF 'session.ended_at_ms = None' "$hub_model_file"; then
+    record_failure "$test_name" "T25-86: hub_model.py 에 session.ended_at_ms = None 대입이 없음"
+    return 1
+  fi
+  local is_filtered_check_line apply_tracked_event_call_line
+  is_filtered_check_line=$(grep -n 'if is_filtered:' "$hub_model_file" | head -1 | cut -d: -f1)
+  apply_tracked_event_call_line=$(grep -n '_apply_tracked_event(session, event)' "$hub_model_file" | head -1 | cut -d: -f1)
+  if [[ -z "$is_filtered_check_line" || -z "$apply_tracked_event_call_line" \
+      || "$is_filtered_check_line" -ge "$apply_tracked_event_call_line" ]]; then
+    record_failure "$test_name" "T25-86: 내부 이벤트 필터가 _apply_tracked_event 호출보다 먼저 오지 않음(GOTCHA 1)"
+    return 1
+  fi
+
+  # T25-87(GN1·GN2·GN4 파이썬 계약, GOTCHA 2·3): 세대 판정 술어·상수·필드가 존재하고,
+  # LIVE_SESSION_STATES 에 stale·done 이 없으며(GOTCHA 3 — 부활한 좀비 stale 세션이 판정을
+  # 깨뜨리는 것을 막는다), ProjectView 필드 순서가 dashboard_key 뒤다(GOTCHA 2).
+  local gn_python_token
+  for gn_python_token in 'def is_tier1_from_previous_task(' 'LIVE_SESSION_STATES' \
+      'tier1_is_previous_task: bool = False'; do
+    if ! grep -qF -- "$gn_python_token" "$hub_model_file"; then
+      record_failure "$test_name" "T25-87: hub_model.py 에 $gn_python_token 이 없음"
+      return 1
+    fi
+  done
+  local live_session_states_decl_line
+  live_session_states_decl_line=$(grep -n '^LIVE_SESSION_STATES' "$hub_model_file" | head -1)
+  if [[ -z "$live_session_states_decl_line" ]] \
+      || echo "$live_session_states_decl_line" | grep -qE '"stale"|"done"'; then
+    record_failure "$test_name" "T25-87: LIVE_SESSION_STATES 선언에 stale·done 이 있거나 선언을 찾지 못함(GOTCHA 3)"
+    return 1
+  fi
+  local dashboard_key_field_line tier1_is_previous_task_field_line
+  dashboard_key_field_line=$(grep -n 'dashboard_key: str | None = None' "$hub_model_file" | head -1 | cut -d: -f1)
+  tier1_is_previous_task_field_line=$(grep -n 'tier1_is_previous_task: bool = False' "$hub_model_file" | head -1 | cut -d: -f1)
+  if [[ -z "$dashboard_key_field_line" || -z "$tier1_is_previous_task_field_line" \
+      || "$dashboard_key_field_line" -ge "$tier1_is_previous_task_field_line" ]]; then
+    record_failure "$test_name" "T25-87: ProjectView 필드 순서 — dashboard_key 가 tier1_is_previous_task 보다 먼저 와야 함(GOTCHA 2)"
+    return 1
+  fi
+
+  # T25-88(GN5 카드 표시, G9 — 새 색 리터럴 금지): 이전 작업 라벨의 속성·클래스·문구가 존재하고
+  # 톤다운 CSS 가 --muted 를 쓴다. 역방향 — 새 CSS 규칙(.tier1-prev-label·.detail-note)에
+  # # 색 리터럴이 0건이다.
+  local gn5_display_token
+  for gn5_display_token in 'data-tier1-previous' 'tier1-prev-label' '이전 작업' \
+      '.card[data-tier1-previous] .tier1-pct{color:var(--muted)}'; do
+    if ! grep -qF -- "$gn5_display_token" "$hub_template_file"; then
+      record_failure "$test_name" "T25-88: hub_template.html 에 $gn5_display_token 이 없음"
+      return 1
+    fi
+  done
+  if grep -qE '\.(tier1-prev-label|detail-note)\{[^}]*#[0-9a-fA-F]{3}' "$hub_template_file"; then
+    record_failure "$test_name" "T25-88: .tier1-prev-label 또는 .detail-note 에 하드코딩된 # 색 리터럴이 있음(G9)"
+    return 1
+  fi
+
+  # T25-89(GN6·GN7 패널 안내 + IIFE 분리, G8 — 가장 값진 기계적 검사): 안내 줄 노드·속성
+  # 읽기·머리 주석 편입이 존재하고, 패널 IIFE(var PANEL_OPEN_BODY_CLASS 줄 ~ 파일 끝)에
+  # snapshot 문자열이 0건이다 — 렌더 IIFE 와의 분리(결정 SP1)가 이번 기능으로도 깨지지
+  # 않았음을 검사한다. panelFrameEl.src 회귀 금지는 T25-80 이 이미 지킨다.
+  local gn6_note_token
+  for gn6_note_token in 'id="dzh-detail-note"' 'TIER1_PREVIOUS_TASK_ATTRIBUTE' '#dzh-detail-note'; do
+    if ! grep -qF -- "$gn6_note_token" "$hub_template_file"; then
+      record_failure "$test_name" "T25-89: hub_template.html 에 $gn6_note_token 이 없음"
+      return 1
+    fi
+  done
+  local panel_iife_start_line
+  panel_iife_start_line=$(grep -n 'var PANEL_OPEN_BODY_CLASS' "$hub_template_file" | head -1 | cut -d: -f1)
+  if [[ -z "$panel_iife_start_line" ]]; then
+    record_failure "$test_name" "T25-89: hub_template.html 에 var PANEL_OPEN_BODY_CLASS 를 찾지 못함"
+    return 1
+  fi
+  local snapshot_leak_count
+  snapshot_leak_count=$(tail -n "+$panel_iife_start_line" "$hub_template_file" | grep -c "snapshot")
+  if [[ "$snapshot_leak_count" -ne 0 ]]; then
+    record_failure "$test_name" "T25-89: 패널 IIFE 범위에 snapshot 문자열이 ${snapshot_leak_count}건 있음(G8 위반)"
+    return 1
+  fi
+
+  # T25-90(문서 정합 R2·R3, docs/prps/hub-session-revival-and-stale-tier1.md): README 가
+  # 이전 작업 라벨·구세대 대시보드 자연 치유·재부착 규칙을 설명한다. 역방향 — 옛 단정 문구
+  # "— CSS 가 숨긴다"가 hub/README.md 에서 사라졌다(결정 LG1 이 교정한다).
+  local doc_sync_token
+  for doc_sync_token in '이전 작업' '구세대' '/dashboard init'; do
+    if ! grep -qF -- "$doc_sync_token" "$hub_readme_file"; then
+      record_failure "$test_name" "T25-90: hub/README.md 에 $doc_sync_token 토큰이 없음"
+      return 1
+    fi
+  done
+  if ! grep -qF -- '재부착' "$hub_dashboard_prp_file"; then
+    record_failure "$test_name" "T25-90: docs/prps/hub-dashboard.md 에 재부착 토큰이 없음"
+    return 1
+  fi
+  if grep -qF -- '— CSS 가 숨긴다' "$hub_readme_file"; then
+    record_failure "$test_name" "T25-90: hub/README.md 에 옛 단정 문구(— CSS 가 숨긴다)가 남아 있음(LG1)"
+    return 1
+  fi
 
   log_ok "$test_name 통과"
   ((passed_tests++))

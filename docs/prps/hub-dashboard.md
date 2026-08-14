@@ -315,6 +315,12 @@ overlay:
   카드는 `Notification(permission_prompt)` 을 발화하지 않는다. 이 사용자는 그 두 표면만 쓰므로,
   그 상태를 만들면 **영원히 켜지지 않는 등불**이 된다(쟁점 2의 결론과 같은 근거).
 
+> **개정 →(결정 RV1~RV3, `hub-session-revival-and-stale-tier1.md`)**: `done` 은 완전한
+> 터미널이 아니다. `SessionEnd` 뒤에 재부착(`SessionStart`, compact 제외)이 오면
+> `ended_at_ms` 가 해제되어 `done` 이 취소된다 — 재정의: **`done` = `SessionEnd` 를
+> 관측했고, 그 뒤로 재부착을 보지 못했다.** `stale` 로 덮이지 않는 터미널 "표시"라는 성질은
+> 그대로지만, 터미널인 것은 표시일 뿐 사실이 아니다.
+
 ### 3. 단계 추정 — 서브에이전트 타입 → 단계
 
 > **개정됨.** `infer_phase()` 는 삭제되고 `summarize_agent_runs()` 가 각 서브에이전트 타입에
@@ -350,6 +356,9 @@ PROJECT_STATE_PRIORITY = ("working", "idle", "stale", "done")   # 앞이 이긴�
   대신 마지막 활동 시각만으로 `idle`/`stale` 을 가른다: `now_ms - last_activity_at_ms >= stale_after_ms`
   면 `stale`, 아니면 `idle`. 이 규칙이 없으면 방금 활동한 티어 3 전용 프로젝트가 영구히 "완료"로
   보이는 오류가 난다(검수 M3).
+  > **개정 →(결정 RV3, `hub-session-revival-and-stale-tier1.md`)**: "실제로 관측한 세션이
+  > 하나라도 있을 때만"은 "관측했고 그 뒤 재부착(`SessionStart`, compact 제외)이 없을 때만"
+  > 으로 강화된다 — 근거 문장 자체는 그대로 유효하고, 재부착이라는 취소 조건이 덧붙을 뿐이다.
 - 정렬: **마지막 활동 내림차순** 하나뿐이다. 상태로 정렬하면 상태가 바뀔 때마다 카드가 튄다
   (CAM M9 가 같은 이유로 상태 정렬을 제거했다).
 

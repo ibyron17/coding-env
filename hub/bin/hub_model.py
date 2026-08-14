@@ -35,6 +35,11 @@ PHASE_BY_AGENT_TYPE: dict[str, Phase] = {
 # 앞이 이긴다 — 하나라도 working 이면 프로젝트는 working.
 PROJECT_STATE_PRIORITY: tuple[SessionState, ...] = ("working", "idle", "stale", "done")
 
+# 살아 있는 세션 = 지금 이 프로젝트에서 실제로 일하고 있는 세션(결정 GN2,
+# docs/prps/hub-session-revival-and-stale-tier1.md). stale·done 을 넣지 않는다 — 부활 규칙(RV1)이
+# 만드는 좀비 stale 세션이 세대 판정(is_tier1_from_previous_task)을 조용히 깨뜨린다(실측 E6).
+LIVE_SESSION_STATES: frozenset[SessionState] = frozenset({"working"})
+
 _DATA_MARKER_OPEN = '<script type="application/json" id="dzh-data">'
 _DATA_MARKER_CLOSE = "</script>"
 
@@ -138,6 +143,10 @@ class ProjectView:
     tier1: Tier1Snapshot | None
     note: str | None
     dashboard_key: str | None = None    # 티어 1 프로젝트만 값을 갖는다. None 이면 카드가 클릭 대상이 아니다
+    # 티어 1 파일이 "지금 일하는 세션보다 오래된" 세대인가(결정 GN1~GN3).
+    # 이름에 stale 을 쓰지 않는다 — 세션의 stale(30분 무소식)·사용량의 is_stale(조회되지 않음)과
+    # 뜻이 다르다.
+    tier1_is_previous_task: bool = False
 
 
 @dataclass(frozen=True)
@@ -293,6 +302,12 @@ def _apply_tracked_event(session: _MutableSession, event: HookEvent) -> None:
         session.turn_state = "ended"
     elif event.hook_event_name == "SessionEnd":
         session.ended_at_ms = event.received_at_ms
+    elif event.hook_event_name == "SessionStart":
+        # 재부착(resume·startup·clear)은 "이 세션이 다시 살아났다"는 유일한 권위 있는 신호다
+        # (결정 RV1, docs/prps/hub-session-revival-and-stale-tier1.md). compact 는 이 함수에
+        # 도달하지 못한다(build_session_facts 의 필터가 is_internal_session_start 로 앞서
+        # continue 한다) — 그 필터가 곧 부활 오발동을 막는 안전판이다.
+        session.ended_at_ms = None
     elif event.hook_event_name == "SubagentStart":
         _handle_subagent_start(session, event)
     elif event.hook_event_name == "SubagentStop":
@@ -360,6 +375,11 @@ def build_session_facts(events: Sequence[HookEvent]) -> dict[str, SessionFacts]:
 
 
 # ---- 3. 세션 표시 상태 ----
+# `done` = `SessionEnd` 를 관측했고, 그 뒤로 재부착(`SessionStart`, compact 제외)을 보지
+# 못했다(결정 RV3, docs/prps/hub-session-revival-and-stale-tier1.md). `done` 은 여전히
+# `stale` 로 덮이지 않는 터미널 표시이지만, 터미널인 것은 표시일 뿐 사실이 아니다 — 세션은
+# 되살아날 수 있고, 되살아나면 `done` 은 취소된다(_apply_tracked_event 의 SessionStart 분기가
+# ended_at_ms 를 해제한다).
 def _compute_base_state(facts: SessionFacts) -> Literal["working", "idle", "done"]:
     if facts.ended_at_ms is not None:
         return "done"
@@ -467,9 +487,9 @@ def _project_tier(tier1: Tier1Snapshot | None, sessions: tuple[SessionFacts, ...
 def _project_state_without_sessions(last_activity_at_ms: int, now_ms: int, stale_after_ms: int) -> SessionState:
     """세션이 하나도 없는 프로젝트(티어 1/3 전용)의 상태.
 
-    `done` 은 `SessionEnd` 를 실제로 관측했을 때만 성립하는 상태다 — 세션이 없으면 그 근거가
-    없으므로 마지막 활동 시각만으로 idle/stale 을 가른다(검수 M3, docs/prps/hub-dashboard.md
-    「상태 판정 규칙 4」 참조).
+    `done` 은 `SessionEnd` 를 관측했고 그 뒤 재부착(`SessionStart`, compact 제외)이 없을
+    때만 성립하는 상태다(결정 RV3) — 세션이 없으면 그 근거가 없으므로 마지막 활동 시각만으로
+    idle/stale 을 가른다(검수 M3, docs/prps/hub-dashboard.md 「상태 판정 규칙 4」 참조).
     """
     if now_ms - last_activity_at_ms >= stale_after_ms:
         return "stale"
@@ -505,6 +525,34 @@ def project_dashboard_key(project_path: str) -> str:
     return digest[:DASHBOARD_KEY_LENGTH]
 
 
+def is_tier1_from_previous_task(
+    tier1_file_mtime_ms: int, live_session_start_times_ms: Sequence[int]
+) -> bool:
+    """살아 있는 세션이 있고, 그 전부가 대시보드 파일이 갱신된 뒤에 시작됐는가(결정 GN1).
+
+    경계는 엄격한 `>` 다 — 같은 밀리초에 시작·갱신됐다면 그 세션이 갱신했다고 본다.
+    `all()` 은 한 세션이라도 대시보드보다 먼저 시작했으면 라벨을 켜지 않는다(오탐 회피 방향).
+    """
+    if not live_session_start_times_ms:
+        return False
+    return all(start_ms > tier1_file_mtime_ms for start_ms in live_session_start_times_ms)
+
+
+def _live_session_start_times_ms(
+    sessions: tuple[SessionFacts, ...], session_views: tuple[SessionView, ...]
+) -> tuple[int, ...]:
+    """살아 있는 세션들의 시작 시각. 표시 상태는 뷰가, 시작 시각은 사실이 갖고 있다.
+
+    `sessions` 와 `session_views` 는 `compose_project_views` 안에서 같은 순서로 만들어지므로
+    `zip` 이 안전하다 — 두 튜플을 함수 밖으로 넘겨 다시 조립하지 않는다.
+    """
+    return tuple(
+        facts.started_at_ms
+        for facts, view in zip(sessions, session_views)
+        if view.state in LIVE_SESSION_STATES
+    )
+
+
 def compose_project_views(
     tier1_by_path: dict[str, Tier1Snapshot],
     sessions_by_path: dict[str, tuple[SessionFacts, ...]],
@@ -521,6 +569,10 @@ def compose_project_views(
         session_views = tuple(
             compute_session_view(facts, now_ms, stale_after_ms) for facts in sessions
         )
+        live_session_start_times_ms = _live_session_start_times_ms(sessions, session_views)
+        tier1_is_previous_task = tier1 is not None and is_tier1_from_previous_task(
+            tier1.file_mtime_ms, live_session_start_times_ms
+        )
         last_activity_at_ms = _last_activity_at_ms(
             tier1, session_views, tier3_last_activity_by_path.get(path, 0)
         )
@@ -536,6 +588,7 @@ def compose_project_views(
                 tier1=tier1,
                 note=None,
                 dashboard_key=project_dashboard_key(path) if tier == 1 else None,
+                tier1_is_previous_task=tier1_is_previous_task,
             )
         )
     return tuple(sorted(views, key=lambda view: view.last_activity_at_ms, reverse=True))

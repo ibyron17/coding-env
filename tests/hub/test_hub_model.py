@@ -248,6 +248,196 @@ class SummarizeAgentRunsTest(unittest.TestCase):
         )
 
 
+class SessionRevivalTest(unittest.TestCase):
+    """RV1~RV10 — docs/prps/hub-session-revival-and-stale-tier1.md 결정 RV1·RV2."""
+
+    def test_rv1_prompt_then_end_is_done(self) -> None:
+        """회귀 방어 — 기존 M3 와 같은 사실. 부활 없이 SessionEnd 만 오면 done 이다."""
+        facts = _facts_from([_event("UserPromptSubmit"), _event("SessionEnd", 1000)])
+        view = hub_model.compute_session_view(facts, now_ms=facts.last_event_at_ms, stale_after_ms=STALE_AFTER_MS)
+        self.assertEqual(view.state, "done")
+
+    def test_rv2_resume_after_end_clears_ended_at_ms(self) -> None:
+        events = [_event("SessionEnd"), _event("SessionStart", 1000, source="resume")]
+        facts = _facts_from(events)
+        self.assertIsNone(facts.ended_at_ms)
+        view = hub_model.compute_session_view(facts, now_ms=facts.last_event_at_ms, stale_after_ms=STALE_AFTER_MS)
+        self.assertEqual(view.state, "idle")
+
+    def test_rv3_resume_then_prompt_is_working(self) -> None:
+        events = [
+            _event("SessionEnd"),
+            _event("SessionStart", 1000, source="resume"),
+            _event("UserPromptSubmit", 2000),
+        ]
+        facts = _facts_from(events)
+        view = hub_model.compute_session_view(facts, now_ms=facts.last_event_at_ms, stale_after_ms=STALE_AFTER_MS)
+        self.assertEqual(view.state, "working")
+
+    def test_rv4_compact_session_start_does_not_revive(self) -> None:
+        """GOTCHA 1 동작 검증 — 필터가 compact 를 부활 트리거에서 원천 차단한다."""
+        events = [_event("SessionEnd"), _event("SessionStart", 1000, source="compact")]
+        facts = _facts_from(events)
+        view = hub_model.compute_session_view(facts, now_ms=facts.last_event_at_ms, stale_after_ms=STALE_AFTER_MS)
+        self.assertEqual(view.state, "done")
+
+    def test_rv5_delayed_subagent_stop_after_end_does_not_revive(self) -> None:
+        events = [
+            _event("SubagentStart", 0, agent_id="agt-1", agent_type="implementer"),
+            _event("SubagentStop", 100, agent_id="agt-1", agent_type="implementer"),
+            _event("SessionEnd", 200),
+            _event("SubagentStop", 300, agent_id="agt-1", agent_type="implementer"),
+        ]
+        facts = _facts_from(events)
+        view = hub_model.compute_session_view(facts, now_ms=facts.last_event_at_ms, stale_after_ms=STALE_AFTER_MS)
+        self.assertEqual(view.state, "done")
+
+    def test_rv6_stop_after_end_does_not_revive(self) -> None:
+        events = [_event("SessionEnd"), _event("Stop", 1000)]
+        facts = _facts_from(events)
+        view = hub_model.compute_session_view(facts, now_ms=facts.last_event_at_ms, stale_after_ms=STALE_AFTER_MS)
+        self.assertEqual(view.state, "done")
+
+    def test_rv7_revived_session_goes_stale_after_thirty_one_minutes(self) -> None:
+        events = [_event("SessionEnd"), _event("SessionStart", 1000, source="resume")]
+        facts = _facts_from(events)
+        thirty_one_minutes_later = facts.last_event_at_ms + 31 * 60 * 1000
+        view = hub_model.compute_session_view(facts, now_ms=thirty_one_minutes_later, stale_after_ms=STALE_AFTER_MS)
+        self.assertEqual(view.state, "stale")
+        self.assertEqual(view.base_state, "idle")
+
+    def test_rv8_repeated_end_start_cycles_are_idempotent(self) -> None:
+        events = [
+            _event("SessionEnd", 0),
+            _event("SessionStart", 1000, source="resume"),
+            _event("SessionEnd", 2000),
+            _event("SessionStart", 3000, source="resume"),
+        ]
+        facts = _facts_from(events)
+        view = hub_model.compute_session_view(facts, now_ms=facts.last_event_at_ms, stale_after_ms=STALE_AFTER_MS)
+        self.assertEqual(view.state, "idle")
+
+    def test_rv9_e1_observed_sequence_reproduces_working(self) -> None:
+        """E1 실측 축약 — 사용자 보고 재현(G3)."""
+        events = [
+            _event("UserPromptSubmit", 0),
+            _event("SessionEnd", 1000),
+            _event("SessionStart", 2000, source="resume"),
+            _event("UserPromptSubmit", 3000),
+            _event("SubagentStart", 4000, agent_id="agt-1", agent_type="design-architect"),
+            _event("Stop", 5000),
+        ]
+        facts = _facts_from(events)
+        view = hub_model.compute_session_view(facts, now_ms=facts.last_event_at_ms, stale_after_ms=STALE_AFTER_MS)
+        self.assertEqual(view.state, "working")
+        self.assertEqual(view.base_state, "working")
+
+    def test_rv10_lone_session_start_is_a_harmless_no_op(self) -> None:
+        """X1 — ended_at_ms 가 이미 None 이므로 부활은 무해한 무동작이다."""
+        facts = _facts_from([_event("SessionStart", source="startup")])
+        view = hub_model.compute_session_view(facts, now_ms=facts.last_event_at_ms, stale_after_ms=STALE_AFTER_MS)
+        self.assertEqual(view.state, "idle")
+
+
+class Tier1GenerationTest(unittest.TestCase):
+    """GN1~GN10 — docs/prps/hub-session-revival-and-stale-tier1.md 결정 GN1~GN4."""
+
+    def _session_facts(self, session_id, started_at_ms, ended_at_ms=None):
+        return hub_model.SessionFacts(
+            session_id=session_id, cwd="/repo", started_at_ms=started_at_ms,
+            last_event_at_ms=started_at_ms, last_event_name="UserPromptSubmit",
+            turn_state="running" if ended_at_ms is None else "ended",
+            ended_at_ms=ended_at_ms, task_excerpt=None, subagents=(),
+        )
+
+    def _tier1(self, file_mtime_ms):
+        return hub_parse.Tier1Snapshot(
+            title="t", subtitle="s", completed=1, total=2, percent=50, steps=(),
+            matrix_done=None, impl_done=0, impl_total=0, updated_text="-",
+            file_mtime_ms=file_mtime_ms,
+        )
+
+    def test_gn1_no_live_sessions_is_false(self) -> None:
+        self.assertFalse(hub_model.is_tier1_from_previous_task(BASE_TIME_MS, ()))
+
+    def test_gn2_live_session_started_after_mtime_is_true(self) -> None:
+        self.assertTrue(hub_model.is_tier1_from_previous_task(BASE_TIME_MS, (BASE_TIME_MS + 1,)))
+
+    def test_gn3_live_session_started_before_mtime_is_false(self) -> None:
+        self.assertFalse(hub_model.is_tier1_from_previous_task(BASE_TIME_MS, (BASE_TIME_MS - 1,)))
+
+    def test_gn4_one_earlier_session_among_many_makes_it_false(self) -> None:
+        self.assertFalse(
+            hub_model.is_tier1_from_previous_task(BASE_TIME_MS, (BASE_TIME_MS - 1, BASE_TIME_MS + 1))
+        )
+
+    def test_gn5_boundary_equal_start_and_mtime_is_false(self) -> None:
+        """경계는 엄격한 > 다 — 같은 밀리초면 그 세션이 갱신했다고 본다."""
+        self.assertFalse(hub_model.is_tier1_from_previous_task(BASE_TIME_MS, (BASE_TIME_MS,)))
+
+    def test_gn6_compose_project_views_marks_previous_task(self) -> None:
+        tier1 = self._tier1(BASE_TIME_MS)
+        working_session = self._session_facts("s-working", BASE_TIME_MS + 60_000)
+        views = hub_model.compose_project_views(
+            tier1_by_path={"/repo": tier1}, sessions_by_path={"/repo": (working_session,)},
+            tier3_last_activity_by_path={}, now_ms=BASE_TIME_MS + 60_000, stale_after_ms=STALE_AFTER_MS,
+        )
+        self.assertTrue(views[0].tier1_is_previous_task)
+
+    def test_gn7_zombie_stale_session_does_not_break_the_verdict(self) -> None:
+        """klago 실측 형태(G5) — stale 좀비 세션이 있어도 working 세션 하나로 판정이 켜진다."""
+        tier1 = self._tier1(BASE_TIME_MS)
+        working_session = self._session_facts("s-working", BASE_TIME_MS + 60_000)
+        zombie_session = self._session_facts("s-zombie", BASE_TIME_MS - 3_600_000)
+        now_ms = zombie_session.started_at_ms + STALE_AFTER_MS + 60_000
+        views = hub_model.compose_project_views(
+            tier1_by_path={"/repo": tier1},
+            sessions_by_path={"/repo": (working_session, zombie_session)},
+            tier3_last_activity_by_path={}, now_ms=now_ms, stale_after_ms=STALE_AFTER_MS,
+        )
+        zombie_view = next(view for view in views[0].sessions if view.session_id == "s-zombie")
+        self.assertEqual(zombie_view.state, "stale")
+        self.assertTrue(views[0].tier1_is_previous_task)
+
+    def test_gn8_no_tier1_is_false(self) -> None:
+        working_session = self._session_facts("s-working", BASE_TIME_MS + 60_000)
+        views = hub_model.compose_project_views(
+            tier1_by_path={}, sessions_by_path={"/repo": (working_session,)},
+            tier3_last_activity_by_path={}, now_ms=BASE_TIME_MS + 60_000, stale_after_ms=STALE_AFTER_MS,
+        )
+        self.assertFalse(views[0].tier1_is_previous_task)
+
+    def test_gn9_render_hub_html_round_trip_carries_the_field(self) -> None:
+        tier1 = self._tier1(BASE_TIME_MS)
+        working_session = self._session_facts("s-working", BASE_TIME_MS + 60_000)
+        views = hub_model.compose_project_views(
+            tier1_by_path={"/repo": tier1}, sessions_by_path={"/repo": (working_session,)},
+            tier3_last_activity_by_path={}, now_ms=BASE_TIME_MS + 60_000, stale_after_ms=STALE_AFTER_MS,
+        )
+        snapshot = hub_model.HubSnapshot(
+            collected_at_ms=BASE_TIME_MS, projects=views, unresolved_dir_names=(), warnings=(),
+        )
+        template = '<html><body><script type="application/json" id="dzh-data">{}</script></body></html>'
+        rendered = hub_model.render_hub_html(template, snapshot)
+        payload = rendered.split('id="dzh-data">', 1)[1].rsplit("</script>", 1)[0]
+        parsed = json.loads(payload)
+        self.assertIs(parsed["projects"][0]["tier1_is_previous_task"], True)
+
+    def test_gn10_idle_only_session_is_false(self) -> None:
+        """결정 GN2 — idle 은 판정 집합 밖이다. 승인 항목 4 가 뒤집히면 이 케이스가 True 로 바뀐다."""
+        idle_session = hub_model.SessionFacts(
+            session_id="s-idle", cwd="/repo", started_at_ms=BASE_TIME_MS + 60_000,
+            last_event_at_ms=BASE_TIME_MS + 60_000, last_event_name="Stop", turn_state="ended",
+            ended_at_ms=None, task_excerpt=None, subagents=(),
+        )
+        tier1 = self._tier1(BASE_TIME_MS)
+        views = hub_model.compose_project_views(
+            tier1_by_path={"/repo": tier1}, sessions_by_path={"/repo": (idle_session,)},
+            tier3_last_activity_by_path={}, now_ms=BASE_TIME_MS + 60_000, stale_after_ms=STALE_AFTER_MS,
+        )
+        self.assertFalse(views[0].tier1_is_previous_task)
+
+
 class ParseEventLineTest(unittest.TestCase):
     """M11 — 깨진 JSON 줄 · 필드 누락 줄은 건너뛰고 나머지로 상태를 만든다."""
 
