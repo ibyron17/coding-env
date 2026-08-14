@@ -1053,6 +1053,11 @@ document.addEventListener('drop', function(event){
 
 > **원칙 유지** — "열기만 애니메이션한다"는 [`hub-detail-side-panel.md`](./hub-detail-side-panel.md)
 > 결정 SP5 가 그대로 이어받는다(구현 기법만 keyframes → 상태 규칙 transition 으로 바뀐다).
+>
+> **→ 원칙 폐기(2026-08-14, R2)** — "열기만 애니메이션한다"는 원칙 자체가 사용자 요구로
+> 폐기됐다. 정본은 hub-detail-side-panel.md 결정 SP12·SP14~SP17(양방향 애니메이션). MD4 의
+> 기술적 근거(`<dialog>.close()` 가 즉시라 `@starting-style`·`allow-discrete` 가 필요하다)는
+> `<dialog>` 를 버린 SP1 이후 더 이상 성립하지 않는다.
 
 `::backdrop` 에 transition 을 걸면 `<dialog>` 의 즉시 `close()` 와 어긋나 사라지는 순간이
 어색해지고, `@starting-style`·`allow-discrete` 같은 신문법을 끌어와야 한다. 요구에 없다.

@@ -2343,10 +2343,10 @@ test_hub_unit_tests() {
   ((passed_tests++))
 }
 
-# T25: 허브 문서·상수 정합성 (하위 검증 T25-1~T25-81)
+# T25: 허브 문서·상수 정합성 (하위 검증 T25-1~T25-85)
 test_hub_docs_and_constants() {
   local test_name="T25"
-  local test_desc="허브 문서·상수 정합성 (T25-1~T25-81)"
+  local test_desc="허브 문서·상수 정합성 (T25-1~T25-85)"
   log_test_name "$test_name" "$test_desc"
 
   local hub_settings_file="$REPO_ROOT/hub/bin/hub_settings.py"
@@ -3524,24 +3524,54 @@ PYEOF
     return 1
   fi
 
-  # T25-79(결정 SP5 애니메이션 세트 + 소스 순서 → T25-70 대체): 열기 슬라이드가 있고,
-  # prefers-reduced-motion 무효화 블록이 소스 순서상 열림 상태 규칙보다 뒤에 온다(명세도
-  # 함정, GOTCHA 3). 옛 모달 열기 애니메이션은 대상 자체가 사라져 함께 없어졌다.
-  if ! grep -qF -- 'transition:transform 180ms ease-out' "$hub_template_file"; then
-    record_failure "$test_name" "T25-79: hub_template.html 에 transition:transform 180ms ease-out 이 없음"
+  # T25-79(결정 SP12·SP13·SP16·SP17 양방향 애니메이션 세트 + 소스 순서, hub-detail-side-panel.md
+  # R2 — 개정: 초판은 열기만이었다): 전이 선언이 "닫힌(기본) 규칙"에 있어야 하고(GOTCHA 11),
+  # visibility 가 같은 시간으로 함께 전이돼야 하며(GOTCHA 13), prefers-reduced-motion 무효화
+  # 블록이 6셀렉터로 확장되고 소스 순서상 @media (min-width:1024px) 블록보다 뒤에 온다(명세도
+  # 함정, GOTCHA 15). 옛 모달 열기 애니메이션은 대상 자체가 사라져 함께 없어졌다.
+
+  # 79-a: 전이 선언 토큰(GOTCHA 13 — visibility 를 전이 목록에서 빼면 슬라이드가 보이지 않는다)
+  if ! grep -qF -- 'transition:transform 180ms ease-out, visibility 180ms' "$hub_template_file"; then
+    record_failure "$test_name" "T25-79-a: hub_template.html 에 transition:transform 180ms ease-out, visibility 180ms 가 없음"
     return 1
   fi
-  local panel_open_rule_line reduced_motion_selector_line
+
+  # 79-b: 그 토큰이 "닫힌(기본) 규칙"에 있어야 한다 — body.dzh-panel-open .detail-panel{transform:none
+  # 규칙보다 줄 번호가 앞서야 한다(GOTCHA 11 — 열림 규칙으로 되돌리면 닫기 애니메이션이 소실된다).
+  local base_transition_line panel_open_rule_line
+  base_transition_line=$(grep -n 'transition:transform 180ms ease-out, visibility 180ms' "$hub_template_file" | head -1 | cut -d: -f1)
   panel_open_rule_line=$(grep -n 'body\.dzh-panel-open \.detail-panel{transform:none' "$hub_template_file" | head -1 | cut -d: -f1)
-  reduced_motion_selector_line=$(grep -n 'body\.dzh-panel-open \.detail-panel,' "$hub_template_file" | head -1 | cut -d: -f1)
-  if [[ -z "$panel_open_rule_line" || -z "$reduced_motion_selector_line" || "$reduced_motion_selector_line" -le "$panel_open_rule_line" ]]; then
-    record_failure "$test_name" "T25-79: prefers-reduced-motion 무효화가 body.dzh-panel-open .detail-panel 규칙보다 앞에 있음(GOTCHA 3)"
+  if [[ -z "$base_transition_line" || -z "$panel_open_rule_line" || "$base_transition_line" -ge "$panel_open_rule_line" ]]; then
+    record_failure "$test_name" "T25-79-b: 전이 선언이 body.dzh-panel-open .detail-panel 규칙보다 앞(기본 규칙)에 있지 않음(GOTCHA 11)"
     return 1
   fi
+
+  # 79-c: prefers-reduced-motion 블록의 첫 셀렉터가 @media (min-width:1024px) 블록보다 뒤에
+  # 와야 한다 — 미디어 쿼리는 명세도를 올리지 않으므로 소스 순서가 전부다(GOTCHA 15).
+  local push_mode_usage_line reduced_motion_first_selector_line
+  push_mode_usage_line=$(grep -n 'body\.dzh-panel-open #dzh-usage{transform:' "$hub_template_file" | head -1 | cut -d: -f1)
+  reduced_motion_first_selector_line=$(grep -n '\.detail-panel,$' "$hub_template_file" | head -1 | cut -d: -f1)
+  if [[ -z "$push_mode_usage_line" || -z "$reduced_motion_first_selector_line" || "$reduced_motion_first_selector_line" -le "$push_mode_usage_line" ]]; then
+    record_failure "$test_name" "T25-79-c: prefers-reduced-motion 블록이 @media (min-width:1024px) 블록보다 앞에 있음(GOTCHA 15)"
+    return 1
+  fi
+
+  # 79-d: 무효화 블록에 6셀렉터가 모두 있어야 한다 — 기본 규칙 3개(.detail-panel·body·
+  # #dzh-usage)를 빠뜨리면 저감 모드에서 닫기만 애니메이션되는 반쪽 상태가 된다(GOTCHA 15).
+  local reduced_motion_token
+  for reduced_motion_token in '.detail-panel,' '  body,' '  #dzh-usage,' 'body.dzh-panel-open,' \
+      'body.dzh-panel-open .detail-panel,' 'body.dzh-panel-open #dzh-usage{transition:none}'; do
+    if ! grep -qF -- "$reduced_motion_token" "$hub_template_file"; then
+      record_failure "$test_name" "T25-79-d: prefers-reduced-motion 블록에 $reduced_motion_token 이 없음"
+      return 1
+    fi
+  done
+
+  # 79-e(역방향, 초판 승계): 옛 모달 열기 애니메이션 잔재가 없다.
   local removed_modal_animation_token
   for removed_modal_animation_token in 'animation:modal-open' '@keyframes modal-open'; do
     if grep -qF -- "$removed_modal_animation_token" "$hub_template_file"; then
-      record_failure "$test_name" "T25-79: hub_template.html 에 옛 모달 잔재($removed_modal_animation_token)가 남아 있음"
+      record_failure "$test_name" "T25-79-e: hub_template.html 에 옛 모달 잔재($removed_modal_animation_token)가 남아 있음"
       return 1
     fi
   done
@@ -3560,11 +3590,12 @@ PYEOF
     return 1
   fi
 
-  # T25-81(문서 정합): hub/README.md 가 패널로의 전환을 설명하고, hub_template.html 머리
-  # 주석이 불변식 개정(H1⁗)을 반영한다. 역방향 — README 에 '모달' 잔재가 없다(이관 표기
-  # 누락으로 옛 결정이 살아 있는 것처럼 읽히는 것을 막는다).
+  # T25-81(문서 정합 — 개정: R2 가 닫힘 서술 토큰을 추가): hub/README.md 가 패널로의 전환과
+  # 닫힘(SP18)을 설명하고, hub_template.html 머리 주석이 불변식 개정(H1⁗)을 반영한다.
+  # 역방향 — README 에 '모달' 잔재가 없다(이관 표기 누락으로 옛 결정이 살아 있는 것처럼
+  # 읽히는 것을 막는다).
   local readme_panel_token
-  for readme_panel_token in '상세 패널' '밀' '덮'; do
+  for readme_panel_token in '상세 패널' '밀' '덮' '나간다'; do
     if ! grep -qF -- "$readme_panel_token" "$hub_readme_file"; then
       record_failure "$test_name" "T25-81: hub/README.md 에 $readme_panel_token 토큰이 없음"
       return 1
@@ -3578,6 +3609,85 @@ PYEOF
     record_failure "$test_name" "T25-81: hub/README.md 에 '모달' 잔재가 남아 있음"
     return 1
   fi
+
+  # T25-82(SP14 닫기 지연 경로, hub-detail-side-panel.md R2): about:blank 지연은
+  # setTimeout(PANEL_CLOSE_ANIMATION_MS) 이고 transitionend 를 쓰지 않는다(GOTCHA 12 — 저감
+  # 모드에서는 발화하지 않고 백그라운드 탭에서는 상한 없이 밀린다). 상태 클래스
+  # (dzh-panel-closing) 로의 회귀(SP12 안 B)도 함께 막는다.
+  local panel_close_delay_token
+  for panel_close_delay_token in 'PANEL_CLOSE_ANIMATION_MS' 'panelBlankTimerId' \
+      'scheduleBlankAfterSlide' 'clearTimeout(panelBlankTimerId)'; do
+    if ! grep -qF -- "$panel_close_delay_token" "$hub_template_file"; then
+      record_failure "$test_name" "T25-82: hub_template.html 에 $panel_close_delay_token 이 없음"
+      return 1
+    fi
+  done
+  # 역방향 토큰은 실제 사용(이벤트 리스너 등록) 형태만 본다 — GOTCHA 12 설명 주석 자체가
+  # "transitionend" 라는 낱말을 언급하므로(왜 안 쓰는지 설명해야 하니까), 낱말 단순 매칭은
+  # 설계가 요구하는 그 주석과 스스로 충돌한다.
+  local panel_close_delay_removed_token
+  for panel_close_delay_removed_token in "addEventListener('transitionend'" 'dzh-panel-closing'; do
+    if grep -qF -- "$panel_close_delay_removed_token" "$hub_template_file"; then
+      record_failure "$test_name" "T25-82: hub_template.html 에 금지 토큰($panel_close_delay_removed_token)이 있음"
+      return 1
+    fi
+  done
+
+  # T25-83(SP15 재진입 가드의 위치, 기계적 강제 — 선례: T25-66 의 줄 번호 비교): 취소는
+  # openDetailPanel 과 closeDetailPanel 사이에서만 일어나야 한다 — 그 지점에서 대기 중인
+  # blank 타이머는 존재할 수 없다("대기 타이머 ⇒ 닫힘" 불변식, SP15). 함수 순서를 뒤집으면
+  # 이 검사가 실패한다.
+  local open_fn_line close_fn_line cancel_line
+  open_fn_line=$(grep -n 'function openDetailPanel(' "$hub_template_file" | head -1 | cut -d: -f1)
+  close_fn_line=$(grep -n 'function closeDetailPanel(' "$hub_template_file" | head -1 | cut -d: -f1)
+  cancel_line=$(grep -n 'clearTimeout(panelBlankTimerId)' "$hub_template_file" | head -1 | cut -d: -f1)
+  if [[ -z "$cancel_line" || -z "$open_fn_line" || -z "$close_fn_line" \
+      || "$cancel_line" -le "$open_fn_line" || "$cancel_line" -ge "$close_fn_line" ]]; then
+    record_failure "$test_name" "T25-83: clearTimeout(panelBlankTimerId) 가 openDetailPanel 과 closeDetailPanel 사이에 있지 않음(SP15)"
+    return 1
+  fi
+
+  # T25-84(SP12·SP14 시간 3중 일치, 기계적 강제 — 선례: T25-78): CSS 슬라이드 시간·CSS
+  # visibility 시간·JS PANEL_CLOSE_ANIMATION_MS 세 숫자가 모두 같아야 한다. 180 을 리터럴로
+  # 적지 않는다 — 세 값의 상호 일치만 본다(시간을 바꾸고 싶으면 세 곳을 함께 고치게 된다).
+  local css_slide_ms css_visibility_ms js_close_ms
+  css_slide_ms=$(grep -oE 'transition:transform [0-9]+ms ease-out, visibility [0-9]+ms' \
+                   "$hub_template_file" | head -1 | grep -oE '[0-9]+' | head -1)
+  css_visibility_ms=$(grep -oE 'transition:transform [0-9]+ms ease-out, visibility [0-9]+ms' \
+                   "$hub_template_file" | head -1 | grep -oE '[0-9]+' | tail -1)
+  js_close_ms=$(grep -oE 'PANEL_CLOSE_ANIMATION_MS = [0-9]+' "$hub_template_file" | grep -oE '[0-9]+')
+  if [[ -z "$js_close_ms" || -z "$css_slide_ms" || "$css_slide_ms" != "$css_visibility_ms" \
+      || "$css_slide_ms" != "$js_close_ms" ]]; then
+    record_failure "$test_name" "T25-84: CSS 슬라이드(${css_slide_ms})·CSS visibility(${css_visibility_ms})·JS PANEL_CLOSE_ANIMATION_MS(${js_close_ms}) 가 서로 다름"
+    return 1
+  fi
+
+  # T25-85(SP11 헤드 패널화 + G8, hub-detail-side-panel.md R2): 닫기 컨트롤이 .detail-close
+  # 를 쓰고 »(오른쪽으로 밀려 나가는 실제 동작을 가리킨다) 글리프를 쓴다. 역방향 —
+  # border-bottom 이 파일 전체 0건이다(R2 승인 항목 6 — 시안 C 가 탈락해 토큰을 좁힐 이유가
+  # 없다), 옛 .icon-btn 닫기 버튼·✕ 글리프도 남아 있지 않다.
+  local detail_close_token
+  for detail_close_token in '.detail-close{' 'class="detail-close"' '>»<' \
+      'aria-label="닫기"' 'data-tooltip="닫기 (Esc)"'; do
+    if ! grep -qF -- "$detail_close_token" "$hub_template_file"; then
+      record_failure "$test_name" "T25-85: hub_template.html 에 $detail_close_token 이 없음"
+      return 1
+    fi
+  done
+  # "border-bottom:" (선언 형태)만 본다 — SP11 시안 A 설명 주석 자체가 "border-bottom 을
+  # 지워도…" 라고 그 낱말을 언급해야 하므로(G8 이 왜 성립하는지 설명해야 하니까), 낱말 단순
+  # 매칭은 설계가 요구하는 그 주석과 스스로 충돌한다.
+  if grep -qF -- 'border-bottom:' "$hub_template_file"; then
+    record_failure "$test_name" "T25-85: hub_template.html 에 border-bottom:(G8 위반) 선언이 남아 있음"
+    return 1
+  fi
+  local removed_detail_close_token
+  for removed_detail_close_token in '<button id="dzh-detail-close" class="icon-btn"' '>✕<'; do
+    if grep -qF -- "$removed_detail_close_token" "$hub_template_file"; then
+      record_failure "$test_name" "T25-85: hub_template.html 에 옛 닫기 버튼 잔재($removed_detail_close_token)가 남아 있음"
+      return 1
+    fi
+  done
 
   log_ok "$test_name 통과"
   ((passed_tests++))

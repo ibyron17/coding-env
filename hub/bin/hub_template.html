@@ -33,7 +33,10 @@ DZH:HUB 데이터 계약
   라이브 이동을 자동으로 되돌린다. ③ 밀어내기는 body 의 클래스 하나로만 표현한다 —
   #dzh-app 이나 카드에는 패널 열림 상태를 반영하지 않는다. 반영하는 순간 매 렌더마다 그
   상태를 다시 계산해야 하고, 두 IIFE 의 독립성이 깨진다. 원칙은 그대로다 — 사용자 상태
-  (포커스·접힘·선택·순서·열린 상세 패널)를 가진 것은 재렌더 대상 밖에 둔다.
+  (포커스·접힘·선택·순서·열린 상세 패널)를 가진 것은 재렌더 대상 밖에 둔다. ④ 닫기는
+  PANEL_CLOSE_ANIMATION_MS 동안의 슬라이드아웃이며 그 사이 iframe 을 비우지 않는다.
+  about:blank 는 같은 시간만큼 지연 실행되고, 대기 중인 그 타이머가 존재하면
+  openDashboardKey 는 반드시 null 이다 — 취소는 openDetailPanel 한 곳에서만 한다(SP15).
 
   #dzh-usage 와 그 안의 #dzh-usage-toggle 은 정적 노드이며 class·aria-expanded 속성만
   갱신한다(노드 교체 금지). 접힘을 바꾸는 경로는 둘이다 — 제목 줄 클릭과 패널 바깥 클릭 —
@@ -62,8 +65,8 @@ DZH:HUB 데이터 계약
     --accent:#0072B2;--accent-ink:#005B8F;--accent-soft:#E4F0F8;
     --attention:#B45309;--attention-soft:#FBEEDC;
     --shadow:0 8px 24px rgba(19,51,91,.06);
-    /* 패널 폭(SP4). 밀어내기 폭·.usage 이동량이 같은 값을 쓰게 하는 단일 출처다. */
-    --dzh-panel-width:clamp(400px, 40vw, 720px);
+    /* 패널 폭(SP19, 초판 SP4 번복). 밀어내기 폭·.usage 이동량이 같은 값을 쓰게 하는 단일 출처다. */
+    --dzh-panel-width:550px;
   }
   @media (prefers-color-scheme:dark){
     :root:not([data-theme="light"]){
@@ -178,11 +181,12 @@ DZH:HUB 데이터 계약
   /* 헤더 버튼 클러스터 — 새로고침·테마 버튼을 묶는다. R5 로 고정 위치를 버리고 .head-row
      문서 흐름 안(flex)으로 들어왔다 — margin-left:auto 로 항상 오른쪽 끝에 붙는다. */
   .top-actions{margin-left:auto;flex:0 0 auto;display:flex;align-items:center;gap:8px}
-  /* 32px 원형 아이콘 버튼 — 헤더 클러스터의 두 버튼과 모달 닫기 버튼이 공유한다(결정 Y4).
-     같은 줄에 나란히 서는 버튼들이 같은 크기·같은 테두리를 갖게 하려고 클래스를 하나로
-     묶었다(추측성 추상화가 아니라, 지금 3곳이 실제로 같아야 한다는 요구에서 나온 것이다).
-     텍스트가 없어 aria-label 로 접근성 이름을 준다(마크업 참고). 32px 는 유니코드 글리프
-     (26px)가 너무 작다는 피드백을 반영해 키운 값이다. */
+  /* 32px 원형 아이콘 버튼 — 헤더 클러스터의 두 버튼이 공유한다(결정 Y4). 상세 패널의
+     닫기 컨트롤은 이 클래스를 쓰지 않는다 — 페이지 최상위 액션과 패널 안 컨트롤의
+     위계를 구분한다(결정 SP11). 같은 줄에 나란히 서는 버튼들이 같은 크기·같은 테두리를
+     갖게 하려고 클래스를 하나로 묶었다(추측성 추상화가 아니라, 지금 실제로 같아야 한다는
+     요구에서 나온 것이다). 텍스트가 없어 aria-label 로 접근성 이름을 준다(마크업 참고).
+     32px 는 유니코드 글리프(26px)가 너무 작다는 피드백을 반영해 키운 값이다. */
   .icon-btn{width:32px;height:32px;padding:0;color:var(--muted);background:var(--surface);
             border:1px solid var(--line);border-radius:999px;cursor:pointer;
             display:inline-flex;align-items:center;justify-content:center;box-shadow:var(--shadow)}
@@ -242,34 +246,57 @@ DZH:HUB 데이터 계약
                 display:flex;flex-direction:column;
                 background:var(--surface);color:var(--ink);
                 border-left:1px solid var(--line);box-shadow:-16px 0 48px rgba(0,0,0,.28);
-                transform:translateX(100%);visibility:hidden}
-  /* 전이 선언을 "열린 상태" 규칙 안에만 둔다 — 클래스가 붙는 순간에는 슬라이드가 재생되고,
-     떨어지는 순간에는 전이 선언 자체가 사라져 즉시 닫힌다. 닫기 애니메이션을 만들지 않는
-     결정(SP5, MD4 승계)을 JS 타이머 없이 CSS 만으로 표현하는 방법이다. */
+                transform:translateX(100%);visibility:hidden;pointer-events:none;
+                transition:transform 180ms ease-out, visibility 180ms}
+  /* 전이 선언은 "닫힌(기본) 규칙"에 둔다. 클래스가 붙을 때와 떨어질 때 모두 살아 있는
+     유일한 위치다. visibility 를 같은 시간으로 함께 전이시키면 전이 중에는 계속 visible 로
+     계산돼(특수 보간) 나가는 동안 패널이 사라지지 않는다 — 지연도 상태 클래스도 필요
+     없다(SP12). */
   body.dzh-panel-open{overflow:hidden}
-  body.dzh-panel-open .detail-panel{transform:none;visibility:visible;
-                                    transition:transform 180ms ease-out}
+  body.dzh-panel-open .detail-panel{transform:none;visibility:visible;pointer-events:auto}
   /* 밀어내기 모드 — 이 값(1024)은 JS 의 PANEL_PUSH_MIN_WIDTH_PX 와 같아야 한다(T25-78). */
   @media (min-width:1024px){
     .detail-panel{left:auto;width:var(--dzh-panel-width);border-radius:14px 0 0 14px}
     /* .usage 는 position:fixed 라 body 패딩을 따라오지 않는다 — 같은 폭만큼 직접 옮긴다. */
-    body.dzh-panel-open{overflow:visible;padding-right:var(--dzh-panel-width);
-                        transition:padding-right 180ms ease-out}
-    body.dzh-panel-open #dzh-usage{transform:translateX(calc(-1 * var(--dzh-panel-width)));
-                                   transition:transform 180ms ease-out}
+    body{transition:padding-right 180ms ease-out}
+    #dzh-usage{transition:transform 180ms ease-out}
+    body.dzh-panel-open{overflow:visible;padding-right:var(--dzh-panel-width)}
+    body.dzh-panel-open #dzh-usage{transform:translateX(calc(-1 * var(--dzh-panel-width)))}
   }
-  /* 이 오버라이드는 위 세 규칙보다 반드시 뒤에 오고, 셀렉터를 그대로 반복해야 한다 —
+  /* 이 오버라이드는 위 규칙들보다 반드시 뒤에 오고, 셀렉터를 그대로 반복해야 한다 —
      body.dzh-panel-open .detail-panel 은 (0,2,1)이라 .detail-panel 단독으로는 못 덮는다
      (모달 시절 같은 함정을 한 번 밟았다 — 옛 254~257행 주석). */
   @media (prefers-reduced-motion:reduce){
+    .detail-panel,
+    body,
+    #dzh-usage,
     body.dzh-panel-open,
     body.dzh-panel-open .detail-panel,
     body.dzh-panel-open #dzh-usage{transition:none}
   }
-  .detail-head{display:flex;align-items:center;justify-content:space-between;gap:12px;
-               padding:14px 18px;border-bottom:1px solid var(--line)}
-  .detail-title{font-size:14px;font-weight:800;color:var(--head);overflow:hidden;
-                text-overflow:ellipsis;white-space:nowrap}
+  /* 패널 헤더(SP11) — 다이얼로그 타이틀바가 아니다. 이 허브의 헤더 관용구를 그대로 쓴다:
+     구분선 없음(.project-head·.usage-toggle 어느 쪽도 쓰지 않는다), 제목이 flex:1 1 auto 로
+     남는 폭을 먹고 컨트롤이 자연히 오른쪽 끝에 선다(.project-head 와 같은 구성).
+     border-bottom 을 지워도 경계가 흐려지지 않는다 — 아래 iframe 문서의 첫 카드가 자기
+     상단 테두리(1px var(--line), 좌우 16px 인셋, 반경 14px)를 그 자리에 이미 그린다
+     (commands/dashboard.md 1272~1273행 + 1352행: 패널 안에서는 #dz-page-head 가 숨어
+     .wrap 이 최상단에 밀착한다). 두 파일의 색 토큰 값이 동일하므로 라이트·다크 모두 성립한다.
+     좌우 패딩 16px 은 취향이 아니라 정렬값이다 — iframe 이 패널 콘텐츠 박스를 가득 채우므로
+     이 16px 과 대시보드 .wrap 의 padding:0 16px 이 같은 원점을 공유한다(SP11 ⑤). */
+  .detail-head{display:flex;align-items:center;gap:10px;padding:16px 16px 12px}
+  .detail-title{font-size:15px;font-weight:800;color:var(--head);overflow:hidden;
+                text-overflow:ellipsis;white-space:nowrap;min-width:0;flex:1 1 auto}
+  /* 닫기 컨트롤 — .icon-btn(32px 원형·그림자)은 페이지 최상위 액션(새로고침·테마)의 표기라
+     패널 안 컨트롤이 그것을 쓰면 헤드가 창 제목줄로 읽힌다. 카드의 .card-drag-handle 과
+     같은 계열(작고 투명하고 사각)로 낮춰 "이 구역의 컨트롤"이라는 위계를 준다.
+     글리프 »: 패널이 오른쪽으로 밀려 나가는 실제 동작(SP12)을 가리킨다 — 접근성 이름은
+     aria-label 이 고정하므로 글리프가 낯설어도 낭독은 "닫기"다. */
+  .detail-close{width:24px;height:24px;flex:0 0 auto;padding:0;color:var(--muted);
+                background:transparent;border:1px solid var(--line);border-radius:6px;
+                cursor:pointer;display:inline-flex;align-items:center;justify-content:center;
+                font:inherit;font-size:13px;line-height:1}
+  .detail-close:hover{color:var(--accent-ink);border-color:var(--accent)}
+  .detail-close:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
   .detail-frame{flex:1 1 auto;width:100%;border:0}
 </style>
 <script>
@@ -317,8 +344,8 @@ try{
 <aside id="dzh-detail-panel" class="detail-panel" role="dialog" aria-labelledby="dzh-detail-title">
   <div class="detail-head">
     <span id="dzh-detail-title" class="detail-title"></span>
-    <button id="dzh-detail-close" class="icon-btn" type="button"
-            aria-label="닫기" data-tooltip="닫기 (Esc)">✕</button>
+    <button id="dzh-detail-close" class="detail-close" type="button"
+            aria-label="닫기" data-tooltip="닫기 (Esc)">»</button>
   </div>
   <iframe id="dzh-detail-frame" class="detail-frame"
           aria-label="프로젝트 진행 대시보드"></iframe>
@@ -1139,6 +1166,7 @@ try{
   // (결정 N2·N7) 이 IIFE 는 snapshot 을 몰라도 된다 — 렌더 IIFE 와 완전히 분리돼 있다.
   var PANEL_OPEN_BODY_CLASS = 'dzh-panel-open';
   var PANEL_PUSH_MIN_WIDTH_PX = 1024;      // CSS 의 @media (min-width:1024px) 와 같은 값(GOTCHA 2)
+  var PANEL_CLOSE_ANIMATION_MS = 180;      // CSS 의 transition 시간과 같은 값(T25-84)
   var PROJECT_DASHBOARD_PATH_PREFIX = '/project/';
   var PROJECT_DASHBOARD_PATH_SUFFIX = '/dashboard.html';
   var BLANK_DOCUMENT_URL = 'about:blank';
@@ -1156,6 +1184,7 @@ try{
   var pushModeQuery = matchMedia('(min-width:' + PANEL_PUSH_MIN_WIDTH_PX + 'px)');
   var openDashboardKey = null;      // 열림 상태의 유일한 진실. body 클래스는 이 값의 투영이다
   var panelOpenerElement = null;    // 닫을 때 포커스를 되돌릴 요소
+  var panelBlankTimerId = null;     // 닫기 슬라이드가 끝난 뒤 iframe 을 비울 예약(SP14)
 
   // 대시보드 키로 서버 경로를 만든다. 순수 함수.
   function projectDashboardUrl(dashboardKey){
@@ -1166,6 +1195,16 @@ try{
   // 남겨, 카드를 옮겨 다닐수록 사용자의 뒤로가기가 허브가 아니라 iframe 을 되감게 된다.
   function loadPanelDocument(url){
     panelFrameEl.contentWindow.location.replace(url);
+  }
+
+  // 슬라이드가 끝난 뒤에 iframe 을 비운다(리스크 R-6) — 나가는 도중에 비우면 빠져나가는 패널이
+  // 흰 화면으로 번쩍인다. transitionend 를 쓰지 않는 이유는 GOTCHA 12: 저감 모드에서는 발화하지
+  // 않고 백그라운드 탭에서는 상한 없이 밀린다.
+  function scheduleBlankAfterSlide(){
+    panelBlankTimerId = setTimeout(function(){
+      panelBlankTimerId = null;
+      loadPanelDocument(BLANK_DOCUMENT_URL);
+    }, PANEL_CLOSE_ANIMATION_MS);
   }
 
   // 오버레이 모드로 열려 있을 때만 배경을 조작 불가로 만든다(SP3). 포커스 트랩 코드를 쓰지
@@ -1182,6 +1221,9 @@ try{
   // 재로딩하면 읽던 대시보드의 스크롤 위치가 사라진다(결정 SP8).
   function openDetailPanel(dashboardKey, displayName, openerElement){
     if(dashboardKey === openDashboardKey) return;
+    // 닫는 중(지연 창)에 들어온 클릭 — 예약을 취소하지 않으면 방금 연 패널의 문서를 그 타이머가
+    // 지운다. 이 한 줄이 "대기 타이머 ⇒ 닫힘" 불변식의 유일한 보존 지점이다(SP15).
+    if(panelBlankTimerId !== null){ clearTimeout(panelBlankTimerId); panelBlankTimerId = null; }
     var wasClosed = openDashboardKey === null;
     openDashboardKey = dashboardKey;
     panelTitleEl.textContent = displayName;
@@ -1194,13 +1236,14 @@ try{
   }
 
   // 패널을 닫고 iframe 을 비운다 — 숨은 iframe 의 5초 폴링을 반드시 멈춘다(리스크 R-6).
-  // visibility:hidden 도 display:none 도 iframe 의 타이머를 멈추지 않는다.
+  // visibility:hidden 도 display:none 도 iframe 의 타이머를 멈추지 않는다. 제목은 여기서
+  // 지우지 않는다 — 지우면 나가는 180ms 동안 머리가 빈 패널이 보인다(GOTCHA 16).
   function closeDetailPanel(){
-    if(openDashboardKey === null) return;
+    if(openDashboardKey === null) return;   // 여기서 반환되므로 대기 타이머는 존재할 수 없다(SP15)
     openDashboardKey = null;
     document.body.classList.remove(PANEL_OPEN_BODY_CLASS);
     applyBackgroundInert();                 // 포커스 복귀보다 먼저 — inert 안의 요소는 포커스를 못 받는다
-    loadPanelDocument(BLANK_DOCUMENT_URL);
+    scheduleBlankAfterSlide();
     if(panelOpenerElement && panelOpenerElement.isConnected) panelOpenerElement.focus();
     panelOpenerElement = null;
   }
