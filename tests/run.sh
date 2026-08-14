@@ -996,10 +996,10 @@ test_manifest_fields_complete() {
 }
 
 # T22: dashboard 템플릿 무결성 — LLM 지시문 방식이라 런타임 Edit 결과는 검증 대상이 아니고,
-# 설치·문서 정합성만 자동 검증한다 (하위 검증 T22-1~T22-110).
+# 설치·문서 정합성만 자동 검증한다 (하위 검증 T22-1~T22-127).
 test_dashboard_template_integrity() {
   local test_name="T22"
-  local test_desc="dashboard 템플릿 무결성 (T22-1~T22-110)"
+  local test_desc="dashboard 템플릿 무결성 (T22-1~T22-127)"
   log_test_name "$test_name" "$test_desc"
 
   local sandbox
@@ -1173,11 +1173,31 @@ test_dashboard_template_integrity() {
     return 1
   fi
 
-  # T22-27: 색 토큰 불변 — 새 디자인 시스템 도입(요청 위반) 방지, 완전 일치로 확인
-  if ! grep -qF ':root{--ink:#172033;--muted:#5E6B7D;--line:#D9E2EC;--soft:#F4F7FB;--blue:#1E5AA8;--navy:#12335B;--green:#1F8A70;--orange:#F59E0B;--red:#C2410C;}' "$dashboard_command_file"; then
-    record_failure "$test_name" "T22-27: :root 색 토큰 줄이 변경됨"
-    return 1
-  fi
+  # T22-27: 색 토큰 팔레트 이식(허브 토큰 전면 이식) — 「완전 일치」 안전망을 푸는 대신
+  # ① 정방향(신규 시맨틱 토큰명 존재) ② 역방향(구 카테고리 토큰명 부재)
+  # ③ 역방향(색각 안전성 없는 구형 리터럴 부재, T25-29 와 대칭)의 3중 검사로 대체한다 —
+  # 안전망의 성격만 바뀌고 강도는 유지된다(R3).
+  local new_color_token
+  for new_color_token in '--bg:' '--surface:' '--head:' '--accent:' '--accent-ink:' '--accent-soft:' '--attention:' '--attention-soft:' '--shadow:'; do
+    if ! grep -qF -- "$new_color_token" "$dashboard_command_file"; then
+      record_failure "$test_name" "T22-27: 신규 색 토큰 미발견: $new_color_token"
+      return 1
+    fi
+  done
+  local legacy_color_token
+  for legacy_color_token in '--navy:' '--blue:' '--green:' '--red:' '--orange:'; do
+    if grep -qF -- "$legacy_color_token" "$dashboard_command_file"; then
+      record_failure "$test_name" "T22-27: 구 색 토큰이 남아 있음: $legacy_color_token"
+      return 1
+    fi
+  done
+  local legacy_color_literal
+  for legacy_color_literal in '#1F8A70' '#C2410C' '#F59E0B'; do
+    if grep -qF -- "$legacy_color_literal" "$dashboard_command_file"; then
+      record_failure "$test_name" "T22-27: 색각 안전성 없는 팔레트가 남아 있음: $legacy_color_literal"
+      return 1
+    fi
+  done
 
   # T22-28: 게이트 전용 개념 미신설 — 별도 게이트 컴포넌트 부활(확정 방향 5 위반) 방지.
   # 이 검증은 매칭되면 실패다(역방향 assertion) — dz-gate- 셀렉터가 존재해서는 안 된다.
@@ -1240,7 +1260,9 @@ test_dashboard_template_integrity() {
     return 1
   fi
 
-  # T22-34: 이동 방식 + 복귀 경로 — 복제 방식으로 바꾸거나 복귀를 빠뜨려 opener 가 영구히 비는 퇴행 방지
+  # T22-34: 이동 방식 + 복귀 경로 — 복제 방식으로 바꾸거나 복귀를 빠뜨려 opener 가 영구히 비는 퇴행 방지.
+  # 복귀 앵커는 wrapReturnAnchor(=wrap.nextSibling) 여야 한다 — pipButton 은 #dz-top-actions 의
+  # 자식이라 document.body.insertBefore 의 참조 노드로 쓰면 NotFoundError 를 던진다(P0, PRP §0).
   if ! grep -qF 'body.appendChild(wrap)' "$dashboard_command_file"; then
     record_failure "$test_name" "T22-34: body.appendChild(wrap) 미발견"
     return 1
@@ -1249,8 +1271,16 @@ test_dashboard_template_integrity() {
     record_failure "$test_name" "T22-34: pagehide 미발견"
     return 1
   fi
-  if ! grep -qF 'insertBefore(wrap, pipButton)' "$dashboard_command_file"; then
-    record_failure "$test_name" "T22-34: insertBefore(wrap, pipButton) 미발견(PiP 복귀 경로 미검증)"
+  if ! grep -qF 'insertBefore(wrap, wrapReturnAnchor)' "$dashboard_command_file"; then
+    record_failure "$test_name" "T22-34: insertBefore(wrap, wrapReturnAnchor) 미발견(PiP 복귀 경로 미검증)"
+    return 1
+  fi
+  if grep -qF 'insertBefore(wrap, pipButton)' "$dashboard_command_file"; then
+    record_failure "$test_name" "T22-34: insertBefore(wrap, pipButton) 이 남아있음(NotFoundError 회귀, P0)"
+    return 1
+  fi
+  if ! grep -qF 'wrapReturnAnchor = wrap.nextSibling' "$dashboard_command_file"; then
+    record_failure "$test_name" "T22-34: wrapReturnAnchor = wrap.nextSibling 앵커 캡처 미발견"
     return 1
   fi
 
@@ -1276,11 +1306,17 @@ test_dashboard_template_integrity() {
 
   # T22-37: 플로팅 UI 가 .wrap 바깥에 있는지 — 템플릿에서의 마지막 등장 위치로 판정한다.
   # (.wrap 안에 있으면 PiP 창으로 같이 이동해 버튼으로 창을 닫을 수 없게 된다)
-  local pip_button_line wrap_end_line
+  # 판정은 "줄 번호 뒤"가 아니라 ".wrap 범위 밖"이다 — 프로젝트 헤더 도입으로 버튼이 .wrap
+  # 앞으로 올 수 있다(PRP dashboard-project-header-and-progress-guard.md §8.1). .wrap 의
+  # 시작(<div class="wrap"> 마지막 등장)과 끝(#dz-updated 마지막 등장) 사이 구간에만 있으면
+  # 실패로 판정해, 안쪽 배치는 그대로 차단하고 앞/뒤 배치는 모두 허용한다.
+  local pip_button_line wrap_open_line wrap_end_line
   pip_button_line=$(grep -n 'id="dz-pip-btn"' "$dashboard_command_file" | tail -1 | cut -d: -f1)
+  wrap_open_line=$(grep -n '<div class="wrap">' "$dashboard_command_file" | tail -1 | cut -d: -f1)
   wrap_end_line=$(grep -n 'id="dz-updated"' "$dashboard_command_file" | tail -1 | cut -d: -f1)
-  if [[ -z "$pip_button_line" || -z "$wrap_end_line" || "$pip_button_line" -lt "$wrap_end_line" ]]; then
-    record_failure "$test_name" "T22-37: 플로팅 버튼이 .wrap 바깥(#dz-updated 뒤)에 있지 않음"
+  if [[ -z "$pip_button_line" || -z "$wrap_open_line" || -z "$wrap_end_line" ]] \
+    || { [[ "$pip_button_line" -ge "$wrap_open_line" ]] && [[ "$pip_button_line" -le "$wrap_end_line" ]]; }; then
+    record_failure "$test_name" "T22-37: 플로팅 버튼이 .wrap 범위 안에 있음(.wrap 바깥이어야 한다)"
     return 1
   fi
 
@@ -1996,6 +2032,192 @@ test_dashboard_template_integrity() {
   fi
   if ! grep -qF 'FOREIGN' <<< "$log_section"; then
     record_failure "$test_name" "T22-110: log 절에 FOREIGN(소유권 검증) 참조 미발견(반쪽 구현)"
+    return 1
+  fi
+
+  # T22-111(허브 T25-28 과 대칭): 다크 테마는 미디어 쿼리 + data-theme 속성 오버라이드 둘 다로
+  # 성립해야 한다 — 한쪽만 남으면 localStorage 차단 환경 또는 수동 오버라이드가 죽는다.
+  if ! grep -qF "prefers-color-scheme" "$dashboard_command_file"; then
+    record_failure "$test_name" "T22-111: prefers-color-scheme 가 없음"
+    return 1
+  fi
+  if ! grep -qF ':root[data-theme="dark"]' "$dashboard_command_file"; then
+    record_failure "$test_name" "T22-111: :root[data-theme=\"dark\"] 가 없음"
+    return 1
+  fi
+
+  # T22-112: 'dz-theme' 리터럴이 head FOUC 스크립트 + 본문 IIFE 두 곳에 각각 등장해야 한다
+  # (head 스크립트는 자족적이어야 해서 상수 공유가 불가능하다).
+  local dz_theme_literal_count
+  dz_theme_literal_count=$(grep -oF "'dz-theme'" "$dashboard_command_file" | wc -l | tr -d ' ')
+  if [[ "$dz_theme_literal_count" -lt 2 ]]; then
+    record_failure "$test_name" "T22-112: 'dz-theme' 리터럴이 ${dz_theme_literal_count}회만 등장(기대 2회 이상)"
+    return 1
+  fi
+
+  # T22-113(FOUC 방지 회귀): data-theme 설정이 <head> 테마 스크립트에 있고, 그 줄이 <body>
+  # 여는 태그보다 앞서야 첫 페인트부터 확정 테마로 그려진다(줄 번호 비교, T22-37 방식).
+  local head_theme_line body_open_line
+  head_theme_line=$(grep -n "document.documentElement.setAttribute('data-theme', theme);" "$dashboard_command_file" | head -1 | cut -d: -f1)
+  body_open_line=$(grep -n '^<body>$' "$dashboard_command_file" | head -1 | cut -d: -f1)
+  if [[ -z "$head_theme_line" || -z "$body_open_line" || "$head_theme_line" -gt "$body_open_line" ]]; then
+    record_failure "$test_name" "T22-113: <head> 테마 스크립트의 data-theme 설정이 <body> 보다 앞에 있지 않음"
+    return 1
+  fi
+
+  # T22-114: 테마 토글이 .wrap 바깥에 있는지 — 템플릿에서의 마지막 등장 위치로 판정한다
+  # (T22-37 과 같은 방식, ".wrap 범위 밖" 판정으로 일반화). .wrap 안에 있으면 PiP 창으로 같이
+  # 이동해 opener 에서 토글이 사라진다.
+  local theme_toggle_line wrap_open_line wrap_end_line
+  theme_toggle_line=$(grep -n 'id="dz-theme-toggle"' "$dashboard_command_file" | tail -1 | cut -d: -f1)
+  wrap_open_line=$(grep -n '<div class="wrap">' "$dashboard_command_file" | tail -1 | cut -d: -f1)
+  wrap_end_line=$(grep -n 'id="dz-updated"' "$dashboard_command_file" | tail -1 | cut -d: -f1)
+  if [[ -z "$theme_toggle_line" || -z "$wrap_open_line" || -z "$wrap_end_line" ]] \
+    || { [[ "$theme_toggle_line" -ge "$wrap_open_line" ]] && [[ "$theme_toggle_line" -le "$wrap_end_line" ]]; }; then
+    record_failure "$test_name" "T22-114: 테마 토글이 .wrap 범위 안에 있음(.wrap 바깥이어야 한다)"
+    return 1
+  fi
+
+  # T22-115: 허브 모달(iframe) 안에서는 테마 토글이 숨어야 한다 — 남으면 허브 토글과 중복된다.
+  if ! grep -qF 'body.dz-embedded #dz-theme-toggle' "$dashboard_command_file"; then
+    record_failure "$test_name" "T22-115: body.dz-embedded #dz-theme-toggle CSS 규칙 미발견"
+    return 1
+  fi
+
+  # T22-116: PiP 창으로 data-theme 를 전파하는 코드가 있는지 — 없으면 다크에서 플로팅 창만
+  # 흰 화면이 된다(<style> 복사만으로는 속성이 따라가지 않는다).
+  if ! grep -qF "pipDocument.documentElement.setAttribute('data-theme'" "$dashboard_command_file"; then
+    record_failure "$test_name" "T22-116: PiP 분기에 pipDocument.documentElement.setAttribute('data-theme' 미발견"
+    return 1
+  fi
+
+  # T22-117(팔레트 회귀 방지, T25-29 와 대칭): 토큰화한 자리에 구형 카테고리 리터럴이 다시
+  # 기어들어오지 않았는지 확인한다.
+  local legacy_hex_literal
+  for legacy_hex_literal in '#E5F3EE' '#EAF2FB' '#FBE9E2' '#E7EAF3' '#2D78C8' '#4B5A6D' '#1F8A70' '#C2410C' '#F59E0B'; do
+    if grep -qF -- "$legacy_hex_literal" "$dashboard_command_file"; then
+      record_failure "$test_name" "T22-117: 색각 안전성 없는 구형 리터럴이 남아 있음: $legacy_hex_literal"
+      return 1
+    fi
+  done
+
+  # T22-118(단방향 읽기 계약, iframe 테마 동기화 안 D): 'dzh-theme' 리터럴은 존재해야 하지만,
+  # 대시보드가 이 키에 쓰는 코드(setItem('dzh-theme')는 없어야 한다 — 소유자는 허브뿐이다.
+  if ! grep -qF "'dzh-theme'" "$dashboard_command_file"; then
+    record_failure "$test_name" "T22-118: 'dzh-theme' 리터럴 미발견(허브 모달 테마 동기화 코드 자체가 없음)"
+    return 1
+  fi
+  if grep -qF "setItem('dzh-theme'" "$dashboard_command_file"; then
+    record_failure "$test_name" "T22-118: setItem('dzh-theme' 발견 — 대시보드가 허브 키에 쓰고 있음(단방향 읽기 계약 위반)"
+    return 1
+  fi
+  # 실제 쓰기 지점(setItem(storageKey, ...))은 리터럴이 아니라 변수를 거치므로 위 grep 만으로는
+  # 우회 가능하다 — 클릭 핸들러 안에 명시적 embedded 가드가 있는지도 확인한다(검수 지적 반영).
+  if ! grep -A2 "themeToggleButton.addEventListener('click'" "$dashboard_command_file" | grep -qF 'if(embedded) return;'; then
+    record_failure "$test_name" "T22-118: 테마 토글 클릭 핸들러에 embedded 가드 없음(CSS display:none 에만 의존)"
+    return 1
+  fi
+
+  # T22-119(문서=스펙 정합): 「정적 요소」 표에 테마 토글 행, 폴링 계약 표에 data-theme 언급이
+  # 있어야 한다 — 코드만 바뀌고 스펙 문서가 뒤처지는 회귀를 막는다.
+  if ! grep -qF '#dz-theme-toggle` | 라이트/다크 테마 토글' "$dashboard_command_file"; then
+    record_failure "$test_name" "T22-119: 「정적 요소 추가」 표에 #dz-theme-toggle 행 미발견"
+    return 1
+  fi
+  if ! grep -qF '<html data-theme>' "$dashboard_command_file"; then
+    record_failure "$test_name" "T22-119: 폴링 계약 표에 <html data-theme> 언급 미발견"
+    return 1
+  fi
+
+  # T22-120(다크 대비 예비안, PRP §5.4): 다크에서 --accent-soft(완료 배경) 와 --soft(대기 배경)의
+  # 명도차가 실측 대비 1.15:1 로 사실상 구분되지 않아, 완료 상태에 형태 채널(inset ring)을
+  # 더했다. 정확히 3곳(li.done .num 1 + 매트릭스 done 셀 사본 2)에 있어야 한다 — 개수가
+  # 달라지면 어느 한쪽 사본이 누락됐거나 의도치 않게 다른 곳에도 번진 것이다.
+  local done_ring_count
+  done_ring_count=$(grep -c 'box-shadow:inset 0 0 0 1px var(--accent)' "$dashboard_command_file")
+  if [[ "$done_ring_count" -ne 3 ]]; then
+    record_failure "$test_name" "T22-120: 완료 상태 inset ring 개수가 3이 아님(실제: $done_ring_count)"
+    return 1
+  fi
+
+  # T22-121(프로젝트 헤더): #dz-project-name 요소가 사라지거나 허브와 다른 클래스로 갈라지는
+  # 회귀 방지 — id 와 class 가 같은 줄에 있어야 한다(PRP dashboard-project-header-and-progress-guard.md §8.2).
+  local project_name_element_line
+  project_name_element_line=$(grep -n 'id="dz-project-name"' "$dashboard_command_file" | tail -1)
+  if [[ -z "$project_name_element_line" ]] || ! grep -qF 'class="project-name"' <<< "$project_name_element_line"; then
+    record_failure "$test_name" "T22-121: id=\"dz-project-name\" 과 class=\"project-name\" 이 같은 줄에 없음"
+    return 1
+  fi
+
+  # T22-122(프로젝트 헤더): 줄 번호 순서 #dz-page-head < #dz-project-name < #dz-top-actions < .wrap.
+  # ① 클러스터가 헤더 밖으로 이탈(요청 1 원상복귀) ② 헤더가 .wrap 안으로 들어가 PiP 로 딸려가는
+  # 회귀를 한 검사로 동시에 막는다("같은 행 안 + .wrap 바깥"을 함께 고정).
+  local page_head_line top_actions_element_line wrap_div_line
+  page_head_line=$(grep -n 'id="dz-page-head"' "$dashboard_command_file" | tail -1 | cut -d: -f1)
+  top_actions_element_line=$(grep -n 'id="dz-top-actions"' "$dashboard_command_file" | tail -1 | cut -d: -f1)
+  wrap_div_line=$(grep -n '<div class="wrap">' "$dashboard_command_file" | tail -1 | cut -d: -f1)
+  if [[ -z "$page_head_line" || -z "$top_actions_element_line" || -z "$wrap_div_line" ]] \
+    || ! [[ "$page_head_line" -lt "${project_name_element_line%%:*}" \
+         && "${project_name_element_line%%:*}" -lt "$top_actions_element_line" \
+         && "$top_actions_element_line" -lt "$wrap_div_line" ]]; then
+    record_failure "$test_name" "T22-122: 헤더 요소 순서(#dz-page-head < #dz-project-name < #dz-top-actions < .wrap)가 어긋남"
+    return 1
+  fi
+
+  # T22-123(역방향, 프로젝트 헤더): 흐름 배치로 옮겼는데 #dz-top-actions 에 position:fixed 가
+  # 남아 헤더에 빈 칸만 생기고 클러스터는 우상단에 뜨는 회귀 방지.
+  local top_actions_css_line
+  top_actions_css_line=$(grep -n '#dz-top-actions{' "$dashboard_command_file" | tail -1)
+  if [[ -z "$top_actions_css_line" ]]; then
+    record_failure "$test_name" "T22-123: #dz-top-actions{ CSS 규칙 줄 미발견"
+    return 1
+  fi
+  if grep -qF 'position:fixed' <<< "$top_actions_css_line"; then
+    record_failure "$test_name" "T22-123: #dz-top-actions 에 position:fixed 가 남아있음(흐름 배치 회귀)"
+    return 1
+  fi
+
+  # T22-124(프로젝트 헤더): 허브 모달에서 프로젝트 명이 모달 제목과 중복 표시되는 회귀 방지.
+  if ! grep -qF 'body.dz-embedded #dz-page-head' "$dashboard_command_file"; then
+    record_failure "$test_name" "T22-124: body.dz-embedded #dz-page-head CSS 규칙 미발견"
+    return 1
+  fi
+
+  # T22-125(프로젝트 헤더, T22-119 와 대칭): 값 출처(basename "$PWD")가 사라져 헤더가 플레이스홀더로
+  # 남는 회귀 + 코드만 바뀌고 스펙 문서(구조 요소 목록)가 뒤처지는 회귀를 함께 막는다.
+  if ! grep -qF 'basename "$PWD"' "$dashboard_command_file"; then
+    record_failure "$test_name" "T22-125: basename \"\$PWD\" 미발견(프로젝트 명 값 출처 없음)"
+    return 1
+  fi
+  if ! grep -qF '`#dz-project-name` — 프로젝트 표시 이름' "$dashboard_command_file"; then
+    record_failure "$test_name" "T22-125: 구조 요소 목록에 #dz-project-name 행 미발견"
+    return 1
+  fi
+
+  # T22-126(요청 2): 「호출 규약」의 진행 단계 가드 문구 — 커밋·푸시를 단계 목록에서 배제한다는
+  # 명문 규칙이 편집 중 유실되는 회귀 방지.
+  local call_convention_section
+  call_convention_section=$(sed -n '/^## 호출 규약/,/^## CLAUDE.md 트리거/p' "$dashboard_command_file")
+  if [[ -z "$call_convention_section" ]]; then
+    record_failure "$test_name" "T22-126: 「호출 규약」 절 범위 추출 실패 — 앵커가 깨졌다"
+    return 1
+  fi
+  local progress_guard_token
+  for progress_guard_token in '진행 단계 목록에' '커밋' 'log commit' '검수 완료가 곧 100%'; do
+    if ! grep -qF -- "$progress_guard_token" <<< "$call_convention_section"; then
+      record_failure "$test_name" "T22-126: 진행 단계 가드 문구 토큰 미발견: $progress_guard_token"
+      return 1
+    fi
+  done
+
+  # T22-127(요청 2): 복사용 표준 단계 목록 리터럴과 init 파싱 시 커밋/푸시 제외 규칙이 사라지는
+  # 회귀 방지.
+  if ! grep -qF '설계|승인|구현|검수' "$dashboard_command_file"; then
+    record_failure "$test_name" "T22-127: 표준 단계 목록 리터럴(설계|승인|구현|검수) 미발견"
+    return 1
+  fi
+  if ! grep -qF '제외하고 진행' "$dashboard_command_file"; then
+    record_failure "$test_name" "T22-127: init 3단계에 '제외하고 진행' 문구 미발견"
     return 1
   fi
 

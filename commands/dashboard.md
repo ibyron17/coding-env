@@ -37,6 +37,10 @@ argument-hint: "init \"<제목>\" \"<단계1|...> 또는 <그룹A:단계1,단계
 토큰일 때만 이 기능이고, `log` 다음에 오는 `impl` 은 로그 항목의 종류다. 위치가 다르므로
 판정에 모호함이 없다.
 
+> **진행 단계 목록에 `커밋`·`푸시`를 넣지 않는다.** 커밋은 진행 단계가 아니라 결과 기록이며
+> `log commit` 으로만 남긴다. **검수 완료가 곧 100% 다** — 커밋은 분모에 들어가지 않는다.
+> 전체 경로의 표준 단계 목록은 `"설계|승인|구현|검수"` 다.
+
 ## CLAUDE.md 트리거 (메인 세션 전용, 참고)
 
 | 시점 | 호출 |
@@ -50,6 +54,8 @@ argument-hint: "init \"<제목>\" \"<단계1|...> 또는 <그룹A:단계1,단계
 | 구현 완료 | `step 3 done` + `log impl` |
 | 검수 PASS / FAIL | `step 4 done|wait` + `log pass|fail` |
 | 커밋·푸시 | `log commit` — 자동 발행이 띄운 로컬 서버를 함께 종료한다 |
+
+> 표준 단계 목록 = `설계|승인|구현|검수`. 커밋·푸시는 이 목록에 넣지 않는다(위 「호출 규약」 참조).
 
 > `impl` 은 **선택**이다. 세부 작업이 서넛 이하이거나 병렬이 없으면 부르지 않아도 되며, 부르지
 > 않으면 카드 자체가 화면에 나타나지 않는다. 갱신 시점은 오케스트레이터가 직접 아는 두 순간
@@ -76,7 +82,7 @@ argument-hint: "init \"<제목>\" \"<단계1|...> 또는 <그룹A:단계1,단계
 
 ### 정적(불가침)
 
-`<style>` 블록, `:root` 색 토큰, 카드 골격, 하단 스크립트.
+`<style>` 블록, `:root` 색 토큰, 카드 골격, 하단 스크립트, `<head>` 테마 스크립트, `#dz-theme-toggle`.
 
 ### 동적(치환 대상) — 6 셀렉터
 
@@ -98,6 +104,8 @@ argument-hint: "init \"<제목>\" \"<단계1|...> 또는 <그룹A:단계1,단계
 
 - `#dz-matrix` — 매트릭스 `<table>` 자체
 - `#dz-group-{g}` — 행 머리 `<th>`. 그룹명 텍스트를 담는다
+- `#dz-project-name` — 프로젝트 표시 이름 `<span>`. `init` 이 1회 쓰고 끝난다(§ 「정적 요소 추가」·
+  「왜 `.wrap` 바깥인가」 참조) — 파일과 라이브 DOM 이 발산할 여지가 없어 폴링 동기화 대상이 아니다
 
 **불변식 (이 두 가지가 깨지면 `step` 의 결정성이 무너진다)**
 
@@ -174,10 +182,10 @@ grep 하는 `#dz-log` 여는 태그에 얹혀 있어야 `log commit` 의 자동 
 
 | `log` 인자 | `data-kind` | 배지 class | 배지 라벨 | 색(토큰) |
 |-----------|-------------|-----------|----------|---------|
-| `impl` | `impl` | `.badge.impl` | 구현 | `--blue` |
-| `pass` | `review` | `.badge.pass` | 검수 PASS | `--green` |
-| `fail` | `review` | `.badge.fail` | 검수 FAIL | `--red`(신규 토큰 `#C2410C`) |
-| `commit` | `commit` | `.badge.commit` | 커밋 | `--navy` |
+| `impl` | `impl` | `.badge.impl` | 구현 | `--accent-soft`/`--accent-ink` (파랑 틴트) |
+| `pass` | `review` | `.badge.pass` | 검수 PASS | `--accent-ink`/`--bg` (파랑 채움) |
+| `fail` | `review` | `.badge.fail` | 검수 FAIL | `--attention`/`--attention-soft` + 점선 테두리 (주황 경고) |
+| `commit` | `commit` | `.badge.commit` | 커밋 | `--head`/`--soft` + 테두리 |
 
 ### 갱신 모드 — 런타임에 결정되는 두 갈래
 
@@ -196,6 +204,9 @@ UpdateMode
   버튼·안내 줄이 CSS 로 숨는다 — 패널을 닫으면 iframe 이 `about:blank` 로 가 opener 문서가
   파괴되므로, 그 안에서 플로팅에 진입하면 되돌아갈 곳이 사라진다. 폴링은 이 판정과 무관하게
   그대로 동작한다.
+- 임베드 시 테마는 허브가 소유한 `localStorage['dzh-theme']` 를 읽기 전용으로 참조해 따라가고,
+  대시보드 자체의 `#dz-theme-toggle` 은 `body.dz-embedded` 로 숨는다 — 패널 안 대시보드가 허브와
+  다른 테마로 보이지 않게 하는 동시에 중복 토글을 없앤다.
 - 창 높이는 고정값이 아니다. 압축 뷰는 작업 추적 카드가 빠져 콘텐츠가 짧으므로,
   `measureCompactHeight()` 가 여는 시점에 `.wrap` 을 `body.dz-pip` 상태로 순간 측정해 그 실제
   높이(+24px 여백 +`PIP_CHROME_ALLOWANCE` 창 여백)를 PiP 창을 여는 호출의 초기 크기로 넘긴다.
@@ -209,15 +220,21 @@ UpdateMode
 
 | 요소 | 역할 |
 |------|------|
-| `#dz-pip-btn` | 플로팅 진입/종료 버튼. `.wrap` **바깥**(`<body>` 직계)에 둔다. 허브 상세 패널(iframe) 안에서는 `body.dz-embedded` 로 숨는다(R1) |
-| `#dz-pip-hint` | 상태·사유 한 줄. 기본 `hidden`, 스크립트가 텍스트를 넣을 때만 노출 |
+| `#dz-page-head` | 프로젝트 명 + `#dz-top-actions` + `#dz-pip-hint` 를 담는 헤더 행. `.wrap` **바깥**(`<body>` 직계)에 둔다. 허브 상세 패널(iframe) 안에서는 `body.dz-embedded` 로 숨는다(패널 제목이 같은 이름을 이미 표시한다) |
+| `#dz-project-name` | 프로젝트 표시 이름. `#dz-page-head` 안, 헤더 행의 첫 요소 |
+| `#dz-top-actions` | 플로팅 버튼·테마 토글을 묶는 클러스터. `#dz-page-head` **헤더 행 안**에 흐름 배치로 있다(`.wrap` 바깥이라는 사실은 그대로다) |
+| `#dz-pip-btn` | 플로팅 진입/종료 버튼. `#dz-top-actions` 안에 있다. 허브 상세 패널(iframe) 안에서는 `body.dz-embedded` 로 숨는다(R1) |
+| `#dz-pip-hint` | 상태·사유 한 줄. `#dz-page-head` 헤더 행 안(두 번째 줄로 흐른다). 기본 `hidden`, 스크립트가 텍스트를 넣을 때만 노출 |
+| `#dz-theme-toggle` | 라이트/다크 테마 토글 버튼(`.icon-btn`). `#dz-top-actions` 안에 있다. 허브 상세 패널(iframe) 안에서는 `body.dz-embedded` 로 숨고, 테마는 허브 키를 읽기 전용으로 따라간다 |
 | `body.dz-pip` | PiP 창 문서의 `<body>` 에만 붙는 클래스. 좁은 창용 여백 축소 규칙의 스코프 |
-| `body.dz-embedded` | `window.self !== window.top` 이면 붙는 클래스. `#dz-pip-btn`·`#dz-pip-hint` 를 숨기는 스코프이며 폴링·동기화와 무관하다(R1) |
+| `body.dz-embedded` | `window.self !== window.top` 이면 붙는 클래스. `#dz-page-head`(행 전체)와 `#dz-pip-btn`·`#dz-pip-hint`·`#dz-theme-toggle`(컨트롤 단위)를 숨기는 스코프이며 폴링·동기화와 무관하다(R1) |
 | `#dz-log-card` | 「작업 추적」 카드 `<div>`. `init`/`step`/`log` 도, 폴링도 이 요소 자체를 치환하지 않는다. PiP 압축 뷰가 CSS 로 숨기기 위한 유일한 용도이며, DOM 에서 제거하지 않는다 |
 
 > **왜 `.wrap` 바깥인가**: 플로팅은 `.wrap` 서브트리를 **통째로 PiP 창으로 옮기는** 방식이다.
-> 버튼이 `.wrap` 안에 있으면 버튼도 같이 옮겨가 (a) 좁은 창을 차지하고 (b) opener 에는 창을 닫을
-> 수단이 남지 않는다. 이 배치는 **T22-37 이 줄 번호 비교로 강제**한다.
+> 헤더가 `.wrap` 안에 있으면 같이 옮겨가 (a) 좁은 창을 차지하고 (b) opener 에는 창을 닫을
+> 수단이 남지 않는다. 헤더가 프로젝트 명 행으로 바뀌어도 이 배치는 그대로이며, **T22-37 이
+> `.wrap` 범위 밖 판정으로 강제**한다(단순 줄 번호 "뒤" 비교에서, `.wrap` 앞뒤 어느 배치든
+> 안쪽 범위만 배제하는 방식으로 일반화했다).
 
 ### 불변식 추가 (기존 1~6에 이어)
 
@@ -245,8 +262,10 @@ UpdateMode
 | `#dz-steps, #dz-matrix` (둘 중 존재하는 것) | `outerHTML` 대입 | **선형/매트릭스 분기를 하나의 연산으로 흡수**한다. 한 파일에 하나만 존재한다는 불변식 1 덕분에 셀렉터 하나로 족하다 |
 | `#dz-log` | `innerHTML` 대입 | 항목 prepend·`<details open>` 회수까지 파일이 곧 정답이다. **여는 태그의 속성(`data-server-port`)은 `innerHTML` 대입 대상이 아니어서 폴링이 건드리지 않는다** — 라이브 DOM 의 값은 파일보다 낡을 수 있으며, 그래도 되는 이유는 불변식 8 이다 |
 | `input[name="dzf"]` · `label[for^="dzf-"]` · `<style>` | **치환하지 않는다** | 라디오를 재삽입하면 사용자가 고른 유형 필터가 5초마다 초기화된다 |
-| `#dz-pip-btn` · `#dz-pip-hint` | **치환하지 않는다** | `.wrap` 바깥 = 동기화 영역 밖 |
+| `#dz-pip-btn` · `#dz-pip-hint` · `#dz-theme-toggle` | **치환하지 않는다** | `.wrap` 바깥 = 동기화 영역 밖 |
+| `#dz-project-name` | **치환하지 않는다** | `.wrap` 바깥 = 동기화 영역 밖 + `init` 이 1회만 쓰고 이후 불변 |
 | `#dz-impl-card` | `outerHTML` 대입 | 카드 안에 라디오·`<details>` 같은 **사용자 상태가 하나도 없어** 통째 교체가 안전하다. 항목·카운터를 따로 동기화하면 함수가 둘로 늘고, 목록 길이가 바뀌는 `impl set` 순간을 별도로 처리해야 한다 |
+| `<html data-theme>` | **치환하지 않는다** | 테마는 별도 IIFE 와 `localStorage`·`storage` 이벤트가 관리한다. 폴링은 `fresh` 문서(파싱만 된 오프스크린 DOM)를 참조할 뿐 `<html>` 자체를 교체하지 않는다 |
 
 **동기화 단위는 "파일 전체 문자열"이다.** 직전 폴링에서 받은 HTML 과 **문자열이 같으면 아무것도 하지
 않는다.** 라이브 DOM 과 비교하지 않는 이유: 사용자가 `<details>` 를 손으로 펼치면 라이브 DOM 은
@@ -362,11 +381,11 @@ Cell
   .matrix th,.matrix td{border:1px solid var(--line);padding:9px 10px}
   .matrix thead th{font-size:12px;font-weight:800;background:var(--soft);color:var(--muted);text-align:center}
   .matrix th.corner{text-align:left}
-  .matrix th.group{text-align:left;font-weight:700;color:var(--navy);width:34%}
+  .matrix th.group{text-align:left;font-weight:700;color:var(--head);width:34%}
   .matrix td.cell{text-align:center;font-size:12px;font-weight:800;background:var(--soft);color:var(--muted)}
-  .matrix td.cell[data-state="done"]{background:#E5F3EE;color:var(--green)}
-  .matrix td.cell[data-state="active"]{background:#EAF2FB;color:var(--blue)}
-  .matrix td.cell[data-state="na"]{background:#fff;color:var(--line)}
+  .matrix td.cell[data-state="done"]{background:var(--accent-soft);color:var(--accent-ink);box-shadow:inset 0 0 0 1px var(--accent)}
+  .matrix td.cell[data-state="active"]{background:var(--accent-ink);color:var(--bg)}
+  .matrix td.cell[data-state="na"]{background:var(--surface);color:var(--line)}
 ```
 
 `wait` 에는 규칙이 없다 — `td.cell` 기본값이 곧 대기 상태다(선형 분기에서 `li` 기본값이 대기인 것과 같은 구조).
@@ -427,16 +446,23 @@ Cell
 
 1. **자리를 비우고 템플릿을 쓴다.** 먼저 Bash 1회:
    ```bash
-   mkdir -p .claude && rm -f .claude/dashboard.html && od -An -N4 -tx1 /dev/urandom | tr -d ' \n' && echo
+   mkdir -p .claude && rm -f .claude/dashboard.html && basename "$PWD" && od -An -N4 -tx1 /dev/urandom | tr -d ' \n' && echo
    ```
    `mkdir -p` 도 `rm -f` 도 대상이 없을 때 조용히 성공하므로 존재 확인이 필요 없다.
    **이 제거를 생략하지 않는다** — Write 도구는 이 세션에서 읽지 않은 기존 파일을 덮어쓰지 못한다.
-   먼저 지우면 Write 는 언제나 "새 파일 생성"이 되어 절차가 결정적이다.
+   먼저 지우면 Write 는 언제나 "새 파일 생성"이 되어 절차가 결정적이다. 이 명령은 **두 줄**을
+   출력한다.
 
-   마지막 출력 8글자(`[0-9a-f]{8}`)가 **이번 세션의 소유 토큰**이다. 대화 컨텍스트에 기억하고,
+   **첫 줄** — `basename "$PWD"` 의 출력이 헤더에 채울 프로젝트 표시 이름이다 — 허브
+   (`hub_model._display_name`)와 같은 규칙(경로의 마지막 세그먼트)이라 같은 프로젝트가 두 화면에서
+   같은 문자열로 보인다. 이 값은 **기억에 의존하지 않고** 셸이 이번 호출에서 방금 출력한 것을
+   그대로 쓴다.
+
+   **마지막 줄의 8글자**(`[0-9a-f]{8}`)가 **이번 세션의 소유 토큰**이다. 대화 컨텍스트에 기억하고,
    8단계에서 파일에 각인하며, 10단계 보고에 한 줄 적는다. `/dev/urandom` 은 어디에나 있고 `od`·`tr`
    은 POSIX 유틸리티다 — `python3`·`openssl` 에 의존하지 않는다(둘 다 없을 수 있는 환경을 이 문서는
-   이미 정상 경로로 다룬다).
+   이미 정상 경로로 다룬다). 프로젝트 이름 출력을 토큰보다 앞에 두는 이유는 이 순서 하나다 —
+   "마지막 줄"이라는 앵커가 항상 토큰을 가리키게 고정된다.
 
    이어서 [템플릿 전문](#템플릿-전문)을 **한 글자도 고치지 않고** 그대로 `.claude/dashboard.html`
    로 Write 한다. 값 채우기는 2번부터의 Edit 이 한다.
@@ -444,7 +470,10 @@ Cell
    > 아래 모든 Edit 의 `old_string` 은 **방금 쓴 템플릿의 해당 줄 전문 그대로**다. 파일 내용을
    > 우리가 직접 썼으므로 grep 으로 앵커를 찾을 필요가 없다.
 
-2. `#dz-title` 텍스트를 `<제목>` 인자로 치환한다.
+2. 「`#dz-title`」 텍스트를 `<제목>` 인자로, 「`#dz-project-name`」 텍스트를 1단계 출력의 **첫
+   줄**(디렉토리 이름)로 치환한다(Edit 2회). 두 값 모두 `&`→`&amp;`, `<`→`&lt;`, `>`→`&gt;` 순서로
+   이스케이프한다(`log`·`step` 과 동일 규칙) — 디렉토리 이름에 `&`(`R&D` 등)가 들어갈 수 있다.
+   이름이 길면 CSS 말줄임(`text-overflow:ellipsis`)이 처리하므로 자르지 않는다.
 
 3. **인자 파싱 — 그룹 목록으로 정규화한다.**
    두 번째 인자를 `|` 로 나눠 세그먼트 목록을 만든 뒤 [진행 시각화 규격](#진행-시각화-규격--그룹--단계-모델)의
@@ -452,6 +481,11 @@ Cell
    - 모든 세그먼트에 `:` 가 없다 → 선형 문법. **이름 없는 그룹 1개**로 본다.
    - 모든 세그먼트에 `:` 가 있다 → 그룹 문법. 첫 `:` 앞이 그룹명, 뒤를 `,` 로 나눈 것이 단계 목록.
    - 섞여 있다 → 오타다. 추측해서 한쪽으로 해석하지 말고 그 사실을 보고하고 중단한다.
+   - 세그먼트가(그룹 문법이면 `:` 뒤 단계명 각각이) `커밋`·`푸시`·`commit`·`push` 중 하나면
+     **그 세그먼트를 목록에서 제외하고 진행**하고, "커밋은 진행 단계가 아니라 `log commit` 으로
+     기록되므로 단계 목록에서 제외했습니다"를 한 줄 보고한다. **중단하지 않는다** — 착수 보고를
+     막을 만한 오류가 아니다. 다만 제외 후 남은 세그먼트가 하나도 없으면(전부 커밋/푸시였던
+     경우) 그때는 인자 자체가 잘못된 것이므로 **보고 후 중단**한다.
 
 4. **열 목록과 전체 칸 수를 확정한다.**
    열 목록 = 모든 그룹의 단계명을 최초 등장 순서로 중복 없이 모은 것.
@@ -1055,7 +1089,7 @@ fi
 
 5. 위 [자동 발행](#자동-발행--init-의-공통-하위-절차) 4번 「브라우저 열기」를 수행한 뒤 보고한다:
    `http://localhost:{포트}/dashboard.html` 을 출력하고
-   "이 URL 로 열어야 우상단 「플로팅」 버튼이 활성화된다"를 한 줄 덧붙인다.
+   "이 URL 로 열어야 헤더의 「플로팅」 버튼이 활성화된다"를 한 줄 덧붙인다.
    작업이 끝나면 `/dashboard serve stop {포트}` 로 서버를 끄도록 안내한다.
 ```
 
@@ -1149,7 +1183,8 @@ fi
 `:has()` 같은 최신 셀렉터에 의존하지 않으므로 지원 범위가 넓다. 유형 필터는 알약(pill)
 형태다.
 
-원본(`~/Desktop/dashboard.html`)의 골격·`:root` 색 토큰·단계 리스트 스타일은 그대로 유지한다.
+색 토큰의 정본은 `hub/bin/hub_template.html` 이며 그 값을 그대로 쓴다. 골격·단계 리스트 스타일은
+원본(`~/Desktop/dashboard.html`)에서 유래한 구조를 그대로 유지한다.
 
 ---
 
@@ -1162,6 +1197,7 @@ fi
 <html lang="ko">
 <head>
 <meta charset="utf-8">
+<meta name="color-scheme" content="light dark">
 <title>세션 진행 상황 대시보드</title>
 <!--
 DZ:DASHBOARD 갱신 맵 (동적 영역 — 셀렉터 기반 정밀 치환, commands/dashboard.md 참조)
@@ -1183,37 +1219,73 @@ DZ:DASHBOARD 갱신 맵 (동적 영역 — 셀렉터 기반 정밀 치환, comma
                           + .step-detail 텍스트. active 가 동시에 여러 개일 수 있다
   #dz-impl-count        : [선택] 구현 세부 진행 텍스트 (예: 3/8 · 38%). 매크로 진행률과 별개다
   #dz-impl-tasks        : [선택] 세부 작업 ol — impl set 이 한 번 채운다
-정적(불가침): 골격 · <style> · 제목 · 하단 스크립트
-  #dz-pip-btn / #dz-pip-hint : 플로팅 진입 버튼과 안내 한 줄. .wrap 바깥에 있으며
-                               init/step/log 도, 폴링 동기화도 이 둘을 건드리지 않는다
+정적(불가침): 골격 · <style> · 제목 · 하단 스크립트 · <head> 테마 스크립트
+  #dz-page-head              : 프로젝트 명 + #dz-top-actions + #dz-pip-hint 를 담는 헤더 행.
+                               .wrap 바깥(<body> 직계)에 있으며 init 이 1회만 채운다
+  #dz-project-name           : 프로젝트 표시 이름 span. #dz-page-head 안, init 2단계가 1회 채우고
+                               이후 아무도 치환하지 않는다(폴링 동기화 대상 아님)
+  #dz-top-actions            : 플로팅 버튼·테마 토글 클러스터. #dz-page-head 헤더 행 안에 있다
+                               (.wrap 바깥이라는 사실은 그대로다)
+  #dz-pip-btn / #dz-pip-hint : 플로팅 진입 버튼과 안내 한 줄. #dz-top-actions 안(#dz-pip-hint 는
+                               #dz-page-head 헤더 행 안)에 있으며 init/step/log 도, 폴링 동기화도
+                               이 둘을 건드리지 않는다
+  #dz-theme-toggle           : 라이트/다크 테마 토글 버튼. #dz-top-actions 안에 있으며 폴링
+                               동기화 대상이 아니다. 임베드 시 localStorage['dzh-theme'] 를
+                               읽기 전용으로 참조하고, storage 이벤트로 허브 테마를 따라간다
   #dz-log-card               : 작업 추적 카드 div. PiP 압축 뷰가 CSS 로만 숨긴다
                                (DOM 에서 제거하지 않는다 — 복귀 시 로그가 사라진다)
   #dz-impl-card              : 구현 세부 작업 카드 div. 목록이 비면 CSS :has() 가 통째로 숨긴다
                                (DOM 에서 제거하지 않는다 — 폴링이 outerHTML 로 동기화한다)
-  body.dz-embedded           : 허브 상세 패널(iframe) 안에서 열렸다는 표시. #dz-pip-btn/#dz-pip-hint 를
-                               CSS 로만 숨기는 스코프일 뿐 폴링·동기화와는 무관하다
+  body.dz-embedded           : 허브 상세 패널(iframe) 안에서 열렸다는 표시. #dz-page-head(행 전체)와
+                               #dz-pip-btn/#dz-pip-hint/#dz-theme-toggle(컨트롤 단위)를 CSS 로만
+                               숨기는 스코프일 뿐 폴링·동기화와는 무관하다
 -->
 <style>
-  :root{--ink:#172033;--muted:#5E6B7D;--line:#D9E2EC;--soft:#F4F7FB;--blue:#1E5AA8;--navy:#12335B;--green:#1F8A70;--orange:#F59E0B;--red:#C2410C;}
+  :root{
+    color-scheme:light;
+    --bg:#EEF3F8;--surface:#FFFFFF;--ink:#172033;--head:#12335B;--muted:#5A6879;
+    --line:#D9E2EC;--soft:#F4F7FB;
+    --accent:#0072B2;--accent-ink:#005B8F;--accent-soft:#E4F0F8;
+    --attention:#B45309;--attention-soft:#FBEEDC;
+    --shadow:0 8px 24px rgba(19,51,91,.06);
+  }
+  @media (prefers-color-scheme:dark){
+    :root:not([data-theme="light"]){
+      color-scheme:dark;
+      --bg:#0E1621;--surface:#16202D;--ink:#E6EDF5;--head:#DCE7F2;--muted:#94A5B8;
+      --line:#26364A;--soft:#1B2634;
+      --accent:#56B4E9;--accent-ink:#8ACBF0;--accent-soft:#12324A;
+      --attention:#E69F00;--attention-soft:#3B2B0D;
+      --shadow:0 8px 24px rgba(0,0,0,.45);
+    }
+  }
+  :root[data-theme="dark"]{
+    color-scheme:dark;
+    --bg:#0E1621;--surface:#16202D;--ink:#E6EDF5;--head:#DCE7F2;--muted:#94A5B8;
+    --line:#26364A;--soft:#1B2634;
+    --accent:#56B4E9;--accent-ink:#8ACBF0;--accent-soft:#12324A;
+    --attention:#E69F00;--attention-soft:#3B2B0D;
+    --shadow:0 8px 24px rgba(0,0,0,.45);
+  }
   *{box-sizing:border-box}
-  body{margin:0;font-family:"Pretendard","Apple SD Gothic Neo","Malgun Gothic",sans-serif;color:var(--ink);background:#EEF3F8;line-height:1.55}
-  .wrap{max-width:860px;margin:32px auto;padding:0 16px}
-  .card{background:#fff;border:1px solid var(--line);border-radius:14px;padding:26px 30px;box-shadow:0 8px 24px rgba(19,51,91,.07);margin-bottom:16px}
-  h1{font-size:21px;margin:0 0 4px;color:var(--navy);letter-spacing:-.5px}
+  body{margin:0;font-family:"Pretendard","Apple SD Gothic Neo","Malgun Gothic",sans-serif;color:var(--ink);background:var(--bg);line-height:1.5}
+  .wrap{max-width:860px;margin:0 auto 32px;padding:0 16px}
+  .card{background:var(--surface);border:1px solid var(--line);border-radius:14px;padding:26px 30px;box-shadow:var(--shadow);margin-bottom:16px}
+  h1{font-size:20px;margin:0 0 4px;color:var(--head);letter-spacing:-.4px}
   .bar-outer{height:14px;background:var(--soft);border-radius:999px;overflow:hidden;border:1px solid var(--line)}
-  .bar-inner{height:100%;background:linear-gradient(90deg,var(--blue),#2D78C8);border-radius:999px;transition:width .4s}
-  .pct{font-size:13px;font-weight:700;color:var(--blue);margin-top:6px}
+  .bar-inner{height:100%;background:var(--accent);border-radius:999px;transition:width .4s}
+  .pct{font-size:13px;font-weight:700;color:var(--accent-ink);margin-top:6px}
   ol.steps{list-style:none;margin:14px 0 0;padding:0}
   ol.steps li{display:flex;align-items:center;gap:12px;padding:11px 4px;border-bottom:1px solid var(--soft);font-size:15px;flex-wrap:wrap;row-gap:3px}
   ol.steps li:last-child{border-bottom:0}
   .num{width:26px;height:26px;border-radius:8px;display:grid;place-items:center;font-size:13px;font-weight:800;background:var(--soft);color:var(--muted);flex:none}
-  li.done .num{background:var(--green);color:#fff}
-  li.active .num{background:var(--blue);color:#fff}
+  li.done .num{background:var(--accent-soft);color:var(--accent-ink);box-shadow:inset 0 0 0 1px var(--accent)}
+  li.active .num{background:var(--accent-ink);color:var(--bg)}
   li.done{color:var(--muted)}
-  li.active{font-weight:700;color:var(--navy)}
+  li.active{font-weight:700;color:var(--head)}
   .chip{margin-left:auto;font-size:12px;font-weight:800;padding:3px 10px;border-radius:999px;background:var(--soft);color:var(--muted);flex:none}
-  li.done .chip{background:#E5F3EE;color:var(--green)}
-  li.active .chip{background:#EAF2FB;color:var(--blue)}
+  li.done .chip{background:var(--accent-soft);color:var(--accent-ink)}
+  li.active .chip{background:var(--accent-ink);color:var(--bg)}
   .step-detail{flex-basis:100%;margin-left:38px;font-size:12.5px;font-weight:400;color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
   .step-detail:empty{display:none}
   #dz-impl-card:not(:has(#dz-impl-tasks li)){display:none}
@@ -1221,23 +1293,24 @@ DZ:DASHBOARD 갱신 맵 (동적 영역 — 셀렉터 기반 정밀 치환, comma
   .matrix th,.matrix td{border:1px solid var(--line);padding:9px 10px}
   .matrix thead th{font-size:12px;font-weight:800;background:var(--soft);color:var(--muted);text-align:center}
   .matrix th.corner{text-align:left}
-  .matrix th.group{text-align:left;font-weight:700;color:var(--navy);width:34%}
+  .matrix th.group{text-align:left;font-weight:700;color:var(--head);width:34%}
   .matrix td.cell{text-align:center;font-size:12px;font-weight:800;background:var(--soft);color:var(--muted)}
-  .matrix td.cell[data-state="done"]{background:#E5F3EE;color:var(--green)}
-  .matrix td.cell[data-state="active"]{background:#EAF2FB;color:var(--blue)}
-  .matrix td.cell[data-state="na"]{background:#fff;color:var(--line)}
-  .badge{display:inline-block;font-size:11px;font-weight:800;padding:2px 8px;border-radius:999px;margin-right:6px}
+  .matrix td.cell[data-state="done"]{background:var(--accent-soft);color:var(--accent-ink);box-shadow:inset 0 0 0 1px var(--accent)}
+  .matrix td.cell[data-state="active"]{background:var(--accent-ink);color:var(--bg)}
+  .matrix td.cell[data-state="na"]{background:var(--surface);color:var(--line)}
+  .badge{display:inline-flex;align-items:center;line-height:1;font-size:11px;font-weight:800;padding:4px 9px;border-radius:999px;margin-right:6px}
   .badge.round{background:var(--soft);color:var(--muted)}
-  .badge.impl{background:#EAF2FB;color:var(--blue)}
-  .badge.pass{background:#E5F3EE;color:var(--green)}
-  .badge.fail{background:#FBE9E2;color:var(--red)}
-  .badge.commit{background:#E7EAF3;color:var(--navy)}
+  .badge.impl{background:var(--accent-soft);color:var(--accent-ink)}
+  .badge.pass{background:var(--accent-ink);color:var(--bg)}
+  .badge.fail{background:var(--attention-soft);color:var(--attention);border:1px dashed var(--attention)}
+  .badge.commit{background:var(--soft);color:var(--head);border:1px solid var(--line)}
   .dzf{position:absolute;opacity:0;pointer-events:none}
   label[for^="dzf-"]{display:inline-block;font-size:12px;font-weight:700;padding:4px 12px;margin:8px 6px 8px 0;border-radius:999px;background:var(--soft);color:var(--muted);cursor:pointer;border:1px solid var(--line)}
-  .dzf:checked + label{background:var(--blue);color:#fff;border-color:var(--blue)}
+  .dzf:checked + label{background:var(--accent-ink);color:var(--bg);border-color:var(--accent-ink)}
+  .dzf:focus-visible + label{outline:2px solid var(--accent);outline-offset:2px}
   #dzf-impl:checked   ~ #dz-log .entry:not([data-kind="impl"]){display:none}
   #dzf-review:checked ~ #dz-log .entry:not([data-kind="review"]){display:none}
-  ul.log{list-style:none;margin:6px 0 0;padding:0;font-size:13px;color:#4B5A6D}
+  ul.log{list-style:none;margin:6px 0 0;padding:0;font-size:13px;color:var(--muted)}
   .entry{border-bottom:1px solid var(--soft);padding:8px 4px}
   .entry:last-child{border-bottom:0}
   .entry summary{cursor:pointer;display:flex;align-items:center;gap:8px;list-style:none}
@@ -1248,24 +1321,70 @@ DZ:DASHBOARD 갱신 맵 (동적 영역 — 셀렉터 기반 정밀 치환, comma
   .entry .detail{margin:6px 0 0 48px;font-size:12.5px;color:var(--muted);white-space:pre-wrap}
   .log-title,.impl-title{font-size:13px;font-weight:700;color:var(--muted);margin:0 0 10px}
   .foot{font-size:12px;color:var(--muted);text-align:right}
-  #dz-pip-btn{position:fixed;top:18px;right:18px;z-index:9;font-family:inherit;font-size:12px;font-weight:700;padding:7px 14px;border-radius:999px;border:1px solid var(--line);background:#fff;color:var(--navy);cursor:pointer;box-shadow:0 2px 8px rgba(19,51,91,.10)}
+  /* 페이지 헤더 — .wrap 과 같은 폭 상자를 써서 카드와 좌우가 정렬된다.
+     .wrap 바깥에 두는 이유는 아래 「왜 .wrap 바깥인가」 절과 같다(PiP 이동 대상 제외). */
+  #dz-page-head{max-width:860px;margin:28px auto 10px;padding:0 16px;
+                display:flex;align-items:center;gap:10px;flex-wrap:wrap;row-gap:6px}
+  .project-name{font-size:15px;font-weight:800;color:var(--head);
+                overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0;flex:1 1 auto}
+  #dz-top-actions{display:flex;align-items:center;gap:8px;flex:0 0 auto}
+  #dz-pip-btn{font-family:inherit;font-size:12px;font-weight:700;padding:7px 14px;border-radius:999px;border:1px solid var(--line);background:var(--surface);color:var(--head);cursor:pointer;box-shadow:var(--shadow)}
+  #dz-pip-btn:hover{color:var(--accent-ink);border-color:var(--accent)}
+  #dz-pip-btn:focus-visible{outline:2px solid var(--accent);outline-offset:3px}
   #dz-pip-btn:disabled{color:var(--muted);cursor:not-allowed;box-shadow:none}
-  #dz-pip-hint{position:fixed;top:54px;right:18px;z-index:9;max-width:300px;font-size:11px;line-height:1.5;color:var(--muted);background:#fff;border:1px solid var(--line);border-radius:8px;padding:8px 10px;box-shadow:0 2px 8px rgba(19,51,91,.10)}
+  #dz-pip-hint{flex-basis:100%;font-size:11px;line-height:1.5;color:var(--muted);
+               background:var(--surface);border:1px solid var(--line);border-radius:8px;
+               padding:8px 10px;box-shadow:var(--shadow)}
   #dz-pip-hint[hidden]{display:none}
+  .icon-btn{width:32px;height:32px;padding:0;color:var(--muted);background:var(--surface);
+            border:1px solid var(--line);border-radius:999px;cursor:pointer;font-family:inherit;font-size:15px;
+            line-height:1;display:inline-flex;align-items:center;justify-content:center;box-shadow:var(--shadow)}
+  .icon-btn:hover{color:var(--accent-ink);border-color:var(--accent)}
+  .icon-btn:focus-visible{outline:2px solid var(--accent);outline-offset:3px}
   /* 허브 상세 패널(iframe) 안에서 열린 문서는 body.dz-embedded 가 붙는다 — 플로팅은 iframe 안에서
      구조적으로 깨진다(패널을 닫으면 iframe 이 about:blank 로 가 opener 문서 자체가 파괴된다).
-     CSS 로만 숨긴다 — DOM 제거는 이 파일의 기존 불변식(id="dz-pip-*" 유지)을 어긴다. */
-  body.dz-embedded #dz-pip-btn,body.dz-embedded #dz-pip-hint{display:none}
+     테마 토글도 함께 숨긴다 — 테마는 허브가 소유한 localStorage 키를 읽기 전용으로 따라가므로
+     대시보드 안에 별도 토글이 있으면 허브 것과 중복된다. CSS 로만 숨긴다 — DOM 제거는 이
+     파일의 기존 불변식(id="dz-pip-*" 유지)을 어긴다. */
+  body.dz-embedded #dz-pip-btn,body.dz-embedded #dz-pip-hint,body.dz-embedded #dz-theme-toggle{display:none}
+  /* 허브 상세 패널의 헤드가 같은 프로젝트 명을 이미 표시한다(hub_template.html 의 패널 제목) — 8px
+     아래에 또 표시하면 중복이다. 위 컨트롤 단위 나열 규칙과는 역할이 다르므로 별도로 둔다. */
+  body.dz-embedded #dz-page-head{display:none}
   body.dz-pip .wrap{margin:10px auto;padding:0 10px}
   body.dz-pip .card{padding:14px 16px;border-radius:10px;margin-bottom:10px}
   body.dz-pip h1{font-size:16px}
   body.dz-pip #dz-log-card{display:none}
   body.dz-pip ol.steps li{padding:9px 4px}
-  body.dz-pip ol.steps li.active{background:#EAF2FB;border-radius:8px;padding-left:8px;padding-right:8px}
+  body.dz-pip ol.steps li.active{background:var(--accent-soft);border-radius:8px;padding-left:8px;padding-right:8px}
   body.dz-pip ol.steps li:not(.active) .step-detail{display:none}
 </style>
+<script>
+/* body 파싱 전에 실행돼 첫 페인트부터 확정 테마로 그린다(FOUC 방지).
+   허브 상세 패널(iframe) 안이면 허브가 쓴 키를 읽는다 — 같은 오리진이라 값이 그대로 보인다
+   (허브 상세 패널 iframe 테마 동기화 결정 D). 단독 창이면 자기 키를 읽고, 없으면 시스템 선호를
+   한 번만 읽어 확정해 저장한다. localStorage 는 file:// 나 저장소 차단 환경에서 던질 수
+   있어 통째로 감싼다. */
+try{
+  var embedded = window.self !== window.top;
+  var key = embedded ? 'dzh-theme' : 'dz-theme';
+  var stored = localStorage.getItem(key);
+  var theme = (stored === 'light' || stored === 'dark') ? stored
+            : ((window.matchMedia && matchMedia('(prefers-color-scheme: dark)').matches) ? 'dark' : 'light');
+  document.documentElement.setAttribute('data-theme', theme);
+  if(!embedded && stored !== theme) localStorage.setItem(key, theme);
+}catch(e){}
+</script>
 </head>
 <body>
+<div id="dz-page-head">
+  <span class="project-name" id="dz-project-name">프로젝트</span>
+  <div id="dz-top-actions">
+    <button id="dz-pip-btn" type="button">플로팅</button>
+    <button id="dz-theme-toggle" class="icon-btn" type="button"
+            aria-label="다크 테마로 전환" title="다크 테마로 전환">☾</button>
+  </div>
+  <div id="dz-pip-hint" hidden></div>
+</div>
 <div class="wrap">
   <div class="card">
     <h1 id="dz-title">세션 제목</h1>
@@ -1289,8 +1408,6 @@ DZ:DASHBOARD 갱신 맵 (동적 영역 — 셀렉터 기반 정밀 치환, comma
   </div>
   <div class="foot" id="dz-updated">갱신: -</div>
 </div>
-<button id="dz-pip-btn" type="button">플로팅</button>
-<div id="dz-pip-hint" hidden></div>
 <script>
 (function(){
   var POLL_INTERVAL_MS = 5000;          // 로컬 파일 폴링 주기
@@ -1308,6 +1425,9 @@ DZ:DASHBOARD 갱신 맵 (동적 영역 — 셀렉터 기반 정밀 치환, comma
   var PIP_CONTENT_PADDING = 24;         // 콘텐츠 하단 여백(카드 그림자·라운딩 여유)
 
   var wrap = document.querySelector('.wrap');
+  // .wrap 은 PiP 창으로 '이동'하므로 돌아올 자리를 미리 잡아 둔다. pipButton 을 앵커로 쓰면
+  // 안 된다 — #dz-top-actions 의 자식이라 document.body.insertBefore 가 NotFoundError 를 던진다.
+  var wrapReturnAnchor = wrap.nextSibling;
   var pipButton = document.getElementById('dz-pip-btn');
   var pipHint = document.getElementById('dz-pip-hint');
   var isServed = location.protocol === 'http:' || location.protocol === 'https:';
@@ -1435,6 +1555,9 @@ DZ:DASHBOARD 갱신 맵 (동적 영역 — 셀렉터 기반 정밀 치환, comma
           copy.textContent = source.textContent;
           pipDocument.head.appendChild(copy);
         });
+        // <style> 은 복사되지만 data-theme 속성은 따라가지 않는다 — 여기서 직접 옮긴다.
+        var currentThemeAttribute = document.documentElement.getAttribute('data-theme');
+        if(currentThemeAttribute) pipDocument.documentElement.setAttribute('data-theme', currentThemeAttribute);
         pipDocument.body.className = 'dz-pip';
         // 복제가 아니라 '이동'이다 — 폴링이 계속 같은 노드를 갱신하므로 동기화 코드가 하나로 유지된다.
         pipDocument.body.appendChild(wrap);
@@ -1447,7 +1570,7 @@ DZ:DASHBOARD 갱신 맵 (동적 영역 — 셀렉터 기반 정밀 치환, comma
         setHint('플로팅 창에서 보는 중입니다. 창을 닫으면 여기로 돌아옵니다.');
         win.addEventListener('pagehide', function(){
           pipWindow = null;
-          document.body.insertBefore(wrap, pipButton);
+          document.body.insertBefore(wrap, wrapReturnAnchor);   // ← pipButton 이 아니다
           pipButton.textContent = '플로팅';
           setHint(reasonHint);
           poll();
@@ -1459,6 +1582,89 @@ DZ:DASHBOARD 갱신 맵 (동적 영역 — 셀렉터 기반 정밀 치환, comma
         setHint(reasonHint);
       });
   });
+})();
+
+(function(){
+  // 다크 모드 토글 — 반드시 위 폴링/PiP IIFE 와 **별도**로 둔다. 저 IIFE 는 file:// 나 PiP
+  // 미지원 환경에서 조기 return 하므로, 테마 코드를 그 안에 두면 그 경로들에서 테마가 죽는다.
+  // <head> 인라인 스크립트가 첫 페인트 전에 이미 테마를 1회 확정해 두므로(FOUC 방지),
+  // 여기서는 그 값을 읽고 바꾸기만 한다.
+  var THEME_STORAGE_KEY = 'dz-theme';
+  var HUB_THEME_STORAGE_KEY = 'dzh-theme';
+  var THEME_CYCLE = ['light', 'dark'];
+  // 글리프·라벨은 "지금" 이 아니라 "전환될 대상"을 가리킨다 — 라이트일 때 ☾(다크로 전환),
+  // 다크일 때 ☀(라이트로 전환).
+  var THEME_GLYPH = {light:'☾', dark:'☀'};
+  var THEME_ACTION_LABEL = {light:'다크 테마로 전환', dark:'라이트 테마로 전환'};
+  // 허브 상세 패널(iframe) 안이면 허브가 소유한 키를 읽는다 — 대시보드는 이 키를 절대 쓰지
+  // 않는다(읽기 전용 계약). 같은 오리진이라 값이 그대로 보이고, 허브가 값을 바꾸면 아래
+  // storage 리스너가 즉시 따라간다.
+  var embedded = window.self !== window.top;
+  var storageKey = embedded ? HUB_THEME_STORAGE_KEY : THEME_STORAGE_KEY;
+  var themeToggleButton = document.getElementById('dz-theme-toggle');
+
+  // 시스템 선호를 읽는다. matchMedia 가 없는 극단적 환경이면 라이트로 낙착한다.
+  function resolveSystemTheme(){
+    try{
+      return (window.matchMedia && matchMedia('(prefers-color-scheme: dark)').matches) ? 'dark' : 'light';
+    }catch(e){
+      return 'light';
+    }
+  }
+
+  /** 지금 유효한 테마를 돌려준다. 저장값이 light/dark 가 아니면 시스템 선호로 낙착한다. */
+  function currentTheme(){
+    try{
+      var stored = localStorage.getItem(storageKey);
+      return (stored === 'light' || stored === 'dark') ? stored : resolveSystemTheme();
+    }catch(e){
+      return resolveSystemTheme();
+    }
+  }
+
+  /** 지금 갱신해야 할 문서 목록 — 메인 문서 + (열려 있으면) PiP 문서. 표준 API 로 PiP 창을
+      찾으므로 위 폴링 IIFE 의 pipWindow 지역 변수를 공유하지 않는다(두 IIFE 사이에 새 결합을
+      만들지 않기 위해서). */
+  function themeDocuments(){
+    var docs = [document];
+    var pip = window.documentPictureInPicture && window.documentPictureInPicture.window;
+    if(pip && pip.document) docs.push(pip.document);
+    return docs;
+  }
+
+  /** data-theme 속성·글리프·aria-label·title 을 한꺼번에 맞춘다. 열려 있는 PiP 창까지 포함한다. */
+  function applyTheme(theme){
+    themeDocuments().forEach(function(doc){
+      doc.documentElement.setAttribute('data-theme', theme);
+    });
+    if(themeToggleButton){
+      themeToggleButton.textContent = THEME_GLYPH[theme];
+      themeToggleButton.setAttribute('aria-label', THEME_ACTION_LABEL[theme]);
+      themeToggleButton.setAttribute('title', THEME_ACTION_LABEL[theme]);
+    }
+  }
+
+  if(themeToggleButton){
+    // 저장은 클릭에서만 한다. 임베드 상태에서는 버튼이 display:none 이라 CSS 만으로도
+    // 클릭이 닿지 않지만, storageKey 가 이 시점엔 이미 'dzh-theme'(허브 소유 키)로 바인딩돼
+    // 있으므로 그 CSS 규칙에만 기대지 않고 여기서도 명시적으로 막는다 — head 스크립트의
+    // setItem 가드(embedded 체크)와 방어 수준을 맞춘다(안 D 계약: 허브 키는 읽기 전용).
+    themeToggleButton.addEventListener('click', function(){
+      if(embedded) return;
+      var next = THEME_CYCLE[(THEME_CYCLE.indexOf(currentTheme()) + 1) % THEME_CYCLE.length];
+      try{ localStorage.setItem(storageKey, next); }
+      catch(e){ /* 저장 실패 — 이번 페이지 로드 동안만 토글이 적용된다 */ }
+      applyTheme(next);
+    });
+  }
+
+  // 같은 오리진의 다른 문서가 저장소 키를 바꾸면 발화한다 — 허브가 테마를 바꾸면(임베드 시)
+  // 또는 단독 탭을 두 개 열어 한쪽에서 토글하면(단독 시) 이 경로로 실시간 추종한다.
+  window.addEventListener('storage', function(event){
+    if(event.key === storageKey) applyTheme(currentTheme());
+  });
+
+  applyTheme(currentTheme());
 })();
 </script>
 </body>
