@@ -127,7 +127,7 @@ perform_install() {
 
   log_ok "hub/bin  ${HUB_FILE_COUNT}개 파일 → $TARGET_BIN_DIR/"
   log_done "허브 설치 완료"
-  log_info "다음 단계: /hub install (훅 옵트인) → /hub server start → /hub"
+  log_info "다음 단계: /hub install (훅 + 상태줄 옵트인) → /hub server start → /hub"
   log_info "자세한 설명: $REPO_ROOT/hub/README.md"
   return 0
 }

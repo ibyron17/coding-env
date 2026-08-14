@@ -35,9 +35,10 @@ DZH:HUB 데이터 계약
 
   #dzh-usage 와 그 안의 #dzh-usage-toggle 은 정적 노드이며 class·aria-expanded 속성만
   갱신한다(노드 교체 금지). 접힘을 바꾸는 경로는 둘이다 — 제목 줄 클릭과 패널 바깥 클릭 —
-  이며 둘 다 같은 함수(applyUsageCollapsedState)와 같은 저장 키를 쓴다. 패널 안에는 툴팁
-  트리거를 두지 않는다(R5) — 되살리려면 tooltipDismissObserver 의 #dzh-usage-body 관찰도
-  함께 되살려야 한다. 테마 토글 버튼은 이들 바깥의 정적 마크업이라 폴링과 무관하게
+  이며 둘 다 같은 함수(applyUsageCollapsedState)와 같은 저장 키를 쓴다. 패널 안에는 원칙적으로
+  툴팁 트리거를 두지 않는다(R5, 결정 UT1) — 유일한 예외가 만료 안내 줄(.usage-stale-note)
+  이고(R-B, 결정 EX7), 그래서 tooltipDismissObserver 의 #dzh-usage-body 관찰이 그 트리거를
+  위해 되살아나 있다. 테마 토글 버튼은 이들 바깥의 정적 마크업이라 폴링과 무관하게
   DOM 이 그대로 유지된다. rate_limit_resets(있으면)는 펼침 본문에 초기화 예정 시각 줄로
   더해진다(docs/prps/hub-usage-reset-time-and-refresh.md). usage·rate_limit_resets 의 값은
   모두 같은 statusLine 캡처(rate_limits.json) 하나에서 온다 — 퍼센트와 초기화 예정 시각을
@@ -215,6 +216,10 @@ DZH:HUB 데이터 계약
   .usage-bar>span{display:block;height:100%;background:var(--accent);border-radius:999px}
   .usage-reset{font-size:11px;color:var(--muted);margin-top:3px;text-align:right}
   .usage-meta{font-size:11px;color:var(--muted);margin-top:10px;text-align:right}
+  /* 만료(조회되지 않음) 상태 — 새 색 토큰을 만들지 않고 기존 --muted·--attention 만 쓴다(R-B). */
+  .usage-pct-empty{color:var(--muted);font-weight:700}
+  .usage-stale-note{color:var(--attention)}
+  .usage.usage-stale .usage-summary{color:var(--muted)}
   .tooltip{position:fixed;left:0;top:0;z-index:40;max-width:min(280px,calc(100vw - 32px));
            padding:6px 9px;border-radius:8px;font-size:11.5px;line-height:1.45;font-weight:600;
            color:var(--bg);background:var(--ink);box-shadow:var(--shadow);
@@ -462,11 +467,14 @@ try{
 
   // 30초 틱이 트리거 노드를 파괴하는데 포인터가 멈춰 있으면 마우스 이벤트가 안 와 낡은 문구가
   // 남는다(결정 T6) — #dzh-app 의 자식 교체(렌더의 innerHTML 통째 교체)를 감시해 고아 툴팁을
-  // 막는다. #dzh-usage-body 관찰은 R5 로 지웠다 — 그 안에는 트리거가 더 없어 절대 유용하게
-  // 발화할 수 없다(결정 UT4). 패널 안에 다시 data-tooltip 을 넣으려면 이 관찰도 되살려야 한다.
+  // 막는다. #dzh-usage-body 관찰은 R5 로 지웠다가(결정 UT4) R-B 가 되살렸다(결정 EX7) —
+  // 만료 안내 줄(.usage-stale-note)이 그 안의 유일한 트리거이고, 30초 틱마다 본문이 통째로
+  // 교체되므로 이 관찰이 없으면 그 트리거에서도 같은 고아 툴팁이 생긴다.
   var appElForTooltipObserver = document.getElementById('dzh-app');
+  var usageBodyElForTooltipObserver = document.getElementById('dzh-usage-body');
   var tooltipDismissObserver = new MutationObserver(function(){ hideTooltip(); });
   if(appElForTooltipObserver) tooltipDismissObserver.observe(appElForTooltipObserver, {childList: true});
+  if(usageBodyElForTooltipObserver) tooltipDismissObserver.observe(usageBodyElForTooltipObserver, {childList: true});
 
   // 표시 중인 트리거의 data-tooltip 이 폴링·틱으로 갱신될 수 있다(#dzh-refresh 의 연결 상태
   // 문구 등) — showTooltip 은 진입 시점에만 속성을 읽으므로, 포인터를 올려둔 채면 다음 진입
@@ -509,6 +517,11 @@ try{
   var USAGE_COLLAPSED_FLAG = '1';
   var USAGE_CLEARANCE_MARGIN_PX = 32;   // 패널 bottom 오프셋 16 + 여유 16
   var USAGE_RESET_LABEL = '초기화';
+  var USAGE_EMPTY_VALUE = '—';         // 만료 시 퍼센트 자리 — 낡은 숫자를 남기지 않는다(결정 EX6)
+  var USAGE_STALE_LABEL = '조회되지 않음';
+  // 왜(값이 유효하지 않다) + 어떻게(세션 1회) 두 가지만 담는다(결정 EX7) — 패널 안 유일한 툴팁.
+  var USAGE_STALE_TOOLTIP = '마지막 확인 이후 5시간이 지나 사용률이 더 이상 유효하지 않습니다. '
+    + 'Claude Code 세션을 한 번 시작하면 자동으로 갱신됩니다.';
   var MS_PER_HOUR = 3600000;
   var MS_PER_DAY = 86400000;
   // 12시간 — stale_after_minutes(30분)와 이벤트 표시 창(약 24~48시간) 사이의 임의값이다(결정
@@ -867,6 +880,7 @@ try{
 
   // 접힘 상태에 보일 한 줄 요약 문자열. 순수 함수 — DOM 에 닿지 않는다(결정 C5).
   function usageSummaryText(usage){
+    if(usage.is_stale) return USAGE_STALE_LABEL;
     return '세션 ' + usage.session_percent + '% · 주간 ' + usage.weekly_percent + '%';
   }
 
@@ -883,24 +897,56 @@ try{
     applyUsageClearance();
   }
 
-  // 컨테이너(#dzh-usage)와 토글 버튼(#dzh-usage-toggle)은 정적, 내용(#dzh-usage-body ·
-  // #dzh-usage-summary)만 파생이다(불변식 H1′, 결정 C1). usage 가 없으면(스위치 off·파일
-  // 없음·계약 불일치·만료, 결정 U3·U4) 조용히 숨긴다 — 경고를 띄우지 않는다. resets 는 장식이다
-  // (결정 R3) — 없어도 usage 만 있으면 패널은 그려진다.
-  function renderUsagePanel(usage, resets){
-    if(!usage){ hideUsagePanel(); return; }
-    var sessionBar = renderUsageBar(USAGE_SESSION_LABEL, usage.session_percent);
-    var weeklyBar = renderUsageBar(USAGE_WEEKLY_LABEL, usage.weekly_percent);
-    if(!sessionBar || !weeklyBar){ hideUsagePanel(); return; }
-    var sessionResetRow = renderUsageResetRow(resets && resets.session_resets_at_ms);
-    var weeklyResetRow = renderUsageResetRow(resets && resets.weekly_resets_at_ms);
-    var meta = '마지막 갱신 ' + elapsedLabel(usage.sampled_at_ms) + ' ' + USAGE_CYCLE_NOTE;
-    usageSummaryEl.textContent = usageSummaryText(usage);
-    usageBodyEl.innerHTML = sessionBar + sessionResetRow + weeklyBar + weeklyResetRow
-      + '<div class="usage-meta">' + meta + '</div>';
+  // 만료 행 — 막대를 그리지 않는다. 0% 로 오해되는 빈 막대보다 '값 없음'이 정직하다(결정 EX6).
+  function renderUsageStaleRow(label){
+    return '<div class="usage-row"><span>' + label + '</span>'
+      + '<span class="usage-pct usage-pct-empty">' + USAGE_EMPTY_VALUE + '</span></div>';
+  }
+
+  // 만료 안내 한 줄. 패널 안 유일한 툴팁 트리거다(결정 EX7) — 그래서 tooltipDismissObserver 의
+  // #dzh-usage-body 관찰이 함께 되살아났다(불변식 H1‴ 조항 5 의 조건).
+  function renderUsageStaleNote(usage){
+    return '<div class="usage-meta usage-stale-note" data-tooltip="' + escapeHtml(USAGE_STALE_TOOLTIP)
+      + '">' + USAGE_STALE_LABEL + ' · 마지막 갱신 ' + elapsedLabel(usage.sampled_at_ms) + '</div>';
+  }
+
+  // 패널을 실제로 띄우는 유일한 경로 — 신선/만료 두 분기가 표시 상태 갱신을 공유한다.
+  function showUsagePanel(bodyHtml, summaryText, isStale){
+    usageSummaryEl.textContent = summaryText;
+    usageBodyEl.innerHTML = bodyHtml;
+    usageEl.classList.toggle('usage-stale', isStale);
     usageEl.hidden = false;
     document.body.classList.add('has-usage');
     applyUsageCollapsedState();
+  }
+
+  // 컨테이너(#dzh-usage)와 토글 버튼(#dzh-usage-toggle)은 정적, 내용(#dzh-usage-body ·
+  // #dzh-usage-summary)만 파생이다(불변식 H1′, 결정 C1). usage 가 없으면(스위치 off·파일
+  // 없음·계약 불일치, 결정 U3·U4) 조용히 숨긴다 — 경고를 띄우지 않는다. 만료·롤오버는 숨기지
+  // 않고 usage.is_stale 분기로 그린다(R-B, 결정 EX1·EX2). resets 는 장식이다(결정 R3) —
+  // 없어도 usage 만 있으면 패널은 그려진다.
+  function renderUsagePanel(usage, resets){
+    if(!usage){ hideUsagePanel(); return; }
+    var sessionResetRow = renderUsageResetRow(resets && resets.session_resets_at_ms);
+    var weeklyResetRow = renderUsageResetRow(resets && resets.weekly_resets_at_ms);
+    if(usage.is_stale){
+      showUsagePanel(
+        renderUsageStaleRow(USAGE_SESSION_LABEL) + sessionResetRow
+        + renderUsageStaleRow(USAGE_WEEKLY_LABEL) + weeklyResetRow
+        + renderUsageStaleNote(usage),
+        usageSummaryText(usage), true
+      );
+      return;
+    }
+    var sessionBar = renderUsageBar(USAGE_SESSION_LABEL, usage.session_percent);
+    var weeklyBar = renderUsageBar(USAGE_WEEKLY_LABEL, usage.weekly_percent);
+    if(!sessionBar || !weeklyBar){ hideUsagePanel(); return; }
+    var meta = '마지막 갱신 ' + elapsedLabel(usage.sampled_at_ms) + ' ' + USAGE_CYCLE_NOTE;
+    showUsagePanel(
+      sessionBar + sessionResetRow + weeklyBar + weeklyResetRow
+      + '<div class="usage-meta">' + meta + '</div>',
+      usageSummaryText(usage), false
+    );
   }
 
   // 연결 상태 문구는 별도 span 이 아니라 새로고침 버튼의 data-tooltip 으로 제공한다 —

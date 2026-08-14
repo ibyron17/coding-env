@@ -360,6 +360,56 @@ class IsSessionWindowRolledOverTest(unittest.TestCase):
         self.assertFalse(hub_usage.is_session_window_rolled_over(capture, RATE_LIMIT_CAPTURED_AT_MS))
 
 
+class MarkStaleUsageSampleTest(unittest.TestCase):
+    """신규(R-B) — mark_stale_usage_sample. 나이(U3)·롤오버(P5) 두 판정을 OR 로 접어
+    is_stale 하나로 표시한다(결정 EX2·EX5). is_usage_sample_expired·is_session_window_rolled_over
+    자체는 무변경이라 그 단위 테스트(case14~17·n22)도 그대로 통과한다."""
+
+    def _sample_at(self, sampled_at_ms: int) -> hub_usage.UsageSample:
+        return hub_usage.UsageSample(sampled_at_ms=sampled_at_ms, session_percent=10, weekly_percent=19)
+
+    def test_u1_age_four_hours_fifty_nine_minutes_returns_original_object_unchanged(self) -> None:
+        age_ms = (4 * 60 + 59) * 60 * 1000
+        sample = self._sample_at(BASE_TIME_MS - age_ms)
+        result = hub_usage.mark_stale_usage_sample(sample, _capture(), BASE_TIME_MS)
+        self.assertFalse(result.is_stale)
+        self.assertIs(result, sample)  # 불필요한 복제 없음
+
+    def test_u2_age_exactly_five_hours_is_stale_boundary_inclusive(self) -> None:
+        sample = self._sample_at(BASE_TIME_MS - hub_usage.USAGE_MAX_SAMPLE_AGE_MS)
+        result = hub_usage.mark_stale_usage_sample(sample, _capture(), BASE_TIME_MS)
+        self.assertTrue(result.is_stale)
+
+    def test_u3_age_five_hours_one_minute_is_stale(self) -> None:
+        age_ms = hub_usage.USAGE_MAX_SAMPLE_AGE_MS + 60 * 1000
+        sample = self._sample_at(BASE_TIME_MS - age_ms)
+        result = hub_usage.mark_stale_usage_sample(sample, _capture(), BASE_TIME_MS)
+        self.assertTrue(result.is_stale)
+
+    def test_u4_fresh_age_but_session_reset_already_passed_is_stale(self) -> None:
+        """롤오버 단독 사유(결정 EX2) — 나이는 1분뿐이어도 세션 리셋이 이미 지났으면 낡음이다."""
+        sample = self._sample_at(BASE_TIME_MS - 60_000)
+        capture = _capture(session_resets_at_ms=BASE_TIME_MS - 1)
+        result = hub_usage.mark_stale_usage_sample(sample, capture, BASE_TIME_MS)
+        self.assertTrue(result.is_stale)
+
+    def test_u5_fresh_and_unknown_session_reset_is_not_stale(self) -> None:
+        """기존 n22 규칙 재확인 — 모름(None)을 롤오버로 단정하지 않는다."""
+        sample = self._sample_at(BASE_TIME_MS - 60_000)
+        result = hub_usage.mark_stale_usage_sample(sample, _capture(session_resets_at_ms=None), BASE_TIME_MS)
+        self.assertFalse(result.is_stale)
+
+    def test_u6_clock_skew_future_timestamp_is_not_stale(self) -> None:
+        sample = self._sample_at(BASE_TIME_MS + 60_000)
+        result = hub_usage.mark_stale_usage_sample(sample, _capture(), BASE_TIME_MS)
+        self.assertFalse(result.is_stale)
+
+    def test_u7_original_sample_is_not_mutated(self) -> None:
+        sample = self._sample_at(BASE_TIME_MS - hub_usage.USAGE_MAX_SAMPLE_AGE_MS)
+        hub_usage.mark_stale_usage_sample(sample, _capture(), BASE_TIME_MS)
+        self.assertFalse(sample.is_stale)  # frozen + replace 가 새 객체를 만든다
+
+
 class FormatStatusLineSummaryTest(unittest.TestCase):
     """케이스 N25~N26 — 인자가 텍스트에서 캡처로 바뀐 버전."""
 

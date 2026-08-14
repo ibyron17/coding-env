@@ -1982,10 +1982,10 @@ test_hub_unit_tests() {
   ((passed_tests++))
 }
 
-# T25: 허브 문서·상수 정합성 (하위 검증 T25-1~T25-70)
+# T25: 허브 문서·상수 정합성 (하위 검증 T25-1~T25-74)
 test_hub_docs_and_constants() {
   local test_name="T25"
-  local test_desc="허브 문서·상수 정합성 (T25-1~T25-70)"
+  local test_desc="허브 문서·상수 정합성 (T25-1~T25-74)"
   log_test_name "$test_name" "$test_desc"
 
   local hub_settings_file="$REPO_ROOT/hub/bin/hub_settings.py"
@@ -2970,8 +2970,10 @@ PYEOF
     record_failure "$test_name" "T25-67: usage-meta 의 data-tooltip 속성이 남아 있음"
     return 1
   fi
-  if grep -qF 'usageBodyElForTooltipObserver' "$hub_template_file"; then
-    record_failure "$test_name" "T25-67: usageBodyElForTooltipObserver 가 남아 있음(결정 UT4 위반)"
+  # ③ 반전(R-B): R5 는 이 옵저버를 지웠지만(결정 UT4), R-B 가 조건부로 되살렸다(결정 EX7) —
+  # 만료 안내 줄(.usage-stale-note)이 패널 안 유일한 트리거이므로 T25-71 이 이 복원을 강제한다.
+  if ! grep -qF 'usageBodyElForTooltipObserver' "$hub_template_file"; then
+    record_failure "$test_name" "T25-67: usageBodyElForTooltipObserver 가 없음(R-B 가 조건부로 복원해야 함, 결정 EX7)"
     return 1
   fi
   if ! grep -qF 'renderUsageResetRow' "$hub_template_file"; then
@@ -3049,6 +3051,92 @@ PYEOF
       return 1
     fi
   done
+
+  # T25-71(R-B 표시 + 툴팁 복원): 만료(조회되지 않음) 표시 토큰 4개가 있고, 그 툴팁 트리거를
+  # 위해 tooltipDismissObserver 가 #dzh-usage-body 를 다시 관찰한다(GOTCHA 1 의 기계적 강제).
+  local stale_display_token
+  for stale_display_token in "usage-stale-note" "USAGE_STALE_TOOLTIP" "usage-pct-empty" "is_stale"; do
+    if ! grep -qF -- "$stale_display_token" "$hub_template_file"; then
+      record_failure "$test_name" "T25-71: hub_template.html 에 $stale_display_token 이 없음"
+      return 1
+    fi
+  done
+  if ! grep -qF "tooltipDismissObserver.observe(usageBodyElForTooltipObserver" "$hub_template_file"; then
+    record_failure "$test_name" "T25-71: tooltipDismissObserver 가 #dzh-usage-body 를 다시 관찰하지 않음(GOTCHA 1)"
+    return 1
+  fi
+
+  # T25-72(R-B 파이썬 계약): UsageSample.is_stale·mark_stale_usage_sample 이 hub_usage.py 에
+  # 있고, hub_collect.py 가 그 함수를 부른다. 역방향(핵심) — _capture_for_snapshot 범위 안에
+  # 만료 시 지우던 옛 경로(usage = None)가 되살아나지 않았다.
+  if ! grep -qF "is_stale: bool = False" "$hub_usage_file"; then
+    record_failure "$test_name" "T25-72: hub_usage.py 에 is_stale: bool = False 필드가 없음"
+    return 1
+  fi
+  if ! grep -qF "def mark_stale_usage_sample" "$hub_usage_file"; then
+    record_failure "$test_name" "T25-72: hub_usage.py 에 mark_stale_usage_sample 함수가 없음"
+    return 1
+  fi
+  if ! grep -qF "mark_stale_usage_sample" "$hub_collect_file"; then
+    record_failure "$test_name" "T25-72: hub_collect.py 가 mark_stale_usage_sample 을 호출하지 않음"
+    return 1
+  fi
+  local capture_for_snapshot_body
+  capture_for_snapshot_body=$(sed -n '/^def _capture_for_snapshot/,/^# ---- 합성 ----/p' "$hub_collect_file")
+  if echo "$capture_for_snapshot_body" | grep -qF "usage = None"; then
+    record_failure "$test_name" "T25-72: _capture_for_snapshot 에 옛 숨김 경로(usage = None)가 되살아남"
+    return 1
+  fi
+
+  # T25-73(R-A 온보딩 + 소유권 원칙): 정방향 — commands/hub.md 의 /hub install 절에
+  # install-statusline 이 있고, hub/install.sh 의 "다음 단계" 줄과 hub/README.md 「빠른 시작」에
+  # 상태줄 언급이 있다. 역방향(핵심, 전제 1 의 기계적 강제) — hub/install.sh 는 settings.json 도
+  # install-statusline 도 모른다.
+  local hub_install_section
+  hub_install_section=$(sed -n '/^## `\/hub install`/,/^## `\/hub off`/p' "$hub_command_file")
+  if ! echo "$hub_install_section" | grep -qF "install-statusline"; then
+    record_failure "$test_name" "T25-73: commands/hub.md 의 /hub install 절에 install-statusline 이 없음"
+    return 1
+  fi
+  if ! grep -F "다음 단계" "$hub_install_file" | grep -qF "상태줄"; then
+    record_failure "$test_name" "T25-73: hub/install.sh 의 '다음 단계' 안내에 상태줄 언급이 없음"
+    return 1
+  fi
+  local quick_start_section
+  quick_start_section=$(sed -n '/^## 빠른 시작/,/^## /p' "$hub_readme_file")
+  if ! echo "$quick_start_section" | grep -qF "상태줄"; then
+    record_failure "$test_name" "T25-73: hub/README.md 「빠른 시작」에 상태줄 언급이 없음"
+    return 1
+  fi
+  if grep -qF "settings.json" "$hub_install_file"; then
+    record_failure "$test_name" "T25-73: hub/install.sh 가 settings.json 을 언급함(전제 1 위반)"
+    return 1
+  fi
+  # "install-statusline" 은 기존 --uninstall 절차의 "uninstall-statusline" 호출 안에도 부분
+  # 문자열로 존재한다(u+install-statusline) — 그 문자열 자체를 금지하면 항상 거짓양성이 난다.
+  # 실제로 막아야 할 것은 **단독 직접 호출**이므로, 전체 등장 횟수가 uninstall-statusline
+  # 등장 횟수와 같은지(=모든 등장이 그 안에만 있는지)로 판정한다.
+  local install_statusline_total uninstall_statusline_total
+  install_statusline_total=$(grep -oF "install-statusline" "$hub_install_file" | wc -l | tr -d ' ')
+  uninstall_statusline_total=$(grep -oF "uninstall-statusline" "$hub_install_file" | wc -l | tr -d ' ')
+  if [[ "$install_statusline_total" -ne "$uninstall_statusline_total" ]]; then
+    record_failure "$test_name" "T25-73: hub/install.sh 가 install-statusline 을 (uninstall-statusline 바깥에서) 직접 호출함(전제 1 위반)"
+    return 1
+  fi
+
+  # T25-74(문서 정합): hub/README.md 사용량 패널 절에 '조회되지 않음' 설명이 있고, 역방향 —
+  # R-B 이전의 낡은 숨김 서술("5시간보다 오래됐거나 … 패널 전체를 표시하지 않는다")이 남아
+  # 있지 않다(문서와 동작이 어긋난 채 방치되는 것을 막는다).
+  local usage_panel_section
+  usage_panel_section=$(sed -n '/^## 사용량 패널/,/^## /p' "$hub_readme_file")
+  if ! echo "$usage_panel_section" | grep -qF "조회되지 않음"; then
+    record_failure "$test_name" "T25-74: hub/README.md 사용량 패널 절에 '조회되지 않음' 설명이 없음"
+    return 1
+  fi
+  if echo "$usage_panel_section" | grep -qF "5시간보다 오래됐거나(세션을 한동안 안"; then
+    record_failure "$test_name" "T25-74: hub/README.md 에 R-B 이전의 낡은 숨김 서술이 남아 있음"
+    return 1
+  fi
 
   log_ok "$test_name 통과"
   ((passed_tests++))

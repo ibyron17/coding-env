@@ -318,10 +318,12 @@ def _capture_for_snapshot(
 
     `show_usage_panel` 이 꺼져 있으면 캡처 파일을 열지도 않는다(전제 8) — CSS 로 숨기는 게
     아니라 읽기 자체를 중단하는 것이 진짜 프라이버시 제어다. 사용률은 5시간 만료(U3) 또는
-    세션 창 롤오버(결정 P5)면 경고 없이 숨긴다. 지난 리셋 시각은 여기(서버 쪽 1차 필터,
-    결정 R5)에서 걷어낸다 — 클라이언트 쪽 2차 필터는 템플릿이 30초 틱마다 담당한다.
-    두 사설 함수(_usage_for_snapshot·_rate_limit_resets_for_snapshot)가 각각 파일을 읽던
-    구조를 여기 하나로 합쳐, 계약 불일치 경고가 2건으로 중복되는 문제(GOTCHA 5)를 없앤다.
+    세션 창 롤오버(결정 P5)여도 **숨기지 않는다** — `mark_stale_usage_sample` 이 `is_stale`
+    로 표시만 하고 값은 그대로 살려 둔다(R-B, 결정 EX1·EX5) — 화면은 그 값을 "조회되지
+    않음"으로 그린다. 지난 리셋 시각은 여기(서버 쪽 1차 필터, 결정 R5)에서 걷어낸다 —
+    클라이언트 쪽 2차 필터는 템플릿이 30초 틱마다 담당한다. 두 사설 함수
+    (_usage_for_snapshot·_rate_limit_resets_for_snapshot)가 각각 파일을 읽던 구조를 여기
+    하나로 합쳐, 계약 불일치 경고가 2건으로 중복되는 문제(GOTCHA 5)를 없앤다.
     """
     if not config.show_usage_panel:
         return None, None, ()
@@ -330,11 +332,8 @@ def _capture_for_snapshot(
         return None, None, warnings
 
     usage = hub_usage.usage_sample_from_capture(capture)
-    if usage is not None and (
-        hub_usage.is_usage_sample_expired(usage, now_ms)
-        or hub_usage.is_session_window_rolled_over(capture, now_ms)
-    ):
-        usage = None
+    if usage is not None:
+        usage = hub_usage.mark_stale_usage_sample(usage, capture, now_ms)  # 숨기지 않고 표식만 단다(R-B)
 
     resets = hub_usage.resets_from_capture(capture)
     if resets is not None:

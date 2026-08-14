@@ -474,25 +474,44 @@ class CaptureForSnapshotTest(unittest.TestCase):
         self.assertIsNotNone(resets)
         self.assertEqual(warnings, ())
 
-    def test_n34_six_hours_old_capture_expires_usage_without_warnings(self) -> None:
+    def test_n34_six_hours_old_capture_marks_usage_stale_without_warnings(self) -> None:
+        """R-B 개정 — 만료돼도 usage 는 숨겨지지 않고 살아남아 is_stale 로 표시된다."""
         six_hours_ms = 6 * 60 * 60 * 1000
         self._write_capture(
             captured_at_ms=self.now_ms - six_hours_ms, session_used_percent=10, weekly_used_percent=19
         )
         usage, _resets, warnings = hub_collect._capture_for_snapshot(self.now_ms, hub_model.HubConfig())
-        self.assertIsNone(usage)
+        self.assertIsNotNone(usage)
+        self.assertTrue(usage.is_stale)
         self.assertEqual(warnings, ())
 
-    def test_n35_session_window_rolled_over_expires_usage_even_when_fresh(self) -> None:
-        """결정 P5 — 나이가 3시간뿐이어도 세션 리셋 시각이 이미 지났으면 퍼센트는 틀린 값이다."""
+    def test_n35_session_window_rolled_over_marks_usage_stale_even_when_fresh(self) -> None:
+        """결정 P5·EX2 개정 — 나이가 3시간뿐이어도 세션 리셋 시각이 지났으면 확실히 틀린
+        값이라 is_stale 로 표시된다(숨기지는 않는다)."""
         self._write_capture(
             captured_at_ms=self.now_ms - 3 * 60 * 60 * 1000,
             session_resets_at_ms=self.now_ms - 60 * 60 * 1000,
             session_used_percent=10, weekly_used_percent=19,
         )
         usage, _resets, warnings = hub_collect._capture_for_snapshot(self.now_ms, hub_model.HubConfig())
-        self.assertIsNone(usage)
+        self.assertIsNotNone(usage)
+        self.assertTrue(usage.is_stale)
         self.assertEqual(warnings, ())
+
+    def test_u8_stale_usage_keeps_future_weekly_reset_row(self) -> None:
+        """결정 EX8 — 만료 상태에서도 아직 지나지 않은 초기화 예정 시각은 그대로 실린다."""
+        six_hours_ms = 6 * 60 * 60 * 1000
+        weekly_reset_future_ms = self.now_ms + 3 * 24 * 60 * 60 * 1000
+        self._write_capture(
+            captured_at_ms=self.now_ms - six_hours_ms,
+            weekly_resets_at_ms=weekly_reset_future_ms,
+            session_used_percent=10, weekly_used_percent=19,
+        )
+        usage, resets, _warnings = hub_collect._capture_for_snapshot(self.now_ms, hub_model.HubConfig())
+        self.assertIsNotNone(usage)
+        self.assertTrue(usage.is_stale)
+        self.assertIsNotNone(resets)
+        self.assertEqual(resets.weekly_resets_at_ms, weekly_reset_future_ms)
 
     def test_n36_broken_capture_file_returns_none_pair_with_exactly_one_warning(self) -> None:
         """GOTCHA 5 회귀 — 캡처 파일을 사이클당 1회만 읽으므로 경고가 2건으로 중복되지 않는다."""
@@ -513,6 +532,25 @@ class CaptureForSnapshotTest(unittest.TestCase):
             self.fail("read_rate_limit_capture 가 UnicodeDecodeError 를 던졌다 — 절대 던지지 않아야 한다")
         self.assertIsNone(capture)
         self.assertEqual(len(warnings), 1)
+
+
+class SnapshotContentKeyStaleTransitionTest(unittest.TestCase):
+    """U9 — is_stale 만 다른 두 HubSnapshot 의 snapshot_content_key 가 서로 다르다(결정 EX4 의
+    기계적 고정). 이 성질이 없으면 신선→만료 전이가 일어나도 hub.html 이 다시 쓰이지 않아
+    화면이 스스로 "조회되지 않음"으로 바뀌지 않는 회귀를 아무도 못 잡는다."""
+
+    def _snapshot(self, is_stale: bool) -> hub_model.HubSnapshot:
+        usage = hub_usage.UsageSample(
+            sampled_at_ms=1786433123899, session_percent=10, weekly_percent=19, is_stale=is_stale
+        )
+        return hub_model.HubSnapshot(
+            collected_at_ms=1786433123899, projects=(), unresolved_dir_names=(), warnings=(), usage=usage
+        )
+
+    def test_u9_stale_transition_changes_content_key(self) -> None:
+        fresh_key = hub_model.snapshot_content_key(self._snapshot(is_stale=False))
+        stale_key = hub_model.snapshot_content_key(self._snapshot(is_stale=True))
+        self.assertNotEqual(fresh_key, stale_key)
 
 
 class RateLimitCaptureTest(unittest.TestCase):

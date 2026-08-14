@@ -34,12 +34,18 @@ RATE_LIMIT_MAX_HORIZON_MS = RATE_LIMIT_MAX_HORIZON_DAYS * MILLISECONDS_PER_DAY
 
 @dataclass(frozen=True)
 class UsageSample:
-    """세션(5시간)·주간(7일) 한도 사용률 — RateLimitCapture 의 투영(결정 P3)."""
+    """세션(5시간)·주간(7일) 한도 사용률 — RateLimitCapture 의 투영(결정 P3).
+
+    `is_stale` 은 아래 "파생값은 담지 않는다"는 경고의 예외다(결정 EX3·EX4) — 나이(ms)처럼
+    5초마다 바뀌는 연속값이 아니라, 캡처 수명 동안 최대 1회만 False→True 로 바뀌는 이산
+    (boolean) 값이라 content_key 재작성을 폭주시키지 않는다.
+    """
 
     sampled_at_ms: int      # statusLine 이 이 값들을 관측한 시각(captured_at_ms). 파생값(나이)은
                              # 담지 않는다 — content_key 재작성 폭주 방지(결정 D3)
     session_percent: int    # rate_limits.five_hour.used_percentage 를 내림한 정수(0~100)
     weekly_percent: int     # rate_limits.seven_day.used_percentage 를 내림한 정수(0~100)
+    is_stale: bool = False  # 5시간 만료 또는 세션 창 롤오버 — mark_stale_usage_sample 이 표시한다(R-B)
 
 
 @dataclass(frozen=True)
@@ -242,6 +248,20 @@ def is_session_window_rolled_over(capture: RateLimitCapture, now_ms: int) -> boo
     if capture.session_resets_at_ms is None:
         return False
     return capture.session_resets_at_ms <= now_ms
+
+
+def mark_stale_usage_sample(
+    sample: UsageSample, capture: RateLimitCapture, now_ms: int
+) -> UsageSample:
+    """낡은 샘플에 is_stale 표식을 단 새 샘플을 돌려준다(순수). 신선하면 원본 그대로.
+
+    두 가지 낡음을 하나로 접는다(결정 EX2): ① 세션 창(5시간)보다 오래된 샘플
+    ② 세션 창이 이미 리셋돼 캡처된 세션 퍼센트가 확실히 틀린 경우. 화면에서 둘을 구분할
+    실익이 없다 — 사용자가 할 행동("세션을 한 번 돌린다")이 같다.
+    """
+    if is_usage_sample_expired(sample, now_ms) or is_session_window_rolled_over(capture, now_ms):
+        return replace(sample, is_stale=True)
+    return sample
 
 
 def drop_passed_resets(resets: RateLimitResets, now_ms: int) -> RateLimitResets | None:

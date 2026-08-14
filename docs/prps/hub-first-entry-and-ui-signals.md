@@ -626,6 +626,12 @@ document.addEventListener('click', function(event){
 
 ### 결정 UT4 — 툴팁 옵저버의 `#dzh-usage-body` 관찰을 **제거한다**
 
+> **부분 대체됨(partially superseded, 2026-08-14).** 이 결정은 [`hub-onboarding-statusline-and-stale-usage.md`](./hub-onboarding-statusline-and-stale-usage.md)
+> 의 결정 EX7 이 조건부로 되돌린다 — 만료(조회되지 않음) 안내 줄(`.usage-stale-note`) 하나가 패널 안 유일한 예외 트리거로
+> 추가되면서, 그 트리거를 위해 `#dzh-usage-body` 관찰이 되살아났다(아래 본문이 예고한
+> 조건이 실제로 이행된 것이다). 이 결정이 세운 원칙(패널 안에는 원칙적으로 툴팁 트리거를
+> 두지 않는다) 자체는 유효하며, 아래 근거는 그 원칙의 기록으로 남긴다.
+
 431~435행의 `tooltipDismissObserver` 는 `#dzh-app` 과 `#dzh-usage-body` 두 곳의 `childList` 를
 감시해 "트리거 노드가 교체됐는데 포인터가 멈춰 있어 낡은 툴팁이 남는" 상황을 막는다(결정 T6).
 R5 이후 `#dzh-usage-body` 안에는 트리거가 **하나도 없으므로** 그 관찰은 절대 유용하게 발화할 수
@@ -1057,7 +1063,7 @@ document.addEventListener('drop', function(event){
 | 2 | 마지막 문장의 "`#dzh-live` 는 카드 순서 변경(R2)을 스크린리더에 알리는 aria-live 정적 영역이다" **삭제** |
 | 3 | 조항 ②(드래그 중 재렌더 금지)를 **강화**한다: "드래그 중에는 다시 그리지 않는다 — `isReordering` 이 참이면 `render()` 는 즉시 반환한다. 그 사이 `dragover` 가 `#dzh-app` 자식의 **순서를 직접 바꾸며**(라이브 이동), 따라서 **드래그 구간에서는 DOM 이 저장 순서보다 앞서 있다.** `drop` 이 그 DOM 순서를 커밋하고, `dragend` 가 한 번 다시 그려 둘을 맞춘다. 취소·카드 밖 드롭은 `drop` 없이 `dragend` 만 발화하므로 재렌더가 라이브 이동을 자동으로 되돌린다" |
 | 4 | 사용량 패널 조항에 **접힘을 바꾸는 경로가 둘**(토글 버튼 클릭 · 패널 바깥 클릭)이며 둘 다 같은 함수(`applyUsageCollapsedState`)와 같은 저장 키를 쓴다는 1문장 추가 |
-| 5 | 사용량 패널 조항에 **패널 안에는 툴팁 트리거를 두지 않는다**(R5)는 1문장 추가 — 되살리려면 `tooltipDismissObserver` 의 `#dzh-usage-body` 관찰도 함께 되살려야 한다는 조건을 붙인다 |
+| 5 | 사용량 패널 조항에 **패널 안에는 툴팁 트리거를 두지 않는다**(R5)는 1문장 추가 — 되살리려면 `tooltipDismissObserver` 의 `#dzh-usage-body` 관찰도 함께 되살려야 한다는 조건을 붙인다 → **부분 대체됨** — `hub-onboarding-statusline-and-stale-usage.md` 결정 EX7 이 이 조건을 실제로 이행해, 만료 안내 줄(`.usage-stale-note`) 하나에 한해 트리거와 그 관찰이 되살아났다 |
 
 ---
 

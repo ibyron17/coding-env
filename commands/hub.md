@@ -123,23 +123,44 @@ python3 "$HOME/.claude/hub/bin/hub.py" server-status --json
 `log_tail`(있으면)을 함께 보고한다. 그 외 필드(`record`·`process_present`·
 `heartbeat_age_ms`·`http_ok`·`orphaned_evidence`)는 참고용으로 표에 곁들인다.
 
-## `/hub install` — 훅 설치 (옵트인)
+## `/hub install` — 훅 + 상태줄 설치 (옵트인)
+
+**1단계 — 훅.**
 
 ```bash
 python3 "$HOME/.claude/hub/bin/hub.py" install-hooks --json
 ```
 
-**실행 전 반드시 아래 프라이버시 고지를 사용자에게 보여주고 진행 여부를 확인한다** (최초 1회,
-이미 설치돼 있으면 건너뜀 — `already_installed` 로 판단):
+**2단계 — 상태줄.** 1단계의 `ok` 와 무관하게 이어서 실행한다(둘은 독립된 옵트인이다).
 
-> 이 명령은 `SessionStart`·`UserPromptSubmit`·`Stop`·`SubagentStart`·`SubagentStop`·`SessionEnd`
-> 6개 이벤트에 전역 훅을 추가합니다. 프롬프트 앞부분(120자)이 `~/.claude/hub/events/`에 평문으로
+```bash
+python3 "$HOME/.claude/hub/bin/hub.py" install-statusline --json
+```
+
+**두 명령 실행 전 아래 고지를 한 번에 보여주고 진행 여부를 확인한다**(최초 1회. 두 결과의
+`already_installed` 가 모두 참이면 다음부터 생략):
+
+> **① 전역 훅 6개** — `SessionStart`·`UserPromptSubmit`·`Stop`·`SubagentStart`·`SubagentStop`·
+> `SessionEnd` 에 훅을 추가합니다. 프롬프트 앞부분(120자)이 `~/.claude/hub/events/` 에 평문으로
 > 최대 7일 보관됩니다(`~/.claude/hub/config.json` 의 `record_prompt_excerpt:false` 로 끌 수 있음).
+> **② 터미널 상태줄** — `~/.claude/settings.json` 의 `statusLine` 에 우리 커맨드를 등록합니다.
+> **모든 프로젝트의 터미널 상태줄**에 `세션 23% · 주간 41%` 가 상시 표시되고, 그 값이
+> `~/.claude/hub/rate_limits.json` 에 캡처돼 **허브의 사용량 패널을 채웁니다.** 이미 다른
+> `statusLine` 이 설정돼 있으면 **덮어쓰지 않고 거부**합니다.
 > 기존에 설치된 다른 도구의 훅(CAM·Litmus 등)은 건드리지 않습니다.
+> 상태줄만 원하지 않으면 나중에 `/hub statusline off` 로 즉시 되돌릴 수 있습니다.
 
-결과의 `installed`(새로 추가된 이벤트) · `already_installed`(이미 있던 이벤트)를 보고한다.
-`ok=false` 면 `reason` 을 그대로 보고하고 **재시도하지 않는다** — `settings.json` 파싱 실패는
-사용자의 권한 설정을 보호하기 위한 의도적 중단이다.
+사용자가 **"훅만"** 이라고 답하면 2단계를 건너뛴다. 임의로 건너뛰거나 강행하지 않는다.
+
+**보고** — 두 결과를 한 덩어리로 보고한다.
+
+| 상황 | 보고 |
+|------|------|
+| 둘 다 성공 | 훅 `installed`/`already_installed` + 상태줄 `installed`/`already_installed`. 이어서 `/hub server start` 를 안내 |
+| 훅 성공 · 상태줄 `ok:false` | **`/hub install` 을 실패로 보고하지 않는다.** 훅 결과를 먼저 보고하고, 상태줄은 `reason` 을 그대로 옮긴다. 남의 `statusLine` 충돌(`current_command` 동봉)이면 "기존 설정을 보존했습니다 — 사용량 패널이 필요하면 `/hub statusline on` 을 직접 실행하거나, 터미널을 건드리지 않는 대안으로 `config.json` 의 `usage_api_enabled:true`(macOS 전용, 옵트인)를 쓸 수 있습니다" 한 줄을 덧붙인다 |
+| 훅 `ok:false` | 훅의 `reason` 을 그대로 보고하고 **재시도하지 않는다**(`settings.json` 파싱 실패는 사용자의 권한 설정을 보호하기 위한 의도적 중단이다). 2단계 결과도 함께 보고한다 |
+
+두 명령 모두 **멱등**이다 — 이미 설치돼 있으면 `settings.json` 을 쓰지 않는다.
 
 ## `/hub off` — 훅 제거
 
@@ -149,7 +170,10 @@ python3 "$HOME/.claude/hub/bin/hub.py" uninstall-hooks --json
 
 `removed` 목록을 보고한다. 서버가 켜져 있으면 계속 돈다 — 이 명령은 훅만 건드린다.
 
-## `/hub statusline on` — 한도 초기화 예정 시각 캡처 등록 (옵트인)
+## `/hub statusline on` — 한도 초기화 예정 시각 캡처 등록 (단독 재실행, 옵트인)
+
+`/hub install` 2단계와 같은 명령이다 — 그때 "훅만"을 선택했거나 상태줄 등록만 실패했던
+경우 이 명령으로 단독으로 다시 시도한다.
 
 ```bash
 python3 "$HOME/.claude/hub/bin/hub.py" install-statusline --json
@@ -161,13 +185,16 @@ python3 "$HOME/.claude/hub/bin/hub.py" install-statusline --json
 > 이 명령은 `~/.claude/settings.json` 의 `statusLine` 에 우리 커맨드를 등록합니다 — **모든
 > 프로젝트의 터미널 상태줄**에 영향을 줍니다. 등록 후에는 상태줄에 `세션 23% · 주간 41%` 가
 > 상시 표시되고, 한도 초기화 예정 시각과 사용률이 `~/.claude/hub/rate_limits.json` 에
-> 캡처돼 사용량 패널에 보입니다. **패널의 퍼센트도 이 등록이 있어야 뜹니다** — 등록하지
-> 않으면 사용량 패널 자체가 존재하지 않습니다. 이미 다른 `statusLine` 이 설정돼 있으면
-> **덮어쓰지 않고 거부**합니다.
+> 캡처돼 사용량 패널에 보입니다. 이미 다른 `statusLine` 이 설정돼 있으면 **덮어쓰지 않고
+> 거부**합니다.
 
 결과의 `installed`·`already_installed` 를 보고한다. `ok=false` 면 `reason` 을 그대로 보고하고
 **재시도하지 않는다** — 다른 `statusLine` 과의 충돌(`current_command` 동봉)이거나
 `hub_statusline.py` 가 배포되지 않은 상태(`hub/install.sh` 재실행 필요)다.
+
+등록한 적이 없거나 세션을 한 번도 안 돌렸으면 사용량 패널 자체가 존재하지 않는다. 한
+번이라도 등록·캡처된 뒤에는 세션을 한동안 안 돌려 캡처가 낡아도 패널이 사라지지 않고
+**조회되지 않음**으로 표시된다(`hub/README.md` 「사용량 패널」 참조).
 
 ## `/hub statusline off` — 캡처 중단
 

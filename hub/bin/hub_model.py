@@ -148,7 +148,7 @@ class HubSnapshot:
     projects: tuple[ProjectView, ...]
     unresolved_dir_names: tuple[str, ...]
     warnings: tuple[str, ...]
-    usage: UsageSample | None = None    # statusLine 캡처(rate_limits.json)의 투영. 없으면 패널을 그리지 않는다(요구 2)
+    usage: UsageSample | None = None    # statusLine 캡처(rate_limits.json)의 투영. 없으면 패널을 그리지 않는다(만료는 is_stale 로 표시된다)
     rate_limit_resets: RateLimitResets | None = None    # 없으면 초기화 예정 시각 줄을 그리지 않는다
 
 
