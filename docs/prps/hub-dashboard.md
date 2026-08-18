@@ -321,6 +321,13 @@ overlay:
 > 관측했고, 그 뒤로 재부착을 보지 못했다.** `stale` 로 덮이지 않는 터미널 "표시"라는 성질은
 > 그대로지만, 터미널인 것은 표시일 뿐 사실이 아니다.
 
+> **개정 →(결정 ZG1~ZG7, `hub-zombie-subagent-guard.md`)**: 규칙 2 의 "살아 있는 서브에이전트
+> 존재"는 나이 기반 좀비 가드로 좁혀진다 — **`working` = `turn_state == "running"` 이거나,
+> 또는 `SubagentStop` 없이 시작 후 `SUBAGENT_ZOMBIE_AFTER_MS`(90분) 이내인 서브에이전트가
+> 하나라도 있다.** `SubagentStop` 훅이 API 오류 등으로 아예 발화하지 않는 좀비 실행이
+> 세션을 영구히 `working` 으로 붙잡던 결함(실측 E1)의 수정이며, 같은 술어가 서브에이전트
+> 칩의 `is_running` 도 결정하므로 상태와 칩은 어긋날 수 없다.
+
 ### 3. 단계 추정 — 서브에이전트 타입 → 단계
 
 > **개정됨.** `infer_phase()` 는 삭제되고 `summarize_agent_runs()` 가 각 서브에이전트 타입에

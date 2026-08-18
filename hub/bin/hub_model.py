@@ -114,7 +114,10 @@ class SubagentRunView:
 
     agent_type: str            # 훅이 준 원문 그대로. 예: "implementer", "workflow-subagent"
     phase: Phase | None        # PHASE_BY_AGENT_TYPE 에 없으면 None
-    is_running: bool           # 같은 타입 실행 중 하나라도 진행 중이면 True
+    # 같은 타입 실행 중 하나라도 "지금 돌고 있다고 볼 수 있으면"(is_running_subagent) True.
+    # 좀비(SUBAGENT_ZOMBIE_AFTER_MS 초과 미종료)는 여기서도 False — 상태 판정과 같은 술어를
+    # 쓰므로 카드 상태와 어긋날 수 없다(결정 ZG4, docs/prps/hub-zombie-subagent-guard.md).
+    is_running: bool
 
 
 @dataclass(frozen=True)
@@ -375,25 +378,55 @@ def build_session_facts(events: Sequence[HookEvent]) -> dict[str, SessionFacts]:
 
 
 # ---- 3. 세션 표시 상태 ----
+# 서브에이전트가 API 오류 등으로 죽으면 SubagentStop 훅이 발화하지 않는다(실측 E1·E5 — 3일간
+# 고아 18건, docs/prps/hub-zombie-subagent-guard.md). 그 좀비 1건이 세션을 영구히 working 으로
+# 붙잡는 것을 막는 나이 상한이다. 90분의 근거: 3일간 완료된 정상 실행 90건의 최장이 47.3분
+# (p90 18.4분)이며, 90분은 그 1.9배다(결정 ZG2 의 표). 상한을 넘긴 실행은 "죽었다"가 아니라
+# "지금 돌고 있다는 근거가 없다"로 본다.
+SUBAGENT_ZOMBIE_AFTER_MS = 90 * 60 * 1000
+
+
+def is_running_subagent(subagent: SubagentFact, now_ms: int, zombie_after_ms: int) -> bool:
+    """지금 실제로 돌고 있다고 볼 수 있는 실행인가 — 이미 끝났거나 좀비면 False."""
+    if subagent.ended_at_ms is not None:
+        return False
+    return (now_ms - subagent.started_at_ms) < zombie_after_ms
+
+
 # `done` = `SessionEnd` 를 관측했고, 그 뒤로 재부착(`SessionStart`, compact 제외)을 보지
 # 못했다(결정 RV3, docs/prps/hub-session-revival-and-stale-tier1.md). `done` 은 여전히
 # `stale` 로 덮이지 않는 터미널 표시이지만, 터미널인 것은 표시일 뿐 사실이 아니다 — 세션은
 # 되살아날 수 있고, 되살아나면 `done` 은 취소된다(_apply_tracked_event 의 SessionStart 분기가
 # ended_at_ms 를 해제한다).
-def _compute_base_state(facts: SessionFacts) -> Literal["working", "idle", "done"]:
+#
+# `working` = 메인 턴이 진행 중이거나(`turn_state == "running"`), 또는 `SubagentStop` 없이
+# 시작 후 `SUBAGENT_ZOMBIE_AFTER_MS`(90분) 이내인 서브에이전트가 하나라도 있다(결정 ZG7). 90분을
+# 넘긴 미종료 실행은 실행 근거에서 제외한다 — 죽었다고 단정하는 것이 아니라, 지금 돌고 있다는
+# 근거로 인정하지 않는다는 뜻이다. 같은 술어가 서브에이전트 칩의 `is_running` 도 결정하므로,
+# 상태와 칩은 어긋날 수 없다.
+def _compute_base_state(
+    facts: SessionFacts, now_ms: int, zombie_after_ms: int
+) -> Literal["working", "idle", "done"]:
     if facts.ended_at_ms is not None:
         return "done"
-    has_running_subagent = any(sub.ended_at_ms is None for sub in facts.subagents)
+    has_running_subagent = any(
+        is_running_subagent(sub, now_ms, zombie_after_ms) for sub in facts.subagents
+    )
     if facts.turn_state == "running" or has_running_subagent:
         return "working"
     return "idle"
 
 
-def compute_session_view(facts: SessionFacts, now_ms: int, stale_after_ms: int) -> SessionView:
+def compute_session_view(
+    facts: SessionFacts,
+    now_ms: int,
+    stale_after_ms: int,
+    zombie_after_ms: int = SUBAGENT_ZOMBIE_AFTER_MS,
+) -> SessionView:
     """우선순위 사다리(done > working > idle) + stale 오버레이로 표시 상태를 정한다."""
-    base_state = _compute_base_state(facts)
+    base_state = _compute_base_state(facts, now_ms, zombie_after_ms)
     is_stale = base_state != "done" and (now_ms - facts.last_event_at_ms) >= stale_after_ms
-    agent_runs = summarize_agent_runs(facts)
+    agent_runs = summarize_agent_runs(facts, now_ms, zombie_after_ms)
     return SessionView(
         session_id=facts.session_id,
         short_id=facts.session_id[:SHORT_ID_LENGTH],
@@ -406,13 +439,17 @@ def compute_session_view(facts: SessionFacts, now_ms: int, stale_after_ms: int) 
 
 
 # ---- 4. 서브에이전트 요약 ----
-def summarize_agent_runs(facts: SessionFacts) -> tuple[SubagentRunView, ...]:
+def summarize_agent_runs(
+    facts: SessionFacts, now_ms: int, zombie_after_ms: int = SUBAGENT_ZOMBIE_AFTER_MS
+) -> tuple[SubagentRunView, ...]:
     """세션의 서브에이전트를 타입별로 합쳐, 실행 중 타입을 먼저 두고 그 다음 최근 시작 순으로
     돌려준다(종료된 것도 포함).
 
     실행 중 우선순위(결정 K2)는 클라이언트의 칩 상한(결정 K1)이 "+N" 오버플로 칩 없이도
     지금 진행 중인 작업을 놓치지 않게 하기 위한 것이다 — 정렬 키가 전부 결정적이므로
-    snapshot_content_key 안정성(결정 D2)에는 영향이 없다.
+    snapshot_content_key 안정성(결정 D2)에는 영향이 없다. `is_running` 은 `_compute_base_state`
+    와 같은 술어(`is_running_subagent`)를 쓴다 — 좀비 실행은 여기서도 실행 중으로 보지 않는다
+    (결정 ZG1·ZG4, 상태와 칩이 어긋나지 않게 하는 구조적 장치).
     """
     latest_started_at_ms: dict[str, int] = {}
     is_running_by_type: dict[str, bool] = {}
@@ -423,7 +460,8 @@ def summarize_agent_runs(facts: SessionFacts) -> tuple[SubagentRunView, ...]:
             latest_started_at_ms.get(sub.agent_type, sub.started_at_ms), sub.started_at_ms
         )
         is_running_by_type[sub.agent_type] = (
-            is_running_by_type.get(sub.agent_type, False) or sub.ended_at_ms is None
+            is_running_by_type.get(sub.agent_type, False)
+            or is_running_subagent(sub, now_ms, zombie_after_ms)
         )
     ordered_types = sorted(
         latest_started_at_ms,

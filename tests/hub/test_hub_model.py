@@ -103,6 +103,208 @@ class SubagentTrackingTest(unittest.TestCase):
         self.assertIsNone(by_id["agt-2"].ended_at_ms)
 
 
+class SubagentZombieGuardTest(unittest.TestCase):
+    """ZG1~ZG15 — docs/prps/hub-zombie-subagent-guard.md 결정 ZG1~ZG7.
+
+    `SubagentStop` 을 못 본 서브에이전트가 나이(`now_ms - started_at_ms`)로 좀비 판정을 받는지,
+    그리고 그 판정이 상태(`base_state`)와 칩(`is_running`)에 동시에 반영되는지를 검증한다.
+    """
+
+    ZOMBIE_AFTER_MS = 90 * 60 * 1000
+    ONE_MINUTE_MS = 60 * 1000
+    # stale 오버레이(30분)는 M4·RV7 이 이미 별도로 잠갔다. 이 클래스는 base_state·is_running 이
+    # 나이만으로 어떻게 갈리는지를 보려는 것이라, 오버레이가 우연히 결과를 가리지 않도록 시나리오
+    # 지속 시간(최대 약 3시간)보다 넉넉히 큰 stale_after_ms 를 쓴다(실측 E9 — 오버레이는 sticky
+    # working 을 "부분적으로만" 구제하므로, 오버레이에 기대지 않는 경로를 따로 확인해야 한다).
+    NO_OVERLAY_STALE_AFTER_MS = 24 * 60 * 60 * 1000
+
+    def test_zg1_ended_subagent_is_never_running_regardless_of_age(self) -> None:
+        subagent = hub_model.SubagentFact(
+            agent_id="agt-1", agent_type="implementer",
+            started_at_ms=BASE_TIME_MS, ended_at_ms=BASE_TIME_MS + 1000,
+        )
+        self.assertFalse(
+            hub_model.is_running_subagent(subagent, now_ms=BASE_TIME_MS + 2000, zombie_after_ms=self.ZOMBIE_AFTER_MS)
+        )
+
+    def test_zg2_age_one_ms_under_threshold_is_running(self) -> None:
+        subagent = hub_model.SubagentFact(
+            agent_id="agt-1", agent_type="implementer", started_at_ms=BASE_TIME_MS, ended_at_ms=None,
+        )
+        now_ms = BASE_TIME_MS + self.ZOMBIE_AFTER_MS - 1
+        self.assertTrue(hub_model.is_running_subagent(subagent, now_ms=now_ms, zombie_after_ms=self.ZOMBIE_AFTER_MS))
+
+    def test_zg3_age_exactly_threshold_is_zombie(self) -> None:
+        """경계는 >= 가 좀비다(GOTCHA 5) — < 로 잘못 쓰면 이 테스트가 잡는다."""
+        subagent = hub_model.SubagentFact(
+            agent_id="agt-1", agent_type="implementer", started_at_ms=BASE_TIME_MS, ended_at_ms=None,
+        )
+        now_ms = BASE_TIME_MS + self.ZOMBIE_AFTER_MS
+        self.assertFalse(hub_model.is_running_subagent(subagent, now_ms=now_ms, zombie_after_ms=self.ZOMBIE_AFTER_MS))
+
+    def test_zg4_age_past_threshold_by_an_hour_is_zombie(self) -> None:
+        subagent = hub_model.SubagentFact(
+            agent_id="agt-1", agent_type="implementer", started_at_ms=BASE_TIME_MS, ended_at_ms=None,
+        )
+        one_hour_ms = 60 * self.ONE_MINUTE_MS
+        now_ms = BASE_TIME_MS + self.ZOMBIE_AFTER_MS + one_hour_ms
+        self.assertFalse(hub_model.is_running_subagent(subagent, now_ms=now_ms, zombie_after_ms=self.ZOMBIE_AFTER_MS))
+
+    def test_zg5_negative_age_from_clock_skew_is_running(self) -> None:
+        """X4 — now_ms < started_at_ms 이면 안전한 방향(실행 중)으로 본다."""
+        subagent = hub_model.SubagentFact(
+            agent_id="agt-1", agent_type="implementer", started_at_ms=BASE_TIME_MS, ended_at_ms=None,
+        )
+        now_ms = BASE_TIME_MS - 1000
+        self.assertTrue(hub_model.is_running_subagent(subagent, now_ms=now_ms, zombie_after_ms=self.ZOMBIE_AFTER_MS))
+
+    def test_zg6_e1_zombie_after_three_hours_reproduces_idle(self) -> None:
+        """E1 실측 재현(G1) — 현재 코드에서는 working 이다(버그 재현)."""
+        events = [
+            _event("SubagentStart", 0, agent_id="agt-1", agent_type="code-reviewer"),
+            _event("UserPromptSubmit", 1000),
+            _event("Stop", 2000),
+        ]
+        facts = _facts_from(events)
+        three_hours_later = facts.started_at_ms + 3 * 60 * self.ONE_MINUTE_MS
+        view = hub_model.compute_session_view(
+            facts, now_ms=three_hours_later, stale_after_ms=self.NO_OVERLAY_STALE_AFTER_MS
+        )
+        self.assertEqual(view.state, "idle")
+        self.assertEqual(view.base_state, "idle")
+
+    def test_zg7_age_89_minutes_still_working(self) -> None:
+        """오탐 방어 — 아직 90분이 안 됐으면 좀비가 아니다. 구현 전에도 통과해야 한다."""
+        events = [
+            _event("SubagentStart", 0, agent_id="agt-1", agent_type="code-reviewer"),
+            _event("UserPromptSubmit", 1000),
+            _event("Stop", 2000),
+        ]
+        facts = _facts_from(events)
+        eighty_nine_minutes_later = facts.started_at_ms + 89 * self.ONE_MINUTE_MS
+        view = hub_model.compute_session_view(
+            facts, now_ms=eighty_nine_minutes_later, stale_after_ms=self.NO_OVERLAY_STALE_AFTER_MS
+        )
+        self.assertEqual(view.state, "working")
+
+    def test_zg8_running_type_wins_over_zombie_same_type(self) -> None:
+        """X2 — 같은 타입에 좀비 1 + 정상 실행 1 이면 정상 쪽이 이긴다. 구현 전에도 통과해야 한다."""
+        events = [
+            _event("SubagentStart", 0, agent_id="agt-1", agent_type="implementer"),
+            _event("SubagentStart", self.ZOMBIE_AFTER_MS, agent_id="agt-2", agent_type="implementer"),
+        ]
+        facts = _facts_from(events)
+        now_ms = facts.started_at_ms + self.ZOMBIE_AFTER_MS
+        view = hub_model.compute_session_view(facts, now_ms=now_ms, stale_after_ms=self.NO_OVERLAY_STALE_AFTER_MS)
+        self.assertEqual(view.state, "working")
+        self.assertEqual(len(view.agent_runs), 1)
+        self.assertTrue(view.agent_runs[0].is_running)
+
+    def test_zg9_zombie_chip_demotes_to_ended_group_ordering(self) -> None:
+        """결정 ZG4 — 좀비 칩은 종료 그룹으로 내려가 최근 시작순에 편입된다."""
+        events = [
+            _event("SubagentStart", 0, agent_id="agt-1", agent_type="code-reviewer"),
+            _event("SubagentStart", 1000, agent_id="agt-2", agent_type="implementer"),
+            _event("SubagentStop", 2000, agent_id="agt-2", agent_type="implementer"),
+            _event("Stop", 3000),
+        ]
+        facts = _facts_from(events)
+        now_ms = facts.started_at_ms + self.ZOMBIE_AFTER_MS + self.ONE_MINUTE_MS
+        runs = hub_model.summarize_agent_runs(facts, now_ms=now_ms)
+        self.assertTrue(all(not run.is_running for run in runs))
+        self.assertEqual([run.agent_type for run in runs], ["implementer", "code-reviewer"])
+
+    def test_zg10_running_turn_overrides_zombie_only_session(self) -> None:
+        """X3 — turn_state=="running" 이면 좀비뿐이어도 working. 구현 전에도 통과해야 한다."""
+        events = [
+            _event("SubagentStart", 0, agent_id="agt-1", agent_type="code-reviewer"),
+            _event("UserPromptSubmit", 1000),
+        ]
+        facts = _facts_from(events)
+        now_ms = facts.started_at_ms + self.ZOMBIE_AFTER_MS + self.ONE_MINUTE_MS
+        view = hub_model.compute_session_view(facts, now_ms=now_ms, stale_after_ms=self.NO_OVERLAY_STALE_AFTER_MS)
+        self.assertEqual(view.state, "working")
+
+    def test_zg11_state_and_chips_never_contradict_for_zombie_only_session(self) -> None:
+        """G4·S4 — 좀비만 있는 세션에서 상태와 칩이 동시에 어긋나지 않는다(동시 단정)."""
+        events = [
+            _event("SubagentStart", 0, agent_id="agt-1", agent_type="code-reviewer"),
+            _event("UserPromptSubmit", 1000),
+            _event("Stop", 2000),
+        ]
+        facts = _facts_from(events)
+        now_ms = facts.started_at_ms + self.ZOMBIE_AFTER_MS + self.ONE_MINUTE_MS
+        view = hub_model.compute_session_view(facts, now_ms=now_ms, stale_after_ms=self.NO_OVERLAY_STALE_AFTER_MS)
+        self.assertNotEqual(view.state, "working")
+        self.assertTrue(all(not run.is_running for run in view.agent_runs))
+
+    def test_zg12_longest_real_run_reproduces_e6(self) -> None:
+        """E6 실측 최장 재현(G2) — T=기본값(SUBAGENT_ZOMBIE_AFTER_MS)에서도 좀비로 오인되지 않는다."""
+        events = [
+            _event("SubagentStart", 0, agent_id="agt-1", agent_type="implementer"),
+            _event("Stop", 100),
+        ]
+        facts = _facts_from(events)
+        forty_seven_point_three_minutes_ms = int(47.3 * self.ONE_MINUTE_MS)
+        now_ms = facts.started_at_ms + forty_seven_point_three_minutes_ms
+        runs = hub_model.summarize_agent_runs(facts, now_ms=now_ms)
+        self.assertTrue(runs[0].is_running)
+
+    def test_zg13_zombie_session_is_excluded_from_tier1_generation_verdict(self) -> None:
+        """결정 ZG6·G5 — 좀비가 살아 있는 세션 집합에서 빠져 세대 판정 오염이 해소된다."""
+        tier1 = hub_parse.Tier1Snapshot(
+            title="t", subtitle="s", completed=1, total=2, percent=50, steps=(),
+            matrix_done=None, impl_done=0, impl_total=0, updated_text="-",
+            file_mtime_ms=BASE_TIME_MS,
+        )
+        events = [
+            _event("SubagentStart", 60_000, agent_id="agt-1", agent_type="code-reviewer"),
+            _event("Stop", 61_000),
+        ]
+        facts = hub_model.build_session_facts(events)["session-1"]
+        now_ms = facts.started_at_ms + self.ZOMBIE_AFTER_MS + self.ONE_MINUTE_MS
+        views = hub_model.compose_project_views(
+            tier1_by_path={"/repo": tier1},
+            sessions_by_path={"/repo": (facts,)},
+            tier3_last_activity_by_path={},
+            now_ms=now_ms, stale_after_ms=self.NO_OVERLAY_STALE_AFTER_MS,
+        )
+        self.assertNotEqual(views[0].state, "working")
+        self.assertFalse(views[0].tier1_is_previous_task)
+
+    def test_zg14_zombie_chip_survives_json_round_trip_as_not_running(self) -> None:
+        """선례: 기존 test_a8·test_gn9 — 렌더링 왕복 후에도 계약이 유지된다."""
+        events = [_event("SubagentStart", 0, agent_id="agt-1", agent_type="code-reviewer")]
+        facts = _facts_from(events)
+        now_ms = facts.started_at_ms + self.ZOMBIE_AFTER_MS + self.ONE_MINUTE_MS
+        view = hub_model.compute_session_view(
+            facts, now_ms=now_ms, stale_after_ms=self.NO_OVERLAY_STALE_AFTER_MS
+        )
+        project = hub_model.ProjectView(
+            display_name="coding-env", path="/repo", tier=2, state=view.state,
+            last_activity_at_ms=BASE_TIME_MS, sessions=(view,), tier1=None, note=None,
+        )
+        snapshot = hub_model.HubSnapshot(
+            collected_at_ms=BASE_TIME_MS, projects=(project,), unresolved_dir_names=(), warnings=(),
+        )
+        template = '<html><body><script type="application/json" id="dzh-data">{}</script></body></html>'
+        rendered = hub_model.render_hub_html(template, snapshot)
+        payload = rendered.split('id="dzh-data">', 1)[1].rsplit("</script>", 1)[0]
+        parsed = json.loads(payload)
+        self.assertIs(parsed["projects"][0]["sessions"][0]["agent_runs"][0]["is_running"], False)
+
+    def test_zg15_compute_session_view_default_zombie_threshold_applies(self) -> None:
+        """GOTCHA 8 회귀 — zombie_after_ms 없이 호출해도 SUBAGENT_ZOMBIE_AFTER_MS 가 적용된다."""
+        events = [
+            _event("SubagentStart", 0, agent_id="agt-1", agent_type="code-reviewer"),
+            _event("Stop", 1000),
+        ]
+        facts = _facts_from(events)
+        now_ms = facts.started_at_ms + hub_model.SUBAGENT_ZOMBIE_AFTER_MS + self.ONE_MINUTE_MS
+        view = hub_model.compute_session_view(facts, now_ms, self.NO_OVERLAY_STALE_AFTER_MS)
+        self.assertEqual(view.base_state, "idle")
+
+
 class SummarizeAgentRunsTest(unittest.TestCase):
     """A1~A11 — 세션의 서브에이전트 요약(요구 1). infer_phase 를 대체한다."""
 
@@ -116,7 +318,7 @@ class SummarizeAgentRunsTest(unittest.TestCase):
             _event("SubagentStop", 500, agent_id="agt-3", agent_type="code-reviewer"),
         ]
         facts = _facts_from(events)
-        runs = hub_model.summarize_agent_runs(facts)
+        runs = hub_model.summarize_agent_runs(facts, now_ms=facts.last_event_at_ms)
         self.assertEqual(
             [run.agent_type for run in runs], ["code-reviewer", "implementer", "design-architect"]
         )
@@ -130,26 +332,26 @@ class SummarizeAgentRunsTest(unittest.TestCase):
             _event("SubagentStart", 200, agent_id="agt-2", agent_type="implementer"),
         ]
         facts = _facts_from(events)
-        runs = hub_model.summarize_agent_runs(facts)
+        runs = hub_model.summarize_agent_runs(facts, now_ms=facts.last_event_at_ms)
         self.assertEqual(len(runs), 1)
         self.assertTrue(runs[0].is_running)
 
     def test_a3_empty_agent_type_is_excluded(self) -> None:
         facts = _facts_from([_event("SubagentStart", 0, agent_id="agt-1", agent_type="")])
-        self.assertEqual(hub_model.summarize_agent_runs(facts), ())
+        self.assertEqual(hub_model.summarize_agent_runs(facts, now_ms=facts.last_event_at_ms), ())
 
     def test_a4_unmapped_type_has_no_phase(self) -> None:
         facts = _facts_from(
             [_event("SubagentStart", 0, agent_id="agt-1", agent_type="workflow-subagent")]
         )
-        runs = hub_model.summarize_agent_runs(facts)
+        runs = hub_model.summarize_agent_runs(facts, now_ms=facts.last_event_at_ms)
         self.assertEqual(len(runs), 1)
         self.assertIsNone(runs[0].phase)
         self.assertTrue(runs[0].is_running)
 
     def test_a5_no_subagent_yields_empty_tuple(self) -> None:
         facts = _facts_from([_event("UserPromptSubmit")])
-        self.assertEqual(hub_model.summarize_agent_runs(facts), ())
+        self.assertEqual(hub_model.summarize_agent_runs(facts, now_ms=facts.last_event_at_ms), ())
 
     def test_a6_same_start_time_breaks_tie_by_type_name(self) -> None:
         events = [
@@ -157,7 +359,7 @@ class SummarizeAgentRunsTest(unittest.TestCase):
             _event("SubagentStart", 0, agent_id="agt-2", agent_type="design-architect"),
         ]
         facts = _facts_from(events)
-        runs = hub_model.summarize_agent_runs(facts)
+        runs = hub_model.summarize_agent_runs(facts, now_ms=facts.last_event_at_ms)
         self.assertEqual([run.agent_type for run in runs], ["design-architect", "implementer"])
 
     def test_a7_done_session_still_exposes_agent_runs(self) -> None:
@@ -228,7 +430,7 @@ class SummarizeAgentRunsTest(unittest.TestCase):
             _event("SubagentStop", 1100, agent_id="agt-2", agent_type="implementer"),
         ]
         facts = _facts_from(events)
-        runs = hub_model.summarize_agent_runs(facts)
+        runs = hub_model.summarize_agent_runs(facts, now_ms=facts.last_event_at_ms)
         self.assertEqual([run.agent_type for run in runs], ["code-reviewer", "implementer"])
         self.assertTrue(runs[0].is_running)
         self.assertFalse(runs[1].is_running)
@@ -242,7 +444,7 @@ class SummarizeAgentRunsTest(unittest.TestCase):
             _event("SubagentStart", 300, agent_id="agt-3", agent_type="implementer"),
         ]
         facts = _facts_from(events)
-        runs = hub_model.summarize_agent_runs(facts)
+        runs = hub_model.summarize_agent_runs(facts, now_ms=facts.last_event_at_ms)
         self.assertEqual(
             [run.agent_type for run in runs], ["implementer", "code-reviewer", "design-architect"]
         )

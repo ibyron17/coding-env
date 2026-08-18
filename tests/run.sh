@@ -2343,10 +2343,10 @@ test_hub_unit_tests() {
   ((passed_tests++))
 }
 
-# T25: 허브 문서·상수 정합성 (하위 검증 T25-1~T25-90)
+# T25: 허브 문서·상수 정합성 (하위 검증 T25-1~T25-94)
 test_hub_docs_and_constants() {
   local test_name="T25"
-  local test_desc="허브 문서·상수 정합성 (T25-1~T25-90)"
+  local test_desc="허브 문서·상수 정합성 (T25-1~T25-94)"
   log_test_name "$test_name" "$test_desc"
 
   local hub_settings_file="$REPO_ROOT/hub/bin/hub_settings.py"
@@ -2362,6 +2362,7 @@ test_hub_docs_and_constants() {
   local dashboard_command_file="$REPO_ROOT/commands/dashboard.md"
   local readme_file="$REPO_ROOT/README.md"
   local hub_dashboard_prp_file="$REPO_ROOT/docs/prps/hub-dashboard.md"
+  local hub_session_revival_prp_file="$REPO_ROOT/docs/prps/hub-session-revival-and-stale-tier1.md"
 
   # T25-1(개정 R-M5 — 대상 이동): HUB_FILE_COUNT 는 이제 hub/install.sh 가 갖는다(값 10)
   local declared_count actual_count
@@ -3794,6 +3795,102 @@ PYEOF
   fi
   if grep -qF -- '— CSS 가 숨긴다' "$hub_readme_file"; then
     record_failure "$test_name" "T25-90: hub/README.md 에 옛 단정 문구(— CSS 가 숨긴다)가 남아 있음(LG1)"
+    return 1
+  fi
+
+  # T25-91(ZG1·ZG2 상수·술어 계약 + 선언 순서, GOTCHA 1·2, docs/prps/hub-zombie-subagent-guard.md):
+  # SUBAGENT_ZOMBIE_AFTER_MS 상수와 is_running_subagent 술어가 존재하고, 선언 순서가
+  # 상수 < is_running_subagent < _compute_base_state 다(기본 인자 평가 시점 NameError 회피,
+  # 선례: T25-87 의 줄 번호 비교). 역방향(핵심, G8) — 옛 무조건 판정이 소스에서 사라졌다.
+  if ! grep -qF 'SUBAGENT_ZOMBIE_AFTER_MS = 90 * 60 * 1000' "$hub_model_file"; then
+    record_failure "$test_name" "T25-91: hub_model.py 에 SUBAGENT_ZOMBIE_AFTER_MS = 90 * 60 * 1000 이 없음"
+    return 1
+  fi
+  if ! grep -qF 'def is_running_subagent(' "$hub_model_file"; then
+    record_failure "$test_name" "T25-91: hub_model.py 에 def is_running_subagent( 이 없음"
+    return 1
+  fi
+  if grep -qF 'sub.ended_at_ms is None for sub in facts.subagents' "$hub_model_file"; then
+    record_failure "$test_name" "T25-91 역방향: hub_model.py 에 옛 무조건 판정이 남아 있음(G8 위반)"
+    return 1
+  fi
+  local zombie_const_line is_running_subagent_def_line compute_base_state_def_line
+  zombie_const_line=$(grep -n '^SUBAGENT_ZOMBIE_AFTER_MS = 90 \* 60 \* 1000' "$hub_model_file" | head -1 | cut -d: -f1)
+  is_running_subagent_def_line=$(grep -n '^def is_running_subagent(' "$hub_model_file" | head -1 | cut -d: -f1)
+  compute_base_state_def_line=$(grep -n '^def _compute_base_state(' "$hub_model_file" | head -1 | cut -d: -f1)
+  if [[ -z "$zombie_const_line" || -z "$is_running_subagent_def_line" || -z "$compute_base_state_def_line" \
+      || "$zombie_const_line" -ge "$is_running_subagent_def_line" \
+      || "$is_running_subagent_def_line" -ge "$compute_base_state_def_line" ]]; then
+    record_failure "$test_name" "T25-91: 선언 순서가 상수 < is_running_subagent < _compute_base_state 가 아님(GOTCHA 1)"
+    return 1
+  fi
+
+  # T25-92(ZG5 단일 판정자, G4 — 가장 값진 기계적 검사): _compute_base_state 와
+  # summarize_agent_runs 두 함수 본문 모두에 is_running_subagent( 호출이 1건 이상이다
+  # (GOTCHA 4 — 한쪽만 고치면 카드와 칩이 모순된다). 역방향: summarize_agent_runs 범위 안에
+  # ended_at_ms is None 직접 비교가 0건이다.
+  local base_state_body summarize_agent_runs_body
+  base_state_body=$(awk '/^def _compute_base_state\(/{flag=1; next} flag && /^def compute_session_view\(/{exit} flag{print}' "$hub_model_file")
+  summarize_agent_runs_body=$(awk '/^def summarize_agent_runs\(/{flag=1; next} flag && /^def /{exit} flag{print}' "$hub_model_file")
+  if [[ "$(echo "$base_state_body" | grep -c 'is_running_subagent(')" -eq 0 ]]; then
+    record_failure "$test_name" "T25-92: _compute_base_state 본문에 is_running_subagent( 호출이 없음(GOTCHA 4)"
+    return 1
+  fi
+  if [[ "$(echo "$summarize_agent_runs_body" | grep -c 'is_running_subagent(')" -eq 0 ]]; then
+    record_failure "$test_name" "T25-92: summarize_agent_runs 본문에 is_running_subagent( 호출이 없음(GOTCHA 4)"
+    return 1
+  fi
+  if [[ "$(echo "$summarize_agent_runs_body" | grep -c 'ended_at_ms is None')" -ne 0 ]]; then
+    record_failure "$test_name" "T25-92 역방향: summarize_agent_runs 범위 안에 ended_at_ms is None 직접 비교가 남아 있음"
+    return 1
+  fi
+
+  # T25-93(ZG3 시그니처 + 기존 계약 공존, GOTCHA 3): compute_session_view·summarize_agent_runs
+  # 두 시그니처 모두에 zombie_after_ms: int = SUBAGENT_ZOMBIE_AFTER_MS 기본 인자가 있다.
+  # 역방향(회귀 방지) — T25-52 가 요구하는 is_running_by_type 리터럴과 hub_template.html 의
+  # run.is_running 참조(템플릿 무변경, G7)가 그대로 남아 있다.
+  local zombie_default_arg_count
+  zombie_default_arg_count=$(grep -cF 'zombie_after_ms: int = SUBAGENT_ZOMBIE_AFTER_MS' "$hub_model_file")
+  if [[ "$zombie_default_arg_count" -ne 2 ]]; then
+    record_failure "$test_name" "T25-93: zombie_after_ms 기본 인자 선언 수=$zombie_default_arg_count (기대: 2 — compute_session_view·summarize_agent_runs)"
+    return 1
+  fi
+  if ! grep -qF '0 if is_running_by_type[agent_type] else 1' "$hub_model_file"; then
+    record_failure "$test_name" "T25-93 역방향: hub_model.py 에 0 if is_running_by_type[agent_type] else 1 이 없음(T25-52 회귀, GOTCHA 3)"
+    return 1
+  fi
+  local run_is_running_count
+  run_is_running_count=$(grep -cF 'run.is_running' "$hub_template_file")
+  if [[ "$run_is_running_count" -ne 4 ]]; then
+    record_failure "$test_name" "T25-93: hub_template.html 의 run.is_running 참조 수=$run_is_running_count (기대: 4, 템플릿 무변경 G7 위반)"
+    return 1
+  fi
+
+  # T25-94(문서 정합 ZG7): README·hub-dashboard.md·hub-session-revival-and-stale-tier1.md 가
+  # 좀비 가드를 서로 참조한다. 기계적(개정 관례 강제, GOTCHA 10) — hub-dashboard.md 의 원문
+  # 코드블록 줄이 여전히 존재한다(개정 화살표로 원문을 덮어쓰면 실패). 역방향 — hub/README.md
+  # 의 옛 단정 문구는 여전히 없다(T25-90 승계 확인).
+  local zg7_doc_token
+  for zg7_doc_token in '좀비' '90분'; do
+    if ! grep -qF -- "$zg7_doc_token" "$hub_readme_file"; then
+      record_failure "$test_name" "T25-94: hub/README.md 에 $zg7_doc_token 토큰이 없음"
+      return 1
+    fi
+  done
+  if ! grep -qF -- 'hub-zombie-subagent-guard' "$hub_dashboard_prp_file"; then
+    record_failure "$test_name" "T25-94: docs/prps/hub-dashboard.md 에 hub-zombie-subagent-guard 참조가 없음"
+    return 1
+  fi
+  if ! grep -qF -- 'hub-zombie-subagent-guard' "$hub_session_revival_prp_file"; then
+    record_failure "$test_name" "T25-94: docs/prps/hub-session-revival-and-stale-tier1.md 에 hub-zombie-subagent-guard 참조가 없음"
+    return 1
+  fi
+  if ! grep -qF -- '2. turn_state == "running" 또는 살아 있는 서브에이전트 존재' "$hub_dashboard_prp_file"; then
+    record_failure "$test_name" "T25-94: docs/prps/hub-dashboard.md 의 규칙 2 원문 줄이 사라짐(개정 관례 위반, GOTCHA 10)"
+    return 1
+  fi
+  if grep -qF -- '— CSS 가 숨긴다' "$hub_readme_file"; then
+    record_failure "$test_name" "T25-94: hub/README.md 에 옛 단정 문구(— CSS 가 숨긴다)가 남아 있음(T25-90 승계 확인)"
     return 1
   fi
 
