@@ -4,7 +4,7 @@ description: "Update coding-env to latest version — fetch repo, pull changes, 
 
 # Environment Update
 
-> Maintains coding-env in sync with repo changes. Reads install manifest, checks for updates, and reinstalls with user confirmation.
+> Maintains coding-env in sync with repo changes. Reads install manifest, checks for updates, and reinstalls automatically. Confirmation is reserved for genuinely ambiguous or destructive situations (diverged branches, a file that looks like a deliberate local customization) — routine pull/reinstall/hub-restart steps proceed without asking.
 
 **Automated Phases**: find → fetch → pull → reinstall → verify
 
@@ -105,24 +105,20 @@ If no new commits in upstream but the install is stale:
 [INFO] Repo is up to date, but the installed files are from an older commit.
 [INFO] Repo HEAD:      <repo HEAD, short hash>
 [INFO] Installed from: <installed_from_commit, short hash (or "unknown")>
-[INFO] Reinstall now? (y/n)
+[INFO] Reinstalling...
 ```
 
-Wait for user input.  
-If `y` → skip Phase 3 (there is nothing to pull) and continue directly to Phase 4.  
-If `n` or other → stop, no error.
+Skip Phase 3 (there is nothing to pull) and continue directly to Phase 4. No confirmation — reinstalling from an already-fetched, non-diverged repo only touches managed files and is caught by Phase 4's own conflict check if anything unexpected is in the way.
 
 If new commits exist:
 
 ```
 [INFO] Remote has N new commits:
   <log output here>
-[INFO] Proceed with update? (y/n)
+[INFO] Updating...
 ```
 
-Wait for user input.  
-If `y` → continue to Phase 3.  
-If `n` or other → stop, no error.
+Continue to Phase 3. No confirmation — `git pull --ff-only` cannot lose local work; it fails closed on any conflict (handled in Phase 3), never silently merges or rewrites history.
 
 ---
 
@@ -161,10 +157,21 @@ If exit 1 (diff conflict reported by install.sh):
 
 ```
 [WARN] Install reported conflicts in modified files.
-[INFO] Use --force to overwrite? (y/n)
 ```
 
-If `y` → rerun:
+install.sh's own stderr already lists which managed files differ (and for small diffs, the actual
+diff content). Read that list and judge each flagged file:
+
+- **Looks like plain staleness** (the local copy is just an older/edited version of the same
+  distributed content — typos fixed, formatting drift, a stale version of the same section) →
+  this is the common case. No confirmation needed.
+- **Looks like a deliberate local customization** (project-specific additions with no upstream
+  counterpart, content clearly written for this machine/user rather than copied from the repo) →
+  flag it by name and ask about that specific file before overwriting it. Don't let one such file
+  block the rest of the batch — proceed with `--force` for everything else and call out the held-back
+  file separately.
+
+In the common case (no held-back files), rerun immediately:
 ```bash
 cd "$target_base_dir"
 "$repo_path/install.sh" --scope project --force
@@ -173,7 +180,9 @@ cd "$target_base_dir"
 If exit 0 → continue to Phase 5.  
 If exit 1 again → **ERROR**: "Force reinstall failed. Resolve manually." → exit 1
 
-If `n` → stop without error.
+`install.sh --force` backs up `CLAUDE.md` to a timestamped `.bak-<timestamp>` before overwriting
+(see `backup_existing_claude_md` in install.sh) — this is the safety net for the common case, not a
+reason to ask first.
 
 ### For user scope
 
@@ -217,33 +226,32 @@ Continue to Phase 5. **Do not create anything.**
    ```
    Read the `alive` field.
 
-2. If `alive == true`, ask for confirmation — **never stop a running server silently**:
+2. If `alive == true`, stop it — no confirmation needed, this is the expected end-to-end update:
    ```
-   [INFO] Hub server is running. Stop it, update, and start it again? (y/n)
+   [INFO] Hub server is running. Stopping, updating, and restarting...
    ```
-   - `n` → **skip reinstall entirely**. Warn: "[WARN] Hub server keeps running the old code until you rerun hub/install.sh manually." Continue to Phase 5.
-   - `y` → `python3 "$HOME/.claude/hub/bin/hub.py" server-stop --json`, remember that the server was running (`was_running_before_update=true`).
+   `python3 "$HOME/.claude/hub/bin/hub.py" server-stop --json`, remember that the server was
+   running (`was_running_before_update=true`). Stopping and restarting the hub server is safe —
+   it's a local process with no in-flight user data to lose, and step 4 restores it automatically.
 
-   If `alive == false`, continue directly (no confirmation needed, nothing to stop).
+   If `alive == false`, continue directly (nothing to stop).
 
 3. Reinstall:
    ```bash
    "$repo_path/hub/install.sh"
    ```
    - exit 0 → continue to step 4.
-   - exit 1 (modified-files conflict):
-     ```
-     [WARN] Hub install reported conflicts in modified files.
-     [INFO] Use --force to overwrite? (y/n)
-     ```
-     `y` → rerun `"$repo_path/hub/install.sh" --force` (same pattern as the root `install.sh` conflict handling in Phase 4). `n` → skip the rest of Phase 4b, warn that hub was not updated, continue to Phase 5.
+   - exit 1 (modified-files conflict): apply the same judgment as Phase 4's conflict handling
+     (plain staleness → auto `--force`; a file that looks like a deliberate local customization →
+     hold that file back and ask about it specifically). Rerun `"$repo_path/hub/install.sh" --force`
+     once the call is made.
 
 4. If the server was running before this phase started (`was_running_before_update=true`):
    ```bash
    python3 "$HOME/.claude/hub/bin/hub.py" server-start --json
    ```
-   **This is not an automatic start** — it restores a state the user explicitly had and explicitly
-   confirmed stopping in step 2. A server that was off before `/env-update` stays off.
+   This restores the state the server was actually in before this phase touched it — it is not a
+   fresh, unprompted start. A server that was off before `/env-update` stays off.
 
 5. Hooks are never touched here. If the hook command string ever changes, `install-hooks` is
    idempotent, so just note:
@@ -293,12 +301,12 @@ Exit 0.
 | Fetch fails | ERROR: stop |
 | Branches diverged | ERROR: stop |
 | Already up to date (repo and install both fresh) | INFO: stop, exit 0 |
-| Repo up to date but install stale | INFO: ask to reinstall, skip Phase 3, proceed to Phase 4 |
+| Repo up to date but install stale | INFO: reinstall automatically, skip Phase 3, proceed to Phase 4 |
 | Pull fails | ERROR: stop |
-| install.sh conflict | WARN: ask `--force?` |
+| install.sh conflict | WARN: auto `--force`, unless a file looks like a deliberate local customization (then ask about that file only) |
 | install.sh force fails | ERROR: stop |
 | Hub not installed | INFO: skip Phase 4b, no error |
-| Hub server running, user declines stop | WARN: skip hub reinstall, note stale code is still running |
+| Hub server running | INFO: stop, reinstall, restart automatically — no confirmation |
 | Manifest verification fails | WARN: report mismatch but exit 0 |
 
 ---
@@ -306,6 +314,6 @@ Exit 0.
 ## Notes
 
 - **Manifest is runtime metadata**: Not part of the deployed files, so it's never backed up or version-controlled.
-- **User modifications preserved**: If local rules/agents are modified, install.sh will require `--force` to overwrite. User must decide.
+- **User modifications**: If local rules/agents/commands are modified, install.sh requires `--force` to overwrite — env-update supplies `--force` automatically for plain staleness, and only stops to ask when a diff looks like a deliberate local customization rather than drift (see Phase 4).
 - **Dirty repo is OK**: Minor uncommitted changes won't block the update. Major conflicts will be caught by install.sh.
 - **Why the manifest freshness check exists**: Contributors who commit directly in this repo are always at or ahead of `@{u}`, so `git log HEAD..@{u}` is permanently empty for them. Without comparing `installed_from_commit` to repo HEAD, Phase 4's reinstall would never run for that workflow, and the installed files would silently drift out of date.
