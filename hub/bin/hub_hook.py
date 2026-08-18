@@ -22,6 +22,7 @@ from pathlib import Path
 
 import hub_collect
 import hub_model
+import hub_server_state
 
 HUB_PY_PATH = Path(__file__).resolve().parent / "hub.py"
 PROMPT_EXCERPT_MAX_CHARS = 120
@@ -70,10 +71,10 @@ def _should_spawn_collect_now(config: hub_model.HubConfig) -> bool:
     서버 생존은 하트비트 mtime 만으로 판정한다(포트 프로브·PID 조회는 훅을 지연시킬 수 있어
     넣지 않는다 — 불변 원칙 1). 서버가 죽으면 TTL 이 지나며 이 훅 폴백이 자동으로 부활한다.
     """
-    ttl_ms = hub_model.server_heartbeat_ttl_ms(config.server_collect_interval_seconds)
+    ttl_ms = hub_server_state.server_heartbeat_ttl_ms(config.server_collect_interval_seconds)
     heartbeat_mtime_ms = _mtime_ms_or_none(hub_collect.SERVER_HEARTBEAT_PATH)
-    server_alive = hub_model.is_server_alive(int(time.time() * 1000), heartbeat_mtime_ms, ttl_ms)
-    return hub_model.should_spawn_collect(
+    server_alive = hub_server_state.is_server_alive(int(time.time() * 1000), heartbeat_mtime_ms, ttl_ms)
+    return hub_server_state.should_spawn_collect(
         now_ms=int(time.time() * 1000),
         server_alive=server_alive,
         hub_html_mtime_ms=_mtime_ms_or_none(hub_collect.HUB_HTML_PATH),

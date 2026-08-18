@@ -2326,7 +2326,7 @@ test_dashboard_option_docs() {
 # 실패 시 출력을 그대로 흘려보내 원인을 바로 알 수 있게 한다.
 test_hub_unit_tests() {
   local test_name="T24"
-  local test_desc="hub_parse·hub_model 단위 테스트 (python3 -m unittest discover)"
+  local test_desc="허브 순수 모듈 단위 테스트 (python3 -m unittest discover)"
   log_test_name "$test_name" "$test_desc"
 
   local output
@@ -2343,10 +2343,10 @@ test_hub_unit_tests() {
   ((passed_tests++))
 }
 
-# T25: 허브 문서·상수 정합성 (하위 검증 T25-1~T25-94)
+# T25: 허브 문서·상수 정합성 (하위 검증 T25-1~T25-104)
 test_hub_docs_and_constants() {
   local test_name="T25"
-  local test_desc="허브 문서·상수 정합성 (T25-1~T25-94)"
+  local test_desc="허브 문서·상수 정합성 (T25-1~T25-104)"
   log_test_name "$test_name" "$test_desc"
 
   local hub_settings_file="$REPO_ROOT/hub/bin/hub_settings.py"
@@ -2354,6 +2354,9 @@ test_hub_docs_and_constants() {
   local hub_py_file="$REPO_ROOT/hub/bin/hub.py"
   local hub_collect_file="$REPO_ROOT/hub/bin/hub_collect.py"
   local hub_model_file="$REPO_ROOT/hub/bin/hub_model.py"
+  local hub_session_file="$REPO_ROOT/hub/bin/hub_session.py"
+  local hub_project_file="$REPO_ROOT/hub/bin/hub_project.py"
+  local hub_server_state_file="$REPO_ROOT/hub/bin/hub_server_state.py"
   local hub_server_file="$REPO_ROOT/hub/bin/hub_server.py"
   local hub_daemon_file="$REPO_ROOT/hub/bin/hub_daemon.py"
   local hub_install_file="$REPO_ROOT/hub/install.sh"
@@ -2448,10 +2451,12 @@ test_hub_docs_and_constants() {
     return 1
   fi
 
-  # T25-10(+ T25-27 — hub_usage.py 추가): hub_model.py·hub_parse.py·hub_usage.py 에
-  # 파일시스템 접근이 없다 (순수 레이어 경계의 기계적 강제)
+  # T25-10(+ T25-27 — hub_usage.py 추가 + 결정 MS1 분리 3개 편입): hub_model.py·hub_parse.py·
+  # hub_usage.py·hub_session.py·hub_project.py·hub_server_state.py 에 파일시스템 접근이 없다
+  # (순수 레이어 경계의 기계적 강제)
   local pure_file
-  for pure_file in "$REPO_ROOT/hub/bin/hub_model.py" "$REPO_ROOT/hub/bin/hub_parse.py" "$REPO_ROOT/hub/bin/hub_usage.py"; do
+  for pure_file in "$REPO_ROOT/hub/bin/hub_model.py" "$REPO_ROOT/hub/bin/hub_parse.py" "$REPO_ROOT/hub/bin/hub_usage.py" \
+      "$hub_session_file" "$hub_project_file" "$hub_server_state_file"; do
     if grep -qE 'open\(|Path\(|os\.' "$pure_file"; then
       record_failure "$test_name" "T25-10: $pure_file 에 파일시스템 접근 흔적(open(/Path(/os.)이 있음"
       return 1
@@ -2889,7 +2894,7 @@ PYEOF
   # T25-43(세션 활동 노출 회귀 — 개정: agent-chip-more 부재 검사로 반전): 세션 표시가
   # '실행 중인 것만' 으로 되돌아가지 않고, "+N" 오버플로 칩(agent-chip-more)도 되살아나지
   # 않는다(결정 K1~K3).
-  if grep -qF "active_agent_types" "$hub_template_file" "$hub_model_file"; then
+  if grep -qF "active_agent_types" "$hub_template_file" "$hub_session_file"; then
     record_failure "$test_name" "T25-43: active_agent_types 가 부활함 — 완료 세션이 다시 빈 목록이 된다"
     return 1
   fi
@@ -2899,8 +2904,8 @@ PYEOF
   fi
   local session_activity_token
   for session_activity_token in "summarize_agent_runs" "agent_runs"; do
-    if ! grep -qF "$session_activity_token" "$hub_model_file"; then
-      record_failure "$test_name" "T25-43: hub_model.py 에 $session_activity_token 이 없음"
+    if ! grep -qF "$session_activity_token" "$hub_session_file"; then
+      record_failure "$test_name" "T25-43: hub_session.py 에 $session_activity_token 이 없음"
       return 1
     fi
   done
@@ -3064,7 +3069,7 @@ PYEOF
     return 1
   fi
 
-  # T25-51(결정 V1 회귀): 완료 세션 숨김 필터는 클라이언트에만 있다 — 서버(hub_model)는
+  # T25-51(결정 V1 회귀): 완료 세션 숨김 필터는 클라이언트에만 있다 — 서버(hub_project)는
   # 세션을 걸러내지 않는다(sessions=session_views 가 그대로 있다는 것이 그 증거다).
   local client_filter_token
   for client_filter_token in "shouldRenderSession" "visibleAgentRuns"; do
@@ -3073,8 +3078,8 @@ PYEOF
       return 1
     fi
   done
-  if ! grep -qF "sessions=session_views" "$hub_model_file"; then
-    record_failure "$test_name" "T25-51: hub_model.py 가 세션을 걸러내는 것으로 보임(sessions=session_views 부재)"
+  if ! grep -qF "sessions=session_views" "$hub_project_file"; then
+    record_failure "$test_name" "T25-51: hub_project.py 가 세션을 걸러내는 것으로 보임(sessions=session_views 부재)"
     return 1
   fi
 
@@ -3084,8 +3089,8 @@ PYEOF
     record_failure "$test_name" "T25-52: hub_template.html 에 오버플로 칩 흔적(overflowRuns)이 남아 있음"
     return 1
   fi
-  if ! grep -qF "0 if is_running_by_type[agent_type] else 1" "$hub_model_file"; then
-    record_failure "$test_name" "T25-52: hub_model.py 의 summarize_agent_runs 정렬 키에 실행 중 우선순위(K2)가 없음"
+  if ! grep -qF "0 if is_running_by_type[agent_type] else 1" "$hub_session_file"; then
+    record_failure "$test_name" "T25-52: hub_session.py 의 summarize_agent_runs 정렬 키에 실행 중 우선순위(K2)가 없음"
     return 1
   fi
 
@@ -3217,17 +3222,18 @@ PYEOF
     return 1
   fi
 
-  # T25-61(R1 구조): hub_usage.py 에 parse_usage_api_response, hub_model.py 에
-  # should_attempt_usage_api_poll·UsageApiPollState, hub_collect.py 에 usage_api_enabled
-  # 타입 등록이 있다(T25-10 이 hub_usage.py·hub_model.py 의 순수성을 이미 강제한다).
+  # T25-61(R1 구조): hub_usage.py 에 parse_usage_api_response·should_attempt_usage_api_poll·
+  # UsageApiPollState(결정 MS1 — 사용량 API 폴링 스케줄이 hub_usage.py 로 편입됐다),
+  # hub_collect.py 에 usage_api_enabled 타입 등록이 있다(T25-10 이 hub_usage.py 의
+  # 순수성을 이미 강제한다).
   if ! grep -qF "parse_usage_api_response" "$hub_usage_file"; then
     record_failure "$test_name" "T25-61: hub_usage.py 에 parse_usage_api_response 가 없음"
     return 1
   fi
   local model_token
   for model_token in "should_attempt_usage_api_poll" "UsageApiPollState"; do
-    if ! grep -qF "$model_token" "$hub_model_file"; then
-      record_failure "$test_name" "T25-61: hub_model.py 에 $model_token 이 없음"
+    if ! grep -qF "$model_token" "$hub_usage_file"; then
+      record_failure "$test_name" "T25-61: hub_usage.py 에 $model_token 이 없음"
       return 1
     fi
   done
@@ -3664,12 +3670,13 @@ PYEOF
     return 1
   fi
 
-  # T25-85(SP11 헤드 패널화 + G8, hub-detail-side-panel.md R2): 닫기 컨트롤이 .detail-close
-  # 를 쓰고 »(오른쪽으로 밀려 나가는 실제 동작을 가리킨다) 글리프를 쓴다. 역방향 —
-  # border-bottom 이 파일 전체 0건이다(R2 승인 항목 6 — 시안 C 가 탈락해 토큰을 좁힐 이유가
-  # 없다), 옛 .icon-btn 닫기 버튼·✕ 글리프도 남아 있지 않다.
+  # T25-85(SP11 헤드 패널화 + G8, hub-detail-side-panel.md R2 → hub-panel-polish-and-icons.md
+  # 결정 PV12): 닫기 컨트롤이 .detail-close 를 쓰고 lucide chevrons-right(오른쪽으로 밀려
+  # 나가는 실제 동작을 가리킨다) 아이콘을 쓴다. 역방향 — border-bottom 이 파일 전체 0건이다
+  # (R2 승인 항목 6 — 시안 C 가 탈락해 토큰을 좁힐 이유가 없다), 옛 .icon-btn 닫기 버튼·
+  # ✕ 글리프도 남아 있지 않다.
   local detail_close_token
-  for detail_close_token in '.detail-close{' 'class="detail-close"' '>»<' \
+  for detail_close_token in '.detail-close{' 'class="detail-close"' '.detail-close svg{' \
       'aria-label="닫기"' 'data-tooltip="닫기 (Esc)"'; do
     if ! grep -qF -- "$detail_close_token" "$hub_template_file"; then
       record_failure "$test_name" "T25-85: hub_template.html 에 $detail_close_token 이 없음"
@@ -3695,17 +3702,17 @@ PYEOF
   # SessionStart 분기가 ended_at_ms 를 해제한다. 기계적 검사 — 내부 이벤트 필터의 판정
   # (if is_filtered:)이 _apply_tracked_event 호출보다 먼저 나와야 한다(선례: T25-83 의 줄
   # 번호 비교) — 그래야 compact 가 이 함수에 도달하기 전에 걸러진다(GOTCHA 1).
-  if ! grep -qF 'elif event.hook_event_name == "SessionStart":' "$hub_model_file"; then
-    record_failure "$test_name" "T25-86: hub_model.py 에 SessionStart 부활 분기가 없음"
+  if ! grep -qF 'elif event.hook_event_name == "SessionStart":' "$hub_session_file"; then
+    record_failure "$test_name" "T25-86: hub_session.py 에 SessionStart 부활 분기가 없음"
     return 1
   fi
-  if ! grep -qF 'session.ended_at_ms = None' "$hub_model_file"; then
-    record_failure "$test_name" "T25-86: hub_model.py 에 session.ended_at_ms = None 대입이 없음"
+  if ! grep -qF 'session.ended_at_ms = None' "$hub_session_file"; then
+    record_failure "$test_name" "T25-86: hub_session.py 에 session.ended_at_ms = None 대입이 없음"
     return 1
   fi
   local is_filtered_check_line apply_tracked_event_call_line
-  is_filtered_check_line=$(grep -n 'if is_filtered:' "$hub_model_file" | head -1 | cut -d: -f1)
-  apply_tracked_event_call_line=$(grep -n '_apply_tracked_event(session, event)' "$hub_model_file" | head -1 | cut -d: -f1)
+  is_filtered_check_line=$(grep -n 'if is_filtered:' "$hub_session_file" | head -1 | cut -d: -f1)
+  apply_tracked_event_call_line=$(grep -n '_apply_tracked_event(session, event)' "$hub_session_file" | head -1 | cut -d: -f1)
   if [[ -z "$is_filtered_check_line" || -z "$apply_tracked_event_call_line" \
       || "$is_filtered_check_line" -ge "$apply_tracked_event_call_line" ]]; then
     record_failure "$test_name" "T25-86: 내부 이벤트 필터가 _apply_tracked_event 호출보다 먼저 오지 않음(GOTCHA 1)"
@@ -3718,21 +3725,21 @@ PYEOF
   local gn_python_token
   for gn_python_token in 'def is_tier1_from_previous_task(' 'LIVE_SESSION_STATES' \
       'tier1_is_previous_task: bool = False'; do
-    if ! grep -qF -- "$gn_python_token" "$hub_model_file"; then
-      record_failure "$test_name" "T25-87: hub_model.py 에 $gn_python_token 이 없음"
+    if ! grep -qF -- "$gn_python_token" "$hub_project_file"; then
+      record_failure "$test_name" "T25-87: hub_project.py 에 $gn_python_token 이 없음"
       return 1
     fi
   done
   local live_session_states_decl_line
-  live_session_states_decl_line=$(grep -n '^LIVE_SESSION_STATES' "$hub_model_file" | head -1)
+  live_session_states_decl_line=$(grep -n '^LIVE_SESSION_STATES' "$hub_project_file" | head -1)
   if [[ -z "$live_session_states_decl_line" ]] \
       || echo "$live_session_states_decl_line" | grep -qE '"stale"|"done"'; then
     record_failure "$test_name" "T25-87: LIVE_SESSION_STATES 선언에 stale·done 이 있거나 선언을 찾지 못함(GOTCHA 3)"
     return 1
   fi
   local dashboard_key_field_line tier1_is_previous_task_field_line
-  dashboard_key_field_line=$(grep -n 'dashboard_key: str | None = None' "$hub_model_file" | head -1 | cut -d: -f1)
-  tier1_is_previous_task_field_line=$(grep -n 'tier1_is_previous_task: bool = False' "$hub_model_file" | head -1 | cut -d: -f1)
+  dashboard_key_field_line=$(grep -n 'dashboard_key: str | None = None' "$hub_project_file" | head -1 | cut -d: -f1)
+  tier1_is_previous_task_field_line=$(grep -n 'tier1_is_previous_task: bool = False' "$hub_project_file" | head -1 | cut -d: -f1)
   if [[ -z "$dashboard_key_field_line" || -z "$tier1_is_previous_task_field_line" \
       || "$dashboard_key_field_line" -ge "$tier1_is_previous_task_field_line" ]]; then
     record_failure "$test_name" "T25-87: ProjectView 필드 순서 — dashboard_key 가 tier1_is_previous_task 보다 먼저 와야 함(GOTCHA 2)"
@@ -3802,22 +3809,22 @@ PYEOF
   # SUBAGENT_ZOMBIE_AFTER_MS 상수와 is_running_subagent 술어가 존재하고, 선언 순서가
   # 상수 < is_running_subagent < _compute_base_state 다(기본 인자 평가 시점 NameError 회피,
   # 선례: T25-87 의 줄 번호 비교). 역방향(핵심, G8) — 옛 무조건 판정이 소스에서 사라졌다.
-  if ! grep -qF 'SUBAGENT_ZOMBIE_AFTER_MS = 90 * 60 * 1000' "$hub_model_file"; then
-    record_failure "$test_name" "T25-91: hub_model.py 에 SUBAGENT_ZOMBIE_AFTER_MS = 90 * 60 * 1000 이 없음"
+  if ! grep -qF 'SUBAGENT_ZOMBIE_AFTER_MS = 90 * 60 * 1000' "$hub_session_file"; then
+    record_failure "$test_name" "T25-91: hub_session.py 에 SUBAGENT_ZOMBIE_AFTER_MS = 90 * 60 * 1000 이 없음"
     return 1
   fi
-  if ! grep -qF 'def is_running_subagent(' "$hub_model_file"; then
-    record_failure "$test_name" "T25-91: hub_model.py 에 def is_running_subagent( 이 없음"
+  if ! grep -qF 'def is_running_subagent(' "$hub_session_file"; then
+    record_failure "$test_name" "T25-91: hub_session.py 에 def is_running_subagent( 이 없음"
     return 1
   fi
-  if grep -qF 'sub.ended_at_ms is None for sub in facts.subagents' "$hub_model_file"; then
-    record_failure "$test_name" "T25-91 역방향: hub_model.py 에 옛 무조건 판정이 남아 있음(G8 위반)"
+  if grep -qF 'sub.ended_at_ms is None for sub in facts.subagents' "$hub_session_file"; then
+    record_failure "$test_name" "T25-91 역방향: hub_session.py 에 옛 무조건 판정이 남아 있음(G8 위반)"
     return 1
   fi
   local zombie_const_line is_running_subagent_def_line compute_base_state_def_line
-  zombie_const_line=$(grep -n '^SUBAGENT_ZOMBIE_AFTER_MS = 90 \* 60 \* 1000' "$hub_model_file" | head -1 | cut -d: -f1)
-  is_running_subagent_def_line=$(grep -n '^def is_running_subagent(' "$hub_model_file" | head -1 | cut -d: -f1)
-  compute_base_state_def_line=$(grep -n '^def _compute_base_state(' "$hub_model_file" | head -1 | cut -d: -f1)
+  zombie_const_line=$(grep -n '^SUBAGENT_ZOMBIE_AFTER_MS = 90 \* 60 \* 1000' "$hub_session_file" | head -1 | cut -d: -f1)
+  is_running_subagent_def_line=$(grep -n '^def is_running_subagent(' "$hub_session_file" | head -1 | cut -d: -f1)
+  compute_base_state_def_line=$(grep -n '^def _compute_base_state(' "$hub_session_file" | head -1 | cut -d: -f1)
   if [[ -z "$zombie_const_line" || -z "$is_running_subagent_def_line" || -z "$compute_base_state_def_line" \
       || "$zombie_const_line" -ge "$is_running_subagent_def_line" \
       || "$is_running_subagent_def_line" -ge "$compute_base_state_def_line" ]]; then
@@ -3830,8 +3837,8 @@ PYEOF
   # (GOTCHA 4 — 한쪽만 고치면 카드와 칩이 모순된다). 역방향: summarize_agent_runs 범위 안에
   # ended_at_ms is None 직접 비교가 0건이다.
   local base_state_body summarize_agent_runs_body
-  base_state_body=$(awk '/^def _compute_base_state\(/{flag=1; next} flag && /^def compute_session_view\(/{exit} flag{print}' "$hub_model_file")
-  summarize_agent_runs_body=$(awk '/^def summarize_agent_runs\(/{flag=1; next} flag && /^def /{exit} flag{print}' "$hub_model_file")
+  base_state_body=$(awk '/^def _compute_base_state\(/{flag=1; next} flag && /^def compute_session_view\(/{exit} flag{print}' "$hub_session_file")
+  summarize_agent_runs_body=$(awk '/^def summarize_agent_runs\(/{flag=1; next} flag && /^def /{exit} flag{print}' "$hub_session_file")
   if [[ "$(echo "$base_state_body" | grep -c 'is_running_subagent(')" -eq 0 ]]; then
     record_failure "$test_name" "T25-92: _compute_base_state 본문에 is_running_subagent( 호출이 없음(GOTCHA 4)"
     return 1
@@ -3850,13 +3857,13 @@ PYEOF
   # 역방향(회귀 방지) — T25-52 가 요구하는 is_running_by_type 리터럴과 hub_template.html 의
   # run.is_running 참조(템플릿 무변경, G7)가 그대로 남아 있다.
   local zombie_default_arg_count
-  zombie_default_arg_count=$(grep -cF 'zombie_after_ms: int = SUBAGENT_ZOMBIE_AFTER_MS' "$hub_model_file")
+  zombie_default_arg_count=$(grep -cF 'zombie_after_ms: int = SUBAGENT_ZOMBIE_AFTER_MS' "$hub_session_file")
   if [[ "$zombie_default_arg_count" -ne 2 ]]; then
     record_failure "$test_name" "T25-93: zombie_after_ms 기본 인자 선언 수=$zombie_default_arg_count (기대: 2 — compute_session_view·summarize_agent_runs)"
     return 1
   fi
-  if ! grep -qF '0 if is_running_by_type[agent_type] else 1' "$hub_model_file"; then
-    record_failure "$test_name" "T25-93 역방향: hub_model.py 에 0 if is_running_by_type[agent_type] else 1 이 없음(T25-52 회귀, GOTCHA 3)"
+  if ! grep -qF '0 if is_running_by_type[agent_type] else 1' "$hub_session_file"; then
+    record_failure "$test_name" "T25-93 역방향: hub_session.py 에 0 if is_running_by_type[agent_type] else 1 이 없음(T25-52 회귀, GOTCHA 3)"
     return 1
   fi
   local run_is_running_count
@@ -3891,6 +3898,223 @@ PYEOF
   fi
   if grep -qF -- '— CSS 가 숨긴다' "$hub_readme_file"; then
     record_failure "$test_name" "T25-94: hub/README.md 에 옛 단정 문구(— CSS 가 숨긴다)가 남아 있음(T25-90 승계 확인)"
+    return 1
+  fi
+
+  # T25-95(PV1 패널 표면, docs/prps/hub-panel-polish-and-icons.md 결정 PV1, G1): .detail-panel
+  # 은 --bg 배경이고 .detail-head 에는 배경·테두리 선언이 없다 — SP11 이 구분선을 지운 판단을
+  # 유지한 채 헤드-카드 위계를 표면 색으로 세운다. CSS 선언이 여러 줄에 걸쳐 있어 첫 '}' 까지를
+  # 그 규칙의 전문으로 본다(CSS 는 중첩 중괄호를 쓰지 않는다).
+  local detail_panel_rule detail_head_rule
+  detail_panel_rule=$(sed -n '/\.detail-panel{/,/}/p' "$hub_template_file" | awk '{print} /}/{exit}')
+  if ! echo "$detail_panel_rule" | grep -qF 'background:var(--bg)'; then
+    record_failure "$test_name" "T25-95: .detail-panel 규칙에 background:var(--bg) 가 없음"
+    return 1
+  fi
+  if echo "$detail_panel_rule" | grep -qF 'background:var(--surface)'; then
+    record_failure "$test_name" "T25-95: .detail-panel 규칙에 옛 background:var(--surface) 가 남아 있음"
+    return 1
+  fi
+  detail_head_rule=$(sed -n '/\.detail-head{/,/}/p' "$hub_template_file" | awk '{print} /}/{exit}')
+  if [[ -z "$detail_head_rule" ]] || echo "$detail_head_rule" | grep -qE 'background|border'; then
+    record_failure "$test_name" "T25-95: .detail-head 규칙에 background 또는 border 선언이 있음(PV1 위반)"
+    return 1
+  fi
+
+  # T25-96(PV3·PV4 헤더 높이 고정, G3·G4): 안내 줄 자리는 항상 예약되고 한 줄로 잘린다.
+  # hidden 속성 토글은 사라졌다 — visibility 클래스 토글만 남는다.
+  local detail_note_markup detail_note_rule
+  detail_note_markup=$(sed -n '/<p id="dzh-detail-note"/,/>/p' "$hub_template_file")
+  if [[ -z "$detail_note_markup" ]]; then
+    record_failure "$test_name" "T25-96: hub_template.html 에 <p id=\"dzh-detail-note\" 마크업을 찾지 못함"
+    return 1
+  fi
+  if ! echo "$detail_note_markup" | grep -qF 'data-tooltip='; then
+    record_failure "$test_name" "T25-96: dzh-detail-note 마크업에 data-tooltip= 이 없음"
+    return 1
+  fi
+  if echo "$detail_note_markup" | grep -qF 'hidden'; then
+    record_failure "$test_name" "T25-96: dzh-detail-note 마크업에 hidden 속성이 남아 있음"
+    return 1
+  fi
+  detail_note_rule=$(sed -n '/\.detail-note{/,/}/p' "$hub_template_file" | awk '{print} /}/{exit}')
+  local detail_note_rule_token
+  for detail_note_rule_token in 'white-space:nowrap' 'visibility:hidden' 'line-height:16px'; do
+    if ! echo "$detail_note_rule" | grep -qF -- "$detail_note_rule_token"; then
+      record_failure "$test_name" "T25-96: .detail-note 규칙에 $detail_note_rule_token 이 없음"
+      return 1
+    fi
+  done
+  if ! grep -qF -- 'detail-note-visible' "$hub_template_file"; then
+    record_failure "$test_name" "T25-96: hub_template.html 에 detail-note-visible 클래스가 없음"
+    return 1
+  fi
+  if grep -qF -- 'panelNoteEl.hidden' "$hub_template_file"; then
+    record_failure "$test_name" "T25-96: hub_template.html 에 panelNoteEl.hidden 대입이 남아 있음"
+    return 1
+  fi
+  if grep -qF -- 'DETAIL_NOTE_TEXT' "$hub_template_file"; then
+    record_failure "$test_name" "T25-96: hub_template.html 에 DETAIL_NOTE_TEXT 상수가 남아 있음"
+    return 1
+  fi
+
+  # T25-97(PV6~PV8 회전, G5·G6): 회전 키프레임·규칙·저감 무효화가 세트로 있고, 무효화가
+  # 소스 순서상 뒤에 온다(선례: T25-79·T25-91 의 줄 번호 비교). 회전 시간은 CSS 에만 산다 —
+  # 회전 IIFE 범위에 setTimeout( 이 0건이어야 한다(animationend 로 해제, PV7).
+  local rotation_token
+  for rotation_token in '@keyframes dzh-refresh-spin' '.refresh-btn.refresh-spinning svg{animation:' \
+      'animationend'; do
+    if ! grep -qF -- "$rotation_token" "$hub_template_file"; then
+      record_failure "$test_name" "T25-97: hub_template.html 에 $rotation_token 이 없음"
+      return 1
+    fi
+  done
+  local spin_rule_line spin_reduce_line
+  spin_rule_line=$(grep -n '\.refresh-btn\.refresh-spinning svg{animation:' "$hub_template_file" | head -1 | cut -d: -f1)
+  spin_reduce_line=$(grep -n 'prefers-reduced-motion' "$hub_template_file" | while IFS=: read -r n _; do
+    sed -n "${n}p" "$hub_template_file" | grep -q 'refresh-spinning' && echo "$n"; done | head -1)
+  if [[ -z "$spin_rule_line" || -z "$spin_reduce_line" || "$spin_reduce_line" -le "$spin_rule_line" ]]; then
+    record_failure "$test_name" "T25-97: prefers-reduced-motion 의 refresh-spinning 무효화가 회전 규칙보다 앞에 있거나 없음"
+    return 1
+  fi
+  local refresh_iife_start_line refresh_iife_body
+  refresh_iife_start_line=$(grep -n 'var REFRESH_SPIN_CLASS' "$hub_template_file" | head -1 | cut -d: -f1)
+  if [[ -z "$refresh_iife_start_line" ]]; then
+    record_failure "$test_name" "T25-97: hub_template.html 에 var REFRESH_SPIN_CLASS 를 찾지 못함"
+    return 1
+  fi
+  refresh_iife_body=$(tail -n "+$refresh_iife_start_line" "$hub_template_file" | awk '{print} /^}\)\(\);$/{exit}')
+  if echo "$refresh_iife_body" | grep -qF 'setTimeout('; then
+    record_failure "$test_name" "T25-97: 회전 IIFE 범위에 setTimeout( 이 남아 있음(PV7 위반)"
+    return 1
+  fi
+
+  # T25-98(PV9~PV12 아이콘, G7): 남은 유니코드 글리프 3종이 lucide 인라인 SVG 로 바뀌었고,
+  # CDN·런타임 로더 흔적이 없다.
+  local icon_token
+  for icon_token in 'class="theme-icon-moon"' 'class="theme-icon-sun"' 'DRAG_HANDLE_ICON_SVG' \
+      '.card-drag-handle svg{' '.detail-close svg{' 'lucide'; do
+    if ! grep -qF -- "$icon_token" "$hub_template_file"; then
+      record_failure "$test_name" "T25-98: hub_template.html 에 $icon_token 이 없음"
+      return 1
+    fi
+  done
+  local removed_icon_token
+  for removed_icon_token in '>☾<' '☀' '>≡<' '>»<' 'THEME_GLYPH' 'cdn.' 'unpkg' 'createIcons'; do
+    if grep -qF -- "$removed_icon_token" "$hub_template_file"; then
+      record_failure "$test_name" "T25-98: hub_template.html 에 옛 글리프·CDN 잔재($removed_icon_token)가 남아 있음"
+      return 1
+    fi
+  done
+
+  # T25-99(문서·주석 정합, G8): hub/README.md 의 아이콘 서술이 화면과 일치하고, 머리 주석의
+  # 안내 줄 계약이 개정됐다(결정 PV5).
+  if ! grep -qF -- '아이콘' "$hub_readme_file"; then
+    record_failure "$test_name" "T25-99: hub/README.md 에 아이콘 서술이 없음"
+    return 1
+  fi
+  local readme_removed_glyph_token
+  for readme_removed_glyph_token in '☾' '≡'; do
+    if grep -qF -- "$readme_removed_glyph_token" "$hub_readme_file"; then
+      record_failure "$test_name" "T25-99: hub/README.md 에 옛 글리프($readme_removed_glyph_token)가 남아 있음"
+      return 1
+    fi
+  done
+  local head_comment_body
+  head_comment_body=$(sed -n '/^<!--$/,/^-->$/p' "$hub_template_file")
+  if ! echo "$head_comment_body" | grep -qF -- 'detail-note-visible'; then
+    record_failure "$test_name" "T25-99: hub_template.html 머리 주석에 detail-note-visible 이 없음"
+    return 1
+  fi
+  if echo "$head_comment_body" | grep -qF -- 'hidden·textContent 만 바뀐다'; then
+    record_failure "$test_name" "T25-99: hub_template.html 머리 주석에 옛 계약 문구(hidden·textContent 만 바뀐다)가 남아 있음"
+    return 1
+  fi
+
+  # T25-100(MS1 파일 존재·크기, docs/prps/hub-model-module-split.md 결정 MS1): 분리된 3개
+  # 파일이 존재하고, hub/bin/*.py 전부가 800줄 이하다(파일 800줄 상한이 이 분리의 이유였다).
+  local ms1_split_file
+  for ms1_split_file in "$hub_session_file" "$hub_project_file" "$hub_server_state_file"; do
+    if [[ ! -f "$ms1_split_file" ]]; then
+      record_failure "$test_name" "T25-100: $ms1_split_file 이 존재하지 않음"
+      return 1
+    fi
+  done
+  local py_source_file py_line_count
+  for py_source_file in "$REPO_ROOT"/hub/bin/*.py; do
+    py_line_count=$(wc -l < "$py_source_file" | tr -d ' ')
+    if [[ "$py_line_count" -gt 800 ]]; then
+      record_failure "$test_name" "T25-100: $py_source_file 이 800줄을 넘음($py_line_count 줄)"
+      return 1
+    fi
+  done
+
+  # T25-101(MS2 파사드 부재, 결정 MS2 — 파사드를 만들지 않는다): hub_model.py 에 와일드카드
+  # 재노출이나 이동한 심볼의 재정의가 없다.
+  if grep -qE '^from hub_(session|project|server_state) import \*' "$hub_model_file"; then
+    record_failure "$test_name" "T25-101: hub_model.py 에 와일드카드 재노출이 있음(MS2 위반)"
+    return 1
+  fi
+  local relocated_symbol_def
+  for relocated_symbol_def in 'def compute_session_view(' 'def summarize_agent_runs(' \
+      'def compose_project_views(' 'def is_server_alive(' 'def should_spawn_collect(' \
+      'def parse_server_record('; do
+    if grep -qF -- "$relocated_symbol_def" "$hub_model_file"; then
+      record_failure "$test_name" "T25-101: hub_model.py 에 이동한 심볼의 정의($relocated_symbol_def)가 남아 있음(MS2 위반)"
+      return 1
+    fi
+  done
+
+  # T25-102(MS4 순환·잎 계약, 결정 MS4): hub_server_state.py 는 어떤 허브 모듈도 임포트하지
+  # 않는 잎이고, hub_session.py 는 hub_project 를 임포트하지 않는다(관측 1 — 섹션 5~6 만
+  # hub_project 로 간다). 역방향 — hub_project.py 가 hub_model 을 임포트하면 안 된다
+  # (간선 방향이 반대로 뒤집힌다).
+  if grep -qE '^(import|from) hub_' "$hub_server_state_file"; then
+    record_failure "$test_name" "T25-102: hub_server_state.py 가 다른 허브 모듈을 임포트함(잎 모듈 계약 위반)"
+    return 1
+  fi
+  if grep -qE '^(import|from) hub_project' "$hub_session_file"; then
+    record_failure "$test_name" "T25-102: hub_session.py 가 hub_project 를 임포트함(의존 방향 위반)"
+    return 1
+  fi
+  if grep -qE '^import hub_model' "$hub_project_file"; then
+    record_failure "$test_name" "T25-102 역방향: hub_project.py 가 hub_model 을 임포트함(역방향 간선 금지)"
+    return 1
+  fi
+
+  # T25-103(MS9 테스트 1:1, 결정 MS9): 소스 1개 ↔ 테스트 1개 관례가 분리된 3개 모듈로
+  # 확장됐다. 역방향 — 이관된 테스트 클래스가 test_hub_model.py 에 잔류하면 회귀다.
+  local ms9_test_file
+  for ms9_test_file in "$REPO_ROOT/tests/hub/test_hub_session.py" \
+      "$REPO_ROOT/tests/hub/test_hub_project.py" \
+      "$REPO_ROOT/tests/hub/test_hub_server_state.py"; do
+    if [[ ! -f "$ms9_test_file" ]]; then
+      record_failure "$test_name" "T25-103: $ms9_test_file 이 존재하지 않음"
+      return 1
+    fi
+  done
+  local relocated_test_class hub_model_test_file
+  hub_model_test_file="$REPO_ROOT/tests/hub/test_hub_model.py"
+  for relocated_test_class in "class SubagentZombieGuardTest" "class ComposeProjectViewsTest" \
+      "class ParseServerRecordTest"; do
+    if grep -qF -- "$relocated_test_class" "$hub_model_test_file"; then
+      record_failure "$test_name" "T25-103: test_hub_model.py 에 이관된 테스트 클래스($relocated_test_class)가 잔류함"
+      return 1
+    fi
+  done
+
+  # T25-104(문서 정합, 결정 MS10): hub/README.md 가 15개 파일을 고지하고, hub-dashboard.md
+  # 모듈 구성표가 hub_session.py 를 안다. 역방향 — 옛 "12개 파일" 고지가 남아 있으면 안 된다.
+  if ! grep -qF "15개 파일" "$hub_readme_file"; then
+    record_failure "$test_name" "T25-104: hub/README.md 에 15개 파일 고지가 없음"
+    return 1
+  fi
+  if grep -qF "12개 파일" "$hub_readme_file"; then
+    record_failure "$test_name" "T25-104: hub/README.md 에 옛 12개 파일 고지가 남아 있음"
+    return 1
+  fi
+  if ! grep -qF "hub_session.py" "$hub_dashboard_prp_file"; then
+    record_failure "$test_name" "T25-104: docs/prps/hub-dashboard.md 모듈 구성표에 hub_session.py 가 없음"
     return 1
   fi
 

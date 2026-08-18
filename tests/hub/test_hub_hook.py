@@ -101,7 +101,7 @@ class SpawnsBackgroundCollectTest(HubHookScenarioTest):
         """검수 M2-5 — 서버가 죽어 있고(하트비트 없음) hub.html 도 없으면 훅 폴백이 뚫려야
         한다. 예전에는 이 조합이 항상 False 라, 상주 서버가 HUB_HOME 쓰기 실패 등으로
         hub.html 을 한 번도 못 만든 채 수집 스레드까지 죽으면 훅 폴백조차 영원히 막혀
-        사용자가 영구히 빈 페이지만 보는 이중 실패였다(hub_model.should_spawn_collect 참조)."""
+        사용자가 영구히 빈 페이지만 보는 이중 실패였다(hub_server_state.should_spawn_collect 참조)."""
         with mock.patch("subprocess.Popen") as mock_popen:
             self._run_hook_with_stdin({"hook_event_name": "Stop", "session_id": "s", "cwd": "/repo"})
 

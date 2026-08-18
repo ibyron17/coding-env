@@ -17,6 +17,7 @@ import hub_collect
 import hub_daemon
 import hub_model
 import hub_server
+import hub_server_state
 import hub_settings
 import hub_usage
 
@@ -63,9 +64,9 @@ def cmd_collect(args: argparse.Namespace) -> int:
 
 def _server_is_alive() -> tuple[bool, hub_model.HubConfig]:
     config, _config_warnings = hub_collect.load_config()
-    ttl_ms = hub_model.server_heartbeat_ttl_ms(config.server_collect_interval_seconds)
+    ttl_ms = hub_server_state.server_heartbeat_ttl_ms(config.server_collect_interval_seconds)
     heartbeat_mtime_ms = hub_collect.read_server_heartbeat_mtime_ms()
-    return hub_model.is_server_alive(_now_ms(), heartbeat_mtime_ms, ttl_ms), config
+    return hub_server_state.is_server_alive(_now_ms(), heartbeat_mtime_ms, ttl_ms), config
 
 
 def cmd_open(args: argparse.Namespace) -> int:

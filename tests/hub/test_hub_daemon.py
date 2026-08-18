@@ -1,6 +1,6 @@
 """hub_daemon 단위 테스트. 순수 함수(D1~D5)는 docs/prps/hub-dashboard.md 「개정 테스트 계획」 참조.
 
-D6(parse_server_record)은 hub_model.py 로 옮겨 tests/hub/test_hub_model.py 에 있다(검수 m3).
+D6(parse_server_record)은 hub_server_state.py 로 옮겨 tests/hub/test_hub_server_state.py 에 있다(검수 m3).
 I/O 함수(server_status·stop_server)는 검수 m1(고아 신호·compare-and-delete) 회귀 테스트 대상이다.
 """
 
@@ -17,6 +17,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "hub", "b
 import hub_collect  # noqa: E402
 import hub_daemon  # noqa: E402
 import hub_model  # noqa: E402
+import hub_server_state  # noqa: E402
 
 HUB_PY_PATH = "/Users/x/.claude/hub/bin/hub.py"
 
@@ -136,7 +137,7 @@ class ServerStatusCollectStalledTest(HubDaemonIoScenarioTest):
     하트비트가 만료된 상태를 crashed_evidence 와 구분해 이름 붙인다."""
 
     def test_process_present_but_heartbeat_expired_is_collect_stalled(self) -> None:
-        record = hub_model.ServerRecord(pid=999, port=8794, started_at_ms=1)
+        record = hub_server_state.ServerRecord(pid=999, port=8794, started_at_ms=1)
         hub_collect.write_server_record(record)
         ps_output_with_marker = f"python3 {hub_daemon.HUB_PY_PATH} server-run"
         with mock.patch.object(hub_daemon, "_ps_args_for_pid", return_value=ps_output_with_marker), \
@@ -149,7 +150,7 @@ class ServerStatusCollectStalledTest(HubDaemonIoScenarioTest):
         self.assertIsNotNone(status.log_tail)
 
     def test_process_present_and_heartbeat_fresh_is_not_collect_stalled(self) -> None:
-        record = hub_model.ServerRecord(pid=999, port=8794, started_at_ms=1)
+        record = hub_server_state.ServerRecord(pid=999, port=8794, started_at_ms=1)
         hub_collect.write_server_record(record)
         hub_collect.touch_server_heartbeat()
         ps_output_with_marker = f"python3 {hub_daemon.HUB_PY_PATH} server-run"
@@ -164,13 +165,13 @@ class StopServerCompareAndDeleteTest(HubDaemonIoScenarioTest):
     """검수 m1 — stop 진행 중 다른 프로세스가 이미 새 서버를 등록했으면 그 기록을 지우지 않는다."""
 
     def test_stop_does_not_wipe_a_newer_server_registered_mid_race(self) -> None:
-        old_record = hub_model.ServerRecord(pid=111, port=8794, started_at_ms=1)
+        old_record = hub_server_state.ServerRecord(pid=111, port=8794, started_at_ms=1)
         hub_collect.write_server_record(old_record)
 
         def fake_ps_args(pid: int) -> str:
             # "그 사이" 다른 셸이 새 서버를 등록했다고 흉내낸 뒤, 예전 프로세스는 이미
             # 종료된 것처럼 보이는 빈 출력을 돌려줘 정리 분기를 태운다.
-            hub_collect.write_server_record(hub_model.ServerRecord(pid=222, port=8794, started_at_ms=2))
+            hub_collect.write_server_record(hub_server_state.ServerRecord(pid=222, port=8794, started_at_ms=2))
             return ""
 
         with mock.patch.object(hub_daemon, "_ps_args_for_pid", side_effect=fake_ps_args):

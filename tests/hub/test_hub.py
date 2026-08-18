@@ -16,7 +16,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "hub", "b
 import hub  # noqa: E402
 import hub_collect  # noqa: E402
 import hub_daemon  # noqa: E402
-import hub_model  # noqa: E402
+import hub_server_state  # noqa: E402
 import hub_settings  # noqa: E402
 
 
@@ -102,7 +102,7 @@ class CmdOpenServerAwareTest(unittest.TestCase):
         """
         return mock.patch.object(
             hub_daemon, "open_browser",
-            return_value=hub_model.BrowserOpenResult(opened=True, focus_requested=True, fallback_reason=None),
+            return_value=hub_server_state.BrowserOpenResult(opened=True, focus_requested=True, fallback_reason=None),
         )
 
     def test_fresh_heartbeat_and_existing_hub_html_opens_http_url_without_collecting(self) -> None:
@@ -220,8 +220,8 @@ class CmdStatusServerSummaryTest(unittest.TestCase):
         hub_settings.SETTINGS_PATH = self.original_settings_path
         shutil.rmtree(self.temp_dir, ignore_errors=True)
 
-    def _make_status(self, collect_stalled: bool) -> hub_model.ServerStatus:
-        return hub_model.ServerStatus(
+    def _make_status(self, collect_stalled: bool) -> hub_server_state.ServerStatus:
+        return hub_server_state.ServerStatus(
             record=None, process_present=True, heartbeat_age_ms=1, alive=not collect_stalled,
             http_ok=True, crashed_evidence=False, log_tail=None, orphaned_evidence=False,
             collect_stalled=collect_stalled,

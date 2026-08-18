@@ -1,7 +1,8 @@
 """hub_collect.py — I/O 레이어. 프로젝트 발견 · 3티어 읽기 · 스냅샷 조립 · hub.html 원자적 쓰기.
 
 hub/bin 안에서 파일시스템·프로세스·네트워크에 닿는 유일한 모듈이다.
-hub_model.py·hub_parse.py(순수)의 결과를 조립해 ~/.claude/hub/hub.html 을 만든다.
+hub_model.py·hub_session.py·hub_project.py·hub_server_state.py·hub_parse.py(순수)의
+결과를 조립해 ~/.claude/hub/hub.html 을 만든다.
 """
 
 import dataclasses
@@ -15,6 +16,9 @@ from pathlib import Path
 
 import hub_model
 import hub_parse
+import hub_project
+import hub_server_state
+import hub_session
 import hub_usage
 
 HUB_HOME = Path.home() / ".claude" / "hub"
@@ -166,7 +170,7 @@ def _recent_event_file_paths(now_ms: int) -> list[Path]:
     return [EVENTS_DIR / f"{date}.jsonl" for date in unique_dates]
 
 
-def read_recent_events(now_ms: int) -> tuple[list[hub_model.HookEvent], tuple[str, ...]]:
+def read_recent_events(now_ms: int) -> tuple[list[hub_session.HookEvent], tuple[str, ...]]:
     """오늘 + 어제 이벤트 파일을 읽어 파싱된 이벤트를 시간순으로 돌려준다.
 
     파일 하나를 못 읽어도 나머지로 계속 진행한다(검수 M7, 리스크 6 "이벤트 손실은 1건 한정"과
@@ -185,7 +189,7 @@ def read_recent_events(now_ms: int) -> tuple[list[hub_model.HookEvent], tuple[st
             warnings.append(f"{file_path}: 이벤트 파일 읽기 실패 ({error})")
             continue
         for line in text.splitlines():
-            event = hub_model.parse_event_line(line)
+            event = hub_session.parse_event_line(line)
             if event is not None:
                 events.append(event)
     events.sort(key=lambda event: event.received_at_ms)
@@ -193,12 +197,12 @@ def read_recent_events(now_ms: int) -> tuple[list[hub_model.HookEvent], tuple[st
 
 
 def _group_sessions_by_project(
-    events: list[hub_model.HookEvent], ignore_globs: tuple[str, ...]
-) -> dict[str, tuple[hub_model.SessionFacts, ...]]:
+    events: list[hub_session.HookEvent], ignore_globs: tuple[str, ...]
+) -> dict[str, tuple[hub_session.SessionFacts, ...]]:
     """이벤트를 세션 사실로 접고 cwd 별로 묶는다. 무시 패턴에 해당하는 cwd 는 제외한다."""
-    grouped: dict[str, list[hub_model.SessionFacts]] = {}
-    for facts in hub_model.build_session_facts(events).values():
-        if hub_model.should_ignore_cwd(facts.cwd, ignore_globs):
+    grouped: dict[str, list[hub_session.SessionFacts]] = {}
+    for facts in hub_session.build_session_facts(events).values():
+        if hub_project.should_ignore_cwd(facts.cwd, ignore_globs):
             continue
         grouped.setdefault(facts.cwd, []).append(facts)
     return {path: tuple(sessions) for path, sessions in grouped.items()}
@@ -222,7 +226,7 @@ def prune_old_event_files(now_ms: int, retention_days: int) -> None:
 # ---- 티어 1: /dashboard DOM ----
 def read_tier1_snapshot(project_path: str) -> tuple[hub_parse.Tier1Snapshot | None, str | None]:
     """프로젝트의 .claude/dashboard.html 을 읽어 판다. (스냅샷, 경고 메시지) 튜플을 돌려준다."""
-    dashboard_path = Path(project_path) / hub_model.PROJECT_DASHBOARD_RELATIVE_PATH
+    dashboard_path = Path(project_path) / hub_project.PROJECT_DASHBOARD_RELATIVE_PATH
     if not dashboard_path.is_file():
         return None, None
     try:
@@ -242,7 +246,7 @@ def _encoded_ignore_globs(ignore_globs: tuple[str, ...]) -> tuple[str, ...]:
 
     `/`·`.` 만 `-` 로 바뀌므로 `*` 는 그대로 남아 fnmatch 패턴으로 계속 쓸 수 있다.
     """
-    return tuple(hub_model.encode_project_dir_name(pattern) for pattern in ignore_globs)
+    return tuple(hub_project.encode_project_dir_name(pattern) for pattern in ignore_globs)
 
 
 def _tier3_activity_by_encoded_name(
@@ -269,7 +273,7 @@ def _tier3_activity_by_encoded_name(
     activity: dict[str, int] = {}
     warnings: list[str] = []
     for entry in entries:
-        if not entry.is_dir() or hub_model.should_ignore_cwd(entry.name, encoded_ignore_globs):
+        if not entry.is_dir() or hub_project.should_ignore_cwd(entry.name, encoded_ignore_globs):
             continue
         try:
             mtimes = [child.stat().st_mtime for child in entry.glob("*.jsonl")]
@@ -355,7 +359,7 @@ def collect_snapshot(now_ms: int) -> hub_model.HubSnapshot:
     candidate_paths = {
         path
         for path in set(sessions_by_path) | set(scanned_paths)
-        if not hub_model.should_ignore_cwd(path, config.ignore_globs)
+        if not hub_project.should_ignore_cwd(path, config.ignore_globs)
     }
 
     tier1_by_path: dict[str, hub_parse.Tier1Snapshot] = {}
@@ -369,13 +373,13 @@ def collect_snapshot(now_ms: int) -> hub_model.HubSnapshot:
 
     tier3_by_encoded_name, tier3_warnings = _tier3_activity_by_encoded_name(config.ignore_globs)
     warnings.extend(tier3_warnings)
-    resolved, unresolved = hub_model.resolve_project_dirs(
+    resolved, unresolved = hub_project.resolve_project_dirs(
         list(tier3_by_encoded_name), list(candidate_paths)
     )
     tier3_by_path = {resolved[name]: mtime for name, mtime in tier3_by_encoded_name.items() if name in resolved}
 
     stale_after_ms = config.stale_after_minutes * 60 * 1000
-    projects = hub_model.compose_project_views(
+    projects = hub_project.compose_project_views(
         tier1_by_path, sessions_by_path, tier3_by_path, now_ms, stale_after_ms
     )
     usage, rate_limit_resets, capture_warnings = _capture_for_snapshot(now_ms, config)
@@ -520,26 +524,26 @@ def read_server_heartbeat_mtime_ms() -> int | None:
         return None
 
 
-def write_server_record(record: hub_model.ServerRecord) -> None:
+def write_server_record(record: hub_server_state.ServerRecord) -> None:
     """server.json 을 원자적으로 쓴다. 서버 자신이 bind 성공 직후 1회만 호출한다."""
     HUB_HOME.mkdir(parents=True, exist_ok=True)
     payload = json.dumps(dataclasses.asdict(record), ensure_ascii=False)
     _atomic_write_text(SERVER_RECORD_PATH, HUB_HOME, "server.json.", payload)
 
 
-def read_server_record() -> hub_model.ServerRecord | None:
+def read_server_record() -> hub_server_state.ServerRecord | None:
     """server.json 을 읽어 판다. 없거나 깨졌으면 None.
 
-    파싱은 hub_model.parse_server_record(순수)에 위임한다(검수 m3) — 예전에는 순환 임포트를
-    피하려고 이 함수 안에 같은 로직을 따로 두었는데, 그 결과 실제 운영 경로(이 함수)가
-    테스트 대상(hub_daemon 의 사본)과 다른 코드를 쓰는 위험이 있었다. hub_model.py 는
-    hub_collect.py·hub_daemon.py 양쪽이 이미 임포트하는 공통 하위 모듈이라 순환이 없다.
+    파싱은 hub_server_state.parse_server_record(순수)에 위임한다(검수 m3) — 예전에는 순환
+    임포트를 피하려고 이 함수 안에 같은 로직을 따로 두었는데, 그 결과 실제 운영 경로(이 함수)가
+    테스트 대상(hub_daemon 의 사본)과 다른 코드를 쓰는 위험이 있었다. hub_server_state.py 는
+    다른 허브 모듈을 임포트하지 않는 잎 모듈이라 순환이 구조적으로 불가능하다.
     """
     try:
         text = SERVER_RECORD_PATH.read_text(encoding="utf-8")
     except OSError:
         return None
-    return hub_model.parse_server_record(text)
+    return hub_server_state.parse_server_record(text)
 
 
 def clear_server_state(expected_pid: int | None = None) -> None:

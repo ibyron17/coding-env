@@ -1,4 +1,4 @@
-"""hub_usage.py — 한도 관련 외부 계약 파서 모음(순수).
+"""hub_usage.py — 한도 관련 외부 계약 파서 + 사용량 API 폴링 스케줄(순수).
 
 이 모듈은 파일시스템·시각·환경변수에 닿지 않는다(★순수, tests/hub/test_hub_usage.py 대상).
 다루는 외부 포맷은 하나다 — Claude Code CLI 의 statusLine 입력 JSON과 그 캡처 파일
@@ -414,3 +414,58 @@ def describe_json_key_structure(text: str) -> list[str] | None:
     except (json.JSONDecodeError, TypeError):
         return None
     return _describe_json_node(payload, "")
+
+
+# ---- 사용량 API 폴링 스케줄 (R1, 순수) ----
+USAGE_API_BACKOFF_MAX_MULTIPLIER = 12          # 기본 5분 기준 상한 60분
+USAGE_API_RATE_LIMITED_MULTIPLIER = 12         # 429 는 곧바로 상한(결정 A3)
+
+
+@dataclass(frozen=True)
+class UsageApiPollState:
+    """사용량 API 폴링의 스케줄 상태. 수집 루프의 지역 변수로만 산다(전역 상태 금지, 결정 A3)."""
+
+    last_attempt_at_ms: int | None = None
+    consecutive_failures: int = 0
+    forced_multiplier: int | None = None        # 429 가 요구한 즉시 상한
+
+
+def usage_api_poll_delay_ms(state: UsageApiPollState, base_interval_seconds: int) -> int:
+    """다음 시도까지 기다릴 시간(ms). 연속 실패마다 2배, 상한까지(결정 A3 — 5→10→20→40→60분).
+
+    `consecutive_failures` 가 0·1 이면 배수는 1(기본 주기 그대로) — 첫 실패 직후에는 아직
+    백오프를 태우지 않는다. `forced_multiplier`(429 특례)가 있으면 지수 계산을 건너뛰고
+    그 배수를 곧바로 쓴다 — 가장 강한 "그만 보내라" 신호에 가장 강하게 반응한다.
+    """
+    if state.forced_multiplier is not None:
+        multiplier = state.forced_multiplier
+    else:
+        multiplier = min(2 ** max(state.consecutive_failures - 1, 0), USAGE_API_BACKOFF_MAX_MULTIPLIER)
+    return base_interval_seconds * multiplier * MILLISECONDS_PER_SECOND
+
+
+def should_attempt_usage_api_poll(
+    now_ms: int, state: UsageApiPollState, base_interval_seconds: int
+) -> bool:
+    """지금 사용량 API 를 호출해도 되는가. 첫 시도(last_attempt_at_ms 가 None)는 항상 True."""
+    if state.last_attempt_at_ms is None:
+        return True
+    delay_ms = usage_api_poll_delay_ms(state, base_interval_seconds)
+    return (now_ms - state.last_attempt_at_ms) >= delay_ms
+
+
+def next_usage_api_poll_state(
+    now_ms: int, state: UsageApiPollState, failure_reason: str | None
+) -> UsageApiPollState:
+    """시도 결과를 반영한 **새** 상태를 돌려준다(원본은 불변). 성공(`failure_reason is None`)
+    이면 실패 카운트를 0 으로 되돌린다. `http_rate_limited` 는 곧바로 상한 배수로 점프한다
+    (결정 A3) — 그 외 실패 사유는 지수 백오프 카운터만 늘린다.
+    """
+    if failure_reason is None:
+        return UsageApiPollState(last_attempt_at_ms=now_ms, consecutive_failures=0, forced_multiplier=None)
+    forced_multiplier = USAGE_API_RATE_LIMITED_MULTIPLIER if failure_reason == "http_rate_limited" else None
+    return UsageApiPollState(
+        last_attempt_at_ms=now_ms,
+        consecutive_failures=state.consecutive_failures + 1,
+        forced_multiplier=forced_multiplier,
+    )

@@ -41,7 +41,10 @@
 | 파일 | 줄 수(예상) | 역할 |
 |------|------------|------|
 | `hub/bin/hub.py` | ~150 | CLI 엔트리. 서브커맨드(`collect`/`open`/`serve`/`stop`/`install-hooks`/`uninstall-hooks`/`status`) 디스패치와 I/O 조립 |
-| `hub/bin/hub_model.py` | ~200 | **★순수.** 이벤트 → 세션 사실 → 표시 상태, 단계 추정, 경로 인코딩 매칭, 프로젝트 합성 |
+| `hub/bin/hub_model.py` | ~200 | **★순수.** 이벤트 → 세션 사실 → 표시 상태, 단계 추정, 경로 인코딩 매칭, 프로젝트 합성 → **분리됨(docs/prps/hub-model-module-split.md 결정 MS1)** — 심볼 귀속표는 그 문서가 정본. 잔류분은 허브 스냅샷 계약(`HubSnapshot`·`HubConfig`)과 그 직렬화·렌더뿐이다 |
+| `hub/bin/hub_session.py` | ~350 | **★순수.** 훅 이벤트를 세션 사실로 접고 표시 상태로 판정(hub-model-module-split.md 결정 MS1) |
+| `hub/bin/hub_project.py` | ~190 | **★순수.** 프로젝트 발견 + 세션 뷰·티어 1 스냅샷을 프로젝트 뷰로 합성(hub-model-module-split.md 결정 MS1) |
+| `hub/bin/hub_server_state.py` | ~125 | **★순수.** 상주 서버 기록 형식과 생존·재수집 판정, 잎 모듈(hub-model-module-split.md 결정 MS1) |
 | `hub/bin/hub_parse.py` | ~120 | **★순수.** `dashboard.html` 텍스트 → `Tier1Snapshot` (줄 단위 정규식) |
 | `hub/bin/hub_collect.py` | ~180 | I/O. 프로젝트 발견 · 3티어 읽기 · 스냅샷 조립 · `hub.html` 원자적 쓰기 |
 | `hub/bin/hub_hook.py` | ~70 | 훅 엔트리. stdin 이벤트 1줄 append + 쓰로틀 재수집. **항상 exit 0** |
@@ -81,7 +84,7 @@
 | 지시문 | `commands/hub.md` | 어떤 서브커맨드를 언제 부르고 무엇을 보고할지 | 없음(LLM 이 읽는다) |
 | 엔트리 | `hub.py` · `hub_hook.py` | 인자·stdin 해석, 조립, 보고, 종료 코드 | 프로세스 경계 |
 | I/O | `hub_collect.py` · `hub_settings.py` | 파일 발견·읽기·쓰기, `settings.json` 병합, 서버 기동 | **여기에만 있다** |
-| 순수 | `hub_model.py` · `hub_parse.py` | 파싱·상태 판정·단계 추정·경로 매칭 | **없음. 단위 테스트 대상** |
+| 순수 | `hub_model.py` · `hub_session.py` · `hub_project.py` · `hub_server_state.py` · `hub_usage.py` · `hub_parse.py` | 파싱·상태 판정·단계 추정·경로 매칭(도메인별 분리 근거: docs/prps/hub-model-module-split.md) | **없음. 단위 테스트 대상** |
 | 표현 | `hub_template.html` → `~/.claude/hub/hub.html` | 인라인된 JSON 을 렌더 | 브라우저 |
 
 레이어 간 통신은 아래 「데이터 모델」의 `dataclass` 로만 한다. 순수 레이어는 파일시스템·시각·환경변수를
@@ -92,7 +95,8 @@
 ```
 ~/.claude/hub/
 ├── bin/                    # install.sh 소유 (배포물). 사용자 데이터가 섞이지 않는다
-│   ├── hub.py  hub_model.py  hub_parse.py  hub_collect.py  hub_hook.py  hub_settings.py
+│   ├── hub.py  hub_model.py  hub_session.py  hub_project.py  hub_server_state.py
+│   ├── hub_parse.py  hub_collect.py  hub_hook.py  hub_settings.py
 │   └── hub_template.html
 ├── config.json             # 선택. 없으면 전부 기본값
 ├── events/YYYY-MM-DD.jsonl # 티어 2 이벤트 로그 (append-only, 날짜별)

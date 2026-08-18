@@ -38,10 +38,16 @@ DZH:HUB 데이터 계약
   about:blank 는 같은 시간만큼 지연 실행되고, 대기 중인 그 타이머가 존재하면
   openDashboardKey 는 반드시 null 이다 — 취소는 openDetailPanel 한 곳에서만 한다(SP15).
 
-  #dzh-detail-note 는 패널의 정적 자식이며 hidden·textContent 만 바뀐다(결정 GN6~GN7,
-  docs/prps/hub-session-revival-and-stale-tier1.md). 그 값의 출처는 스냅샷이 아니라 클릭된
+  #dzh-detail-note 는 패널의 정적 자식이며 detail-note-visible 클래스만 바뀐다(결정 GN6~GN7
+  → docs/prps/hub-panel-polish-and-icons.md 결정 PV3). 문구와 data-tooltip 은 마크업에
+  고정돼 있고, 자리는 안내 유무와 무관하게 항상 예약된다 — 그 예약된 자리가 헤드와 대시보드
+  카드를 가르는 여백을 겸한다(결정 PV2). 그 값의 출처는 스냅샷이 아니라 클릭된
   카드의 data-tier1-previous 속성이다 — 패널 IIFE 가 스냅샷을 모른다는 결정 SP1 을 유지하기
   위한 우회다.
+
+  아이콘은 lucide(ISC, https://lucide.dev)의 path 좌표를 그대로 옮겨 적은 정적 인라인
+  SVG 다 — CDN·런타임 라이브러리를 쓰지 않는다(file:// 로도 열려야 하기 때문, 결정 PV9).
+  viewBox·stroke 속성 관용구는 새로고침 버튼(refresh-cw)이 세운 선례를 그대로 따른다.
 
   #dzh-usage 와 그 안의 #dzh-usage-toggle 은 정적 노드이며 class·aria-expanded 속성만
   갱신한다(노드 교체 금지). 접힘을 바꾸는 경로는 둘이다 — 제목 줄 클릭과 패널 바깥 클릭 —
@@ -133,9 +139,9 @@ DZH:HUB 데이터 계약
      배지들보다 살짝 작게 잡아 "잡는 곳"이라는 보조적 위계를 준다. */
   .card-drag-handle{width:22px;height:22px;flex:0 0 auto;padding:0;color:var(--muted);
                      background:transparent;border:1px solid var(--line);border-radius:6px;
-                     cursor:grab;display:inline-flex;align-items:center;justify-content:center;
-                     font-size:13px;line-height:1}
+                     cursor:grab;display:inline-flex;align-items:center;justify-content:center}
   .card-drag-handle:hover{color:var(--accent-ink);border-color:var(--accent)}
+  .card-drag-handle svg{width:14px;height:14px}
   /* font:inherit 를 먼저 두고 font-size·font-weight 를 뒤에 다시 적어, <button> 기본 폰트만
      리셋하고 크기·굵기는 명시값을 쓰게 한다(순서 의존 — .usage-toggle 과 같은 관례). 티어
      2·3 은 <span> 으로 렌더돼(R3) 이 리셋은 그때 아무 효과가 없다. */
@@ -204,10 +210,25 @@ DZH:HUB 데이터 계약
   .icon-btn:hover{color:var(--accent-ink);border-color:var(--accent)}
   .icon-btn:focus-visible{outline:2px solid var(--accent);outline-offset:3px}
   .icon-btn svg{width:18px;height:18px}
+  /* 테마 아이콘(PV10) — 두 SVG 를 마크업에 함께 두고 CSS 가 하나만 보여준다. JS 는 아이콘을
+     만들지 않는다(정적 노드는 속성만 갱신한다는 불변식 H1⁗ 의 원칙). 보이는 아이콘은 "지금"이
+     아니라 "전환될 대상"이다(결정 Y4) — 라이트에서 moon, 다크에서 sun.
+     data-theme 는 테마 IIFE 말미의 applyTheme(currentTheme()) 가 무조건 붙이므로 이 선택자가
+     빈손이 되는 상태는 없다(localStorage 가 막혀도 시스템 선호로 낙착한다). */
+  .theme-toggle .theme-icon-sun{display:none}
+  :root[data-theme="dark"] .theme-toggle .theme-icon-moon{display:none}
+  :root[data-theme="dark"] .theme-toggle .theme-icon-sun{display:inline}
   /* 연결 두절은 hover 전용 툴팁만으로는 아무도 못 본다 — 버튼 자체를 경고색으로 바꿔
      상시 가시 신호를 유지한다(연결 상태 문구가 #dzh-collected-at 에서 툴팁으로 이동한
      뒤에도 "화면이 멈췄다"는 사실만은 능동적 상호작용 없이 보여야 한다). */
   .refresh-btn.connection-lost{color:var(--attention);border-color:var(--attention);background:var(--attention-soft)}
+  /* 새로고침 회전(PV6) — "클릭이 접수됐다"만 말하는 1회 재생이다. 폴링의 진행/성공/실패는
+     이미 data-tooltip 문구와 .connection-lost 색이 말하고 있어 여기서 반복하지 않는다.
+     시간 숫자는 이 한 곳에만 산다 — JS 는 animationend 로 끝을 알므로 시간을 모른다(PV7). */
+  @keyframes dzh-refresh-spin{from{transform:rotate(0)}to{transform:rotate(360deg)}}
+  .refresh-btn.refresh-spinning svg{animation:dzh-refresh-spin 600ms ease-in-out}
+  /* 무효화는 반드시 위 규칙보다 뒤에 온다(.card.card-working 124행이 세운 관례). */
+  @media (prefers-reduced-motion:reduce){.refresh-btn.refresh-spinning svg{animation:none}}
   /* 218px 은 JS 가 못 도는 경우에만 쓰이는 fallback 이다(펼침 실측 186 + 여유 32,
      .usage-toggle 의 line-height:1 적용 이후 재실측 — 검수 LOW). 평소에는
      applyUsageClearance() 가 --usage-clearance 를 실측값으로 덮어쓴다 —
@@ -252,10 +273,16 @@ DZH:HUB 데이터 계약
      기본 규칙이 좁은 화면(오버레이)이고 아래 min-width 쿼리가 넓은 화면(밀어내기)을
      덧쓴다 — 브레이크포인트 리터럴을 한 곳에만 두기 위한 배치다(GOTCHA 2).
      닫힌 상태를 visibility:hidden 으로 두는 것은 필수다 — transform 만으로 화면 밖에
-     내보내면 닫힌 패널의 버튼이 Tab 순서와 접근성 트리에 그대로 남는다. */
+     내보내면 닫힌 패널의 버튼이 Tab 순서와 접근성 트리에 그대로 남는다.
+     배경은 --surface 가 아니라 --bg 다(PV1): 이 패널은 "카드"가 아니라 "페이지"이며, 안에
+     띄우는 대시보드 문서의 body 도 같은 --bg 를 칠한다. 헤드가 --surface 였을 때는 대시보드
+     첫 카드(--surface)와 같은 색이 맞닿아 헤드가 카드 안쪽 제목처럼 읽혔다 — SP11 이 구분선을
+     지운 판단은 옳았고, 그 판단이 성립할 조건(헤드와 카드가 다른 표면일 것)을 여기서 갖춘다.
+     대시보드는 임베드되면 자기 헤더 행을 숨기고(#dz-page-head) 그 역할을 이 헤드에 넘긴다 —
+     넘겨받은 쪽이 같은 표면 위에 서는 것이 정합적이다. */
   .detail-panel{position:fixed;top:0;right:0;bottom:0;left:0;z-index:30;
                 display:flex;flex-direction:column;
-                background:var(--surface);color:var(--ink);
+                background:var(--bg);color:var(--ink);
                 border-left:1px solid var(--line);box-shadow:-16px 0 48px rgba(0,0,0,.28);
                 transform:translateX(100%);visibility:hidden;pointer-events:none;
                 transition:transform 180ms ease-out, visibility 180ms}
@@ -288,30 +315,39 @@ DZH:HUB 데이터 계약
   /* 패널 헤더(SP11) — 다이얼로그 타이틀바가 아니다. 이 허브의 헤더 관용구를 그대로 쓴다:
      구분선 없음(.project-head·.usage-toggle 어느 쪽도 쓰지 않는다), 제목이 flex:1 1 auto 로
      남는 폭을 먹고 컨트롤이 자연히 오른쪽 끝에 선다(.project-head 와 같은 구성).
-     border-bottom 을 지워도 경계가 흐려지지 않는다 — 아래 iframe 문서의 첫 카드가 자기
-     상단 테두리(1px var(--line), 좌우 16px 인셋, 반경 14px)를 그 자리에 이미 그린다
-     (commands/dashboard.md 1272~1273행 + 1352행: 패널 안에서는 #dz-page-head 가 숨어
-     .wrap 이 최상단에 밀착한다). 두 파일의 색 토큰 값이 동일하므로 라이트·다크 모두 성립한다.
-     좌우 패딩 16px 은 취향이 아니라 정렬값이다 — iframe 이 패널 콘텐츠 박스를 가득 채우므로
-     이 16px 과 대시보드 .wrap 의 padding:0 16px 이 같은 원점을 공유한다(SP11 ⑤). */
-  .detail-head{display:flex;align-items:center;gap:10px;padding:16px 16px 12px}
+     border-bottom 을 지워도 경계가 흐려지지 않는다 — 헤드 아래 패딩 10px 은 대시보드
+     단독 화면의 #dz-page-head{margin:28px auto 10px}(commands/dashboard.md 1326행)과 같은
+     값이다. 헤드와 카드 사이의 나머지 여백은 항상 예약된 안내 줄 자리가 만든다(PV2) —
+     합계 38px 고정이며, 패널 표면 자체가 --bg 라(PV1) 그 여백이 카드를 페이지 위에
+     띄워 보인다. 좌우 패딩 16px 은 취향이 아니라 정렬값이다 — iframe 이 패널 콘텐츠 박스를
+     가득 채우므로 이 16px 과 대시보드 .wrap 의 padding:0 16px 이 같은 원점을 공유한다(SP11 ⑤). */
+  .detail-head{display:flex;align-items:center;gap:10px;padding:16px 16px 10px}
   .detail-title{font-size:15px;font-weight:800;color:var(--head);overflow:hidden;
                 text-overflow:ellipsis;white-space:nowrap;min-width:0;flex:1 1 auto}
   /* 닫기 컨트롤 — .icon-btn(32px 원형·그림자)은 페이지 최상위 액션(새로고침·테마)의 표기라
      패널 안 컨트롤이 그것을 쓰면 헤드가 창 제목줄로 읽힌다. 카드의 .card-drag-handle 과
      같은 계열(작고 투명하고 사각)로 낮춰 "이 구역의 컨트롤"이라는 위계를 준다.
-     글리프 »: 패널이 오른쪽으로 밀려 나가는 실제 동작(SP12)을 가리킨다 — 접근성 이름은
-     aria-label 이 고정하므로 글리프가 낯설어도 낭독은 "닫기"다. */
+     글리프 » 는 lucide chevrons-right 로 바뀌었고(PV12) 의미는 같다: 패널이 오른쪽으로
+     밀려 나가는 실제 동작(SP12)을 가리킨다. 접근성 이름은 여전히 aria-label 이 고정한다. */
   .detail-close{width:24px;height:24px;flex:0 0 auto;padding:0;color:var(--muted);
                 background:transparent;border:1px solid var(--line);border-radius:6px;
-                cursor:pointer;display:inline-flex;align-items:center;justify-content:center;
-                font:inherit;font-size:13px;line-height:1}
+                cursor:pointer;display:inline-flex;align-items:center;justify-content:center}
   .detail-close:hover{color:var(--accent-ink);border-color:var(--accent)}
   .detail-close:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+  .detail-close svg{width:14px;height:14px}
   .detail-frame{flex:1 1 auto;width:100%;border:0}
-  /* 이전 작업 안내 줄(결정 GN6) — display 를 선언하지 않는다. 선언하면 UA 의
-     [hidden]{display:none} 을 덮어써 항상 보이게 된다(GOTCHA 7). */
-  .detail-note{margin:0;padding:0 16px 10px;font-size:11.5px;color:var(--attention)}
+  /* 안내 줄(결정 GN6 → PV3) — 자리를 항상 차지한다. hidden 속성 토글을 버린 이유:
+     [hidden]{display:none} 은 상자를 없애 헤더 높이가 프로젝트마다 달라지고, 패널을 연 채
+     다른 카드를 누르면 대시보드가 위아래로 튄다(요구 R2). visibility:hidden 은 상자를
+     남기면서 접근성 트리에서는 빠지므로 빈 안내가 낭독되지 않는다.
+     한 줄 클램프는 높이 고정의 필요조건이다 — 오버레이 모드에서 패널 폭은 뷰포트 폭이라
+     어떤 문구든 접힐 수 있다. 전문은 data-tooltip 이 보존한다(PV4).
+     line-height 를 명시하는 이유: 상속값(1.5)은 글꼴 메트릭에 따라 반올림이 달라져 "고정"의
+     근거가 되지 못한다. */
+  .detail-note{margin:0;padding:0 16px 12px;font-size:11.5px;line-height:16px;
+               color:var(--attention);overflow:hidden;text-overflow:ellipsis;
+               white-space:nowrap;visibility:hidden}
+  .detail-note.detail-note-visible{visibility:visible}
 </style>
 <script>
 /* body 파싱 전에 실행돼 첫 페인트부터 확정 테마로 그린다(FOUC 방지).
@@ -340,7 +376,18 @@ try{
         </svg>
       </button>
       <button id="dzh-theme-toggle" class="icon-btn theme-toggle" type="button"
-              aria-label="다크 테마로 전환" data-tooltip="다크 테마로 전환">☾</button>
+              aria-label="다크 테마로 전환" data-tooltip="다크 테마로 전환">
+        <svg class="theme-icon-moon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">
+          <path d="M20.985 12.486a9 9 0 1 1-9.473-9.472c.405-.022.617.46.402.803a6 6 0 0 0 8.268 8.268c.344-.215.825-.004.803.401"/>
+        </svg>
+        <svg class="theme-icon-sun" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">
+          <circle cx="12" cy="12" r="4"/>
+          <path d="M12 2v2"/><path d="M12 20v2"/>
+          <path d="m4.93 4.93 1.41 1.41"/><path d="m17.66 17.66 1.41 1.41"/>
+          <path d="M2 12h2"/><path d="M20 12h2"/>
+          <path d="m6.34 17.66-1.41 1.41"/><path d="m19.07 4.93-1.41 1.41"/>
+        </svg>
+      </button>
     </div>
   </div>
   <div id="dzh-app"><div class="empty">불러오는 중…</div></div>
@@ -359,9 +406,15 @@ try{
   <div class="detail-head">
     <span id="dzh-detail-title" class="detail-title"></span>
     <button id="dzh-detail-close" class="detail-close" type="button"
-            aria-label="닫기" data-tooltip="닫기 (Esc)">»</button>
+            aria-label="닫기" data-tooltip="닫기 (Esc)">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">
+        <path d="m6 17 5-5-5-5"/><path d="m13 17 5-5-5-5"/>
+      </svg>
+    </button>
   </div>
-  <p id="dzh-detail-note" class="detail-note" hidden></p>
+  <p id="dzh-detail-note" class="detail-note"
+     data-tooltip="이전 작업의 대시보드입니다 — 지금 진행 중인 세션이 시작된 뒤 갱신되지 않았습니다."
+  >이전 작업의 대시보드입니다 — 지금 진행 중인 세션이 시작된 뒤 갱신되지 않았습니다.</p>
   <iframe id="dzh-detail-frame" class="detail-frame"
           aria-label="프로젝트 진행 대시보드"></iframe>
 </aside>
@@ -374,9 +427,9 @@ try{
   // 끝난다.
   var THEME_STORAGE_KEY = 'dzh-theme';
   var THEME_CYCLE = ['light', 'dark'];
-  // 글리프·라벨은 "지금" 이 아니라 "전환될 대상"을 가리킨다 — 라이트일 때 ☾(다크로 전환),
-  // 다크일 때 ☀(라이트로 전환). 새로고침 버튼의 라벨 규약("동작"을 말한다)과 같다.
-  var THEME_GLYPH = {light:'☾', dark:'☀'};
+  // 아이콘·라벨은 "지금" 이 아니라 "전환될 대상"을 가리킨다 — 라이트일 때 moon(다크로 전환),
+  // 다크일 때 sun(라이트로 전환). 새로고침 버튼의 라벨 규약("동작"을 말한다)과 같다.
+  // 아이콘 자체는 CSS 가 고른다(PV10) — 두 SVG 를 마크업에 함께 두고 data-theme 로 스와핑한다.
   var THEME_ACTION_LABEL = {light:'다크 테마로 전환', dark:'라이트 테마로 전환'};
   var toggleButton = document.getElementById('dzh-theme-toggle');
   if(!toggleButton) return;
@@ -402,10 +455,9 @@ try{
     }
   }
 
-  // data-theme 속성·글리프·aria-label·data-tooltip 을 한꺼번에 맞춘다.
+  // data-theme 속성·aria-label·data-tooltip 을 한꺼번에 맞춘다. 아이콘 선택은 CSS 가 한다(PV10).
   function applyTheme(theme){
     document.documentElement.setAttribute('data-theme', theme);
-    toggleButton.textContent = THEME_GLYPH[theme];
     toggleButton.setAttribute('aria-label', THEME_ACTION_LABEL[theme]);
     toggleButton.setAttribute('data-tooltip', THEME_ACTION_LABEL[theme]);
   }
@@ -417,6 +469,28 @@ try{
     applyTheme(next);
   });
   applyTheme(currentTheme());
+})();
+
+(function(){
+  // 새로고침 회전(PV6~PV8) — 클릭 피드백 전용. 렌더 IIFE 안에 넣지 않는 이유: 그 IIFE 는
+  // file:// 모드에서 조기 반환하므로 등록 위치에 따라 회전이 조용히 죽는다. 스냅샷을 모르는
+  // 순수 표현이라 테마 토글·툴팁과 같은 층위의 독립 IIFE 가 맞다.
+  var REFRESH_SPIN_CLASS = 'refresh-spinning';
+  var refreshButton = document.getElementById('dzh-refresh');
+  var refreshIconEl = refreshButton && refreshButton.querySelector('svg');
+  if(!refreshButton || !refreshIconEl) return;
+
+  refreshButton.addEventListener('click', function(){
+    // 제거 → 강제 리플로우 → 재추가. 제거만 하고 곧바로 추가하면 브라우저가 두 변경을 한
+    // 프레임에 합쳐 "변화 없음"으로 처리해 연속 클릭에서 재생되지 않는다.
+    refreshButton.classList.remove(REFRESH_SPIN_CLASS);
+    void refreshButton.offsetWidth;
+    refreshButton.classList.add(REFRESH_SPIN_CLASS);
+  });
+  // 시간을 JS 가 알 필요가 없다 — 애니메이션이 끝났다고 브라우저가 알려준다(PV7).
+  refreshIconEl.addEventListener('animationend', function(){
+    refreshButton.classList.remove(REFRESH_SPIN_CLASS);
+  });
 })();
 
 (function(){
@@ -587,6 +661,13 @@ try{
   var MAX_STORED_PROJECT_ORDER = 200;
   var DRAG_HANDLE_SELECTOR = '.card-drag-handle';
   var DRAG_HANDLE_HINT = '드래그해서 순서 변경';
+  // lucide grip-vertical(결정 PV9). 카드마다 반복 삽입되므로 상수 1개로 둔다 — 값은 리터럴이라
+  // 매 호출 새 문자열을 만들지 않는다.
+  var DRAG_HANDLE_ICON_SVG = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" '
+    + 'stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" '
+    + 'focusable="false"><circle cx="9" cy="12" r="1"/><circle cx="9" cy="5" r="1"/>'
+    + '<circle cx="9" cy="19" r="1"/><circle cx="15" cy="12" r="1"/><circle cx="15" cy="5" r="1"/>'
+    + '<circle cx="15" cy="19" r="1"/></svg>';
   // 프로젝트 대시보드 모달(R3, 결정 N7) — file:// 모드는 클릭 대상에서 빠지고 사유를 안내한다.
   var FILE_MODE_DASHBOARD_HINT = '허브 서버를 켜면(/hub server start) 카드에서 대시보드를 볼 수 있습니다';
 
@@ -791,7 +872,7 @@ try{
   // aria-hidden 으로 접근성 트리에서 빼고, Tab 순서에서도 자연히 빠진다(span 은 기본 비포커스).
   function renderDragHandle(){
     return '<span class="card-drag-handle" draggable="true" aria-hidden="true" data-tooltip="'
-      + escapeHtml(DRAG_HANDLE_HINT) + '">≡</span>';
+      + escapeHtml(DRAG_HANDLE_HINT) + '">' + DRAG_HANDLE_ICON_SVG + '</span>';
   }
 
   // 클릭 가능(티어 1 + 서버 모드)이면 <button>, 아니면 <span> — 없는 기능을 있는 척하지
@@ -803,7 +884,7 @@ try{
   }
 
   function renderProject(project){
-    // 세션은 서버가 오래된 것부터 준다(§2.4-2, hub_model.compose_project_views) — 클라이언트가
+    // 세션은 서버가 오래된 것부터 준다(§2.4-2, hub_project.compose_project_views) — 클라이언트가
     // 최신순으로 다시 정렬한다(결정 Z1 안 2). slice() 로 복제해 원본 project.sessions 를
     // 변형하지 않는다 — 같은 snapshot 객체가 다음 TICK_MS 렌더에도 재사용된다.
     var visibleSessions = project.sessions
@@ -1195,7 +1276,7 @@ try{
   // 이전 작업 안내 줄(결정 GN6) — 카드의 data-tier1-previous 속성이 유일한 출처다. 이 IIFE 는
   // 렌더 IIFE 가 쥔 스냅샷 데이터를 여전히 몰라도 된다(T25-89 가 기계적으로 강제한다).
   var TIER1_PREVIOUS_TASK_ATTRIBUTE = 'data-tier1-previous';
-  var DETAIL_NOTE_TEXT = '이전 작업의 대시보드입니다 — 지금 진행 중인 세션이 시작된 뒤 갱신되지 않았습니다.';
+  var DETAIL_NOTE_VISIBLE_CLASS = 'detail-note-visible';
 
   var panelEl = document.getElementById('dzh-detail-panel');
   var panelTitleEl = document.getElementById('dzh-detail-title');
@@ -1253,8 +1334,9 @@ try{
     openDashboardKey = dashboardKey;
     panelTitleEl.textContent = displayName;
     // 열 때 1회 판정한다(결정 GN6, 승인 항목 5) — 다른 카드로 교체할 때도 함께 갱신된다.
-    panelNoteEl.hidden = !isPreviousTask;
-    panelNoteEl.textContent = isPreviousTask ? DETAIL_NOTE_TEXT : '';
+    // 안내 줄은 문구·data-tooltip 을 마크업에 고정해 두고 클래스만 토글한다(PV3·PV4) —
+    // 자리는 항상 예약돼 있어 프로젝트를 바꿔도 헤더 높이가 변하지 않는다.
+    panelNoteEl.classList.toggle(DETAIL_NOTE_VISIBLE_CLASS, isPreviousTask);
     loadPanelDocument(projectDashboardUrl(dashboardKey));
     document.body.classList.add(PANEL_OPEN_BODY_CLASS);
     applyBackgroundInert();

@@ -17,6 +17,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "hub", "b
 
 import hub_collect  # noqa: E402
 import hub_model  # noqa: E402
+import hub_server_state  # noqa: E402
 import hub_usage  # noqa: E402
 
 
@@ -27,7 +28,7 @@ def _minimal_snapshot(collected_at_ms: int) -> hub_model.HubSnapshot:
 
 
 class ServerRecordRoundTripTest(unittest.TestCase):
-    """검수 m3 — read_server_record 가 실제로 hub_model.parse_server_record(공유 파서)를
+    """검수 m3 — read_server_record 가 실제로 hub_server_state.parse_server_record(공유 파서)를
     거치는지 실사용 경로(파일 I/O)로 확인한다."""
 
     def setUp(self) -> None:
@@ -43,7 +44,7 @@ class ServerRecordRoundTripTest(unittest.TestCase):
         shutil.rmtree(self.temp_dir, ignore_errors=True)
 
     def test_write_then_read_round_trip(self) -> None:
-        record = hub_model.ServerRecord(pid=123, port=8794, started_at_ms=1786000000000)
+        record = hub_server_state.ServerRecord(pid=123, port=8794, started_at_ms=1786000000000)
         hub_collect.write_server_record(record)
         self.assertEqual(hub_collect.read_server_record(), record)
 
@@ -75,12 +76,12 @@ class ClearServerStateCompareAndDeleteTest(unittest.TestCase):
 
     def test_does_not_delete_when_pid_was_replaced_by_a_newer_server(self) -> None:
         """다른 셸이 이미 새 서버를 띄워 server.json 을 갈아 끼운 뒤에는 지우면 안 된다."""
-        old_record = hub_model.ServerRecord(pid=111, port=8794, started_at_ms=1)
+        old_record = hub_server_state.ServerRecord(pid=111, port=8794, started_at_ms=1)
         hub_collect.write_server_record(old_record)
         hub_collect.touch_server_heartbeat()
 
         # 다른 프로세스가 새 서버를 등록했다고 가정한다.
-        new_record = hub_model.ServerRecord(pid=222, port=8794, started_at_ms=2)
+        new_record = hub_server_state.ServerRecord(pid=222, port=8794, started_at_ms=2)
         hub_collect.write_server_record(new_record)
 
         hub_collect.clear_server_state(expected_pid=old_record.pid)
@@ -89,7 +90,7 @@ class ClearServerStateCompareAndDeleteTest(unittest.TestCase):
         self.assertTrue(hub_collect.SERVER_HEARTBEAT_PATH.exists())
 
     def test_deletes_when_pid_still_matches(self) -> None:
-        record = hub_model.ServerRecord(pid=111, port=8794, started_at_ms=1)
+        record = hub_server_state.ServerRecord(pid=111, port=8794, started_at_ms=1)
         hub_collect.write_server_record(record)
         hub_collect.touch_server_heartbeat()
 
@@ -103,7 +104,7 @@ class ClearServerStateCompareAndDeleteTest(unittest.TestCase):
         self.assertIsNone(hub_collect.read_server_record())
 
     def test_no_expected_pid_always_deletes(self) -> None:
-        record = hub_model.ServerRecord(pid=111, port=8794, started_at_ms=1)
+        record = hub_server_state.ServerRecord(pid=111, port=8794, started_at_ms=1)
         hub_collect.write_server_record(record)
         hub_collect.clear_server_state()
         self.assertIsNone(hub_collect.read_server_record())

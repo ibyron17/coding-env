@@ -19,6 +19,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "hub", "b
 
 import hub_collect  # noqa: E402
 import hub_model  # noqa: E402
+import hub_project  # noqa: E402
 import hub_server  # noqa: E402
 import hub_usage  # noqa: E402
 import hub_usage_fetch  # noqa: E402
@@ -260,7 +261,7 @@ class CollectLoopDashboardRegistryWiringTest(unittest.TestCase):
         return httpd
 
     def test_successful_cycle_fills_dashboard_paths_by_key(self) -> None:
-        tier1_project = hub_model.ProjectView(
+        tier1_project = hub_project.ProjectView(
             display_name="repo", path="/repo", tier=1, state="idle",
             last_activity_at_ms=1, sessions=(), tier1=None, note=None,
         )
@@ -268,7 +269,7 @@ class CollectLoopDashboardRegistryWiringTest(unittest.TestCase):
             collected_at_ms=1, projects=(tier1_project,), unresolved_dir_names=(), warnings=(),
         )
         httpd = self._run_one_cycle(lambda now_ms: snapshot)
-        expected_key = hub_model.project_dashboard_key("/repo")
+        expected_key = hub_project.project_dashboard_key("/repo")
         self.assertIn(expected_key, httpd.dashboard_paths_by_key)
 
     def test_failed_cycle_keeps_previous_registry(self) -> None:
@@ -344,15 +345,15 @@ class RunUsageApiPollCycleTest(unittest.TestCase):
     def test_disabled_switch_never_calls_fetch(self) -> None:
         config = hub_model.HubConfig(show_usage_panel=True, usage_api_enabled=False)
         with mock.patch.object(hub_usage_fetch, "fetch_rate_limit_capture") as mocked_fetch:
-            result = hub_server._run_usage_api_poll_cycle(1_000, hub_model.UsageApiPollState(), config)
+            result = hub_server._run_usage_api_poll_cycle(1_000, hub_usage.UsageApiPollState(), config)
         mocked_fetch.assert_not_called()
-        self.assertEqual(result, hub_model.UsageApiPollState())
+        self.assertEqual(result, hub_usage.UsageApiPollState())
 
     def test_usage_panel_off_blocks_fetch_even_if_api_enabled(self) -> None:
         """GOTCHA 2 의 핵심 — usage_api_enabled 만 보면 안 된다."""
         config = hub_model.HubConfig(show_usage_panel=False, usage_api_enabled=True)
         with mock.patch.object(hub_usage_fetch, "fetch_rate_limit_capture") as mocked_fetch:
-            hub_server._run_usage_api_poll_cycle(1_000, hub_model.UsageApiPollState(), config)
+            hub_server._run_usage_api_poll_cycle(1_000, hub_usage.UsageApiPollState(), config)
         mocked_fetch.assert_not_called()
 
     def test_successful_fetch_writes_capture_and_clears_failure(self) -> None:
@@ -360,7 +361,7 @@ class RunUsageApiPollCycleTest(unittest.TestCase):
         capture = self._capture()
         hub_collect.record_usage_api_failure("network_error")
         with mock.patch.object(hub_usage_fetch, "fetch_rate_limit_capture", return_value=(capture, None, None)):
-            next_state = hub_server._run_usage_api_poll_cycle(1_000, hub_model.UsageApiPollState(), config)
+            next_state = hub_server._run_usage_api_poll_cycle(1_000, hub_usage.UsageApiPollState(), config)
         written, _warnings = hub_collect.read_rate_limit_capture()
         self.assertEqual(written, capture)
         self.assertIsNone(hub_collect.read_last_usage_api_failure())
@@ -371,7 +372,7 @@ class RunUsageApiPollCycleTest(unittest.TestCase):
         with mock.patch.object(
             hub_usage_fetch, "fetch_rate_limit_capture", return_value=(None, "schema_mismatch", ["/x <str>"])
         ):
-            next_state = hub_server._run_usage_api_poll_cycle(1_000, hub_model.UsageApiPollState(), config)
+            next_state = hub_server._run_usage_api_poll_cycle(1_000, hub_usage.UsageApiPollState(), config)
         self.assertFalse(hub_collect.RATE_LIMITS_PATH.exists())
         recorded = hub_collect.read_last_usage_api_failure()
         self.assertEqual(recorded["reason"], "schema_mismatch")
@@ -382,7 +383,7 @@ class RunUsageApiPollCycleTest(unittest.TestCase):
         config = hub_model.HubConfig(
             show_usage_panel=True, usage_api_enabled=True, usage_api_poll_interval_seconds=300
         )
-        state = hub_model.UsageApiPollState(last_attempt_at_ms=1_000, consecutive_failures=0)
+        state = hub_usage.UsageApiPollState(last_attempt_at_ms=1_000, consecutive_failures=0)
         with mock.patch.object(hub_usage_fetch, "fetch_rate_limit_capture") as mocked_fetch:
             result = hub_server._run_usage_api_poll_cycle(1_000 + 1000, state, config)  # 1초 뒤 — 5분 미도달
         mocked_fetch.assert_not_called()

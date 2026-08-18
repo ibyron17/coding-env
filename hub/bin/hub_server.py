@@ -1,7 +1,8 @@
 """hub_server.py — 상주 서버 본체. `server-run` 의 진입점.
 
 메인 스레드는 허용 경로 화이트리스트만 서빙하는 HTTP 서버, 데몬 스레드는 주기 수집 루프를 돈다.
-이 모듈은 I/O 다(HTTP 소켓·파일·시그널) — 순수 로직은 hub_model.py 의 관련 함수들에 있다.
+이 모듈은 I/O 다(HTTP 소켓·파일·시그널) — 순수 로직은 hub_model.py·hub_server_state.py·
+hub_usage.py 의 관련 함수들에 있다.
 개정 쟁점 R1·R3(docs/prps/hub-dashboard.md) 참조.
 """
 
@@ -16,6 +17,7 @@ from pathlib import Path
 
 import hub_collect
 import hub_model
+import hub_server_state
 import hub_usage
 import hub_usage_fetch
 
@@ -163,8 +165,8 @@ def _write_usage_api_capture(capture: hub_usage.RateLimitCapture) -> None:
 
 
 def _run_usage_api_poll_cycle(
-    now_ms: int, poll_state: hub_model.UsageApiPollState, config: hub_model.HubConfig
-) -> hub_model.UsageApiPollState:
+    now_ms: int, poll_state: hub_usage.UsageApiPollState, config: hub_model.HubConfig
+) -> hub_usage.UsageApiPollState:
     """사용량 API 폴링 게이트 1사이클(R1, 결정 A3).
 
     `show_usage_panel`·`usage_api_enabled` 이 **둘 다** 참일 때만 자격증명을 읽고 원격
@@ -175,7 +177,7 @@ def _run_usage_api_poll_cycle(
     """
     if not (config.show_usage_panel and config.usage_api_enabled):
         return poll_state
-    if not hub_model.should_attempt_usage_api_poll(now_ms, poll_state, config.usage_api_poll_interval_seconds):
+    if not hub_usage.should_attempt_usage_api_poll(now_ms, poll_state, config.usage_api_poll_interval_seconds):
         return poll_state
 
     capture, failure_reason, failure_detail = hub_usage_fetch.fetch_rate_limit_capture(now_ms)
@@ -187,7 +189,7 @@ def _run_usage_api_poll_cycle(
         # failure_reason 은 항상 채워져 있다 — record_usage_api_failure(reason: str) 에
         # None 을 넘길 일은 없다.
         hub_collect.record_usage_api_failure(failure_reason, failure_detail)
-    return hub_model.next_usage_api_poll_state(now_ms, poll_state, failure_reason)
+    return hub_usage.next_usage_api_poll_state(now_ms, poll_state, failure_reason)
 
 
 def _collect_loop(
@@ -217,7 +219,7 @@ def _collect_loop(
     금지) — 사용량 API 폴링은 5초 수집 주기와 별도 스케줄(기본 5분)로 이 루프에 얹힌 게이트다.
     """
     last_content_key = None
-    usage_api_poll_state = hub_model.UsageApiPollState()
+    usage_api_poll_state = hub_usage.UsageApiPollState()
     while not stop_event.is_set():
         try:
             hub_collect.touch_server_heartbeat()
@@ -251,7 +253,7 @@ def run_server(config: hub_model.HubConfig) -> int:
 
     try:
         hub_collect.write_server_record(
-            hub_model.ServerRecord(pid=os.getpid(), port=config.server_port, started_at_ms=int(time.time() * 1000))
+            hub_server_state.ServerRecord(pid=os.getpid(), port=config.server_port, started_at_ms=int(time.time() * 1000))
         )
     except OSError as error:
         # server.json 이 없으면 hub_daemon 이 이 프로세스를 영원히 찾을 수 없다(검수 Nit4) —

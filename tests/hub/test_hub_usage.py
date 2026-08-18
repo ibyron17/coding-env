@@ -555,5 +555,91 @@ class DescribeJsonKeyStructureTest(unittest.TestCase):
         self.assertEqual(hub_usage.describe_json_key_structure("42"), [" <int>"])
 
 
+class ShouldAttemptUsageApiPollTest(unittest.TestCase):
+    """U7~U8 — 첫 시도는 항상 True, 이후로는 주기 도달 여부로 판정한다(결정 A3)."""
+
+    BASE_INTERVAL_SECONDS = 300
+
+    def test_u7_first_attempt_is_always_true(self) -> None:
+        state = hub_usage.UsageApiPollState()
+        self.assertTrue(
+            hub_usage.should_attempt_usage_api_poll(BASE_TIME_MS, state, self.BASE_INTERVAL_SECONDS)
+        )
+
+    def test_u8_before_delay_elapses_is_false(self) -> None:
+        state = hub_usage.UsageApiPollState(last_attempt_at_ms=BASE_TIME_MS, consecutive_failures=0)
+        almost_five_minutes_ms = 5 * 60 * 1000 - 1
+        self.assertFalse(
+            hub_usage.should_attempt_usage_api_poll(
+                BASE_TIME_MS + almost_five_minutes_ms, state, self.BASE_INTERVAL_SECONDS
+            )
+        )
+
+    def test_u8_exactly_at_delay_is_true(self) -> None:
+        state = hub_usage.UsageApiPollState(last_attempt_at_ms=BASE_TIME_MS, consecutive_failures=0)
+        exactly_five_minutes_ms = 5 * 60 * 1000
+        self.assertTrue(
+            hub_usage.should_attempt_usage_api_poll(
+                BASE_TIME_MS + exactly_five_minutes_ms, state, self.BASE_INTERVAL_SECONDS
+            )
+        )
+
+    def test_u8_past_delay_is_true(self) -> None:
+        state = hub_usage.UsageApiPollState(last_attempt_at_ms=BASE_TIME_MS, consecutive_failures=0)
+        past_five_minutes_ms = 5 * 60 * 1000 + 1
+        self.assertTrue(
+            hub_usage.should_attempt_usage_api_poll(
+                BASE_TIME_MS + past_five_minutes_ms, state, self.BASE_INTERVAL_SECONDS
+            )
+        )
+
+
+class UsageApiPollDelayMsTest(unittest.TestCase):
+    """U9~U11 — 연속 실패마다 지연이 2배씩 늘고 상한(60분)에서 멈춘다. 429 는 즉시 상한(결정 A3)."""
+
+    BASE_INTERVAL_SECONDS = 300  # 5분
+    ONE_MINUTE_MS = 60 * 1000
+
+    def _delay_minutes(self, consecutive_failures: int, forced_multiplier: int | None = None) -> float:
+        state = hub_usage.UsageApiPollState(
+            consecutive_failures=consecutive_failures, forced_multiplier=forced_multiplier
+        )
+        return hub_usage.usage_api_poll_delay_ms(state, self.BASE_INTERVAL_SECONDS) / self.ONE_MINUTE_MS
+
+    def test_u9_delay_doubles_per_consecutive_failure_up_to_the_cap(self) -> None:
+        self.assertEqual(self._delay_minutes(1), 5)
+        self.assertEqual(self._delay_minutes(2), 10)
+        self.assertEqual(self._delay_minutes(3), 20)
+        self.assertEqual(self._delay_minutes(4), 40)
+        self.assertEqual(self._delay_minutes(5), 60)
+
+    def test_u9_delay_stays_capped_beyond_the_fifth_failure(self) -> None:
+        self.assertEqual(self._delay_minutes(6), 60)
+        self.assertEqual(self._delay_minutes(20), 60)
+
+    def test_u10_success_resets_consecutive_failures_to_zero(self) -> None:
+        state = hub_usage.UsageApiPollState(consecutive_failures=4)
+        next_state = hub_usage.next_usage_api_poll_state(BASE_TIME_MS, state, failure_reason=None)
+        self.assertEqual(next_state.consecutive_failures, 0)
+        self.assertIsNone(next_state.forced_multiplier)
+
+    def test_u11_http_rate_limited_jumps_straight_to_the_cap(self) -> None:
+        state = hub_usage.UsageApiPollState(consecutive_failures=0)
+        next_state = hub_usage.next_usage_api_poll_state(BASE_TIME_MS, state, failure_reason="http_rate_limited")
+        self.assertEqual(
+            hub_usage.usage_api_poll_delay_ms(next_state, self.BASE_INTERVAL_SECONDS) / self.ONE_MINUTE_MS, 60
+        )
+
+
+class NextUsageApiPollStateTest(unittest.TestCase):
+    """U12 — next_usage_api_poll_state 는 항상 새 객체를 돌려준다(원본 불변)."""
+
+    def test_u12_returns_a_new_object_not_the_original(self) -> None:
+        original = hub_usage.UsageApiPollState()
+        updated = hub_usage.next_usage_api_poll_state(BASE_TIME_MS, original, failure_reason="network_error")
+        self.assertIsNot(updated, original)
+        self.assertEqual(original, hub_usage.UsageApiPollState())  # 원본 필드도 그대로
+
+
 if __name__ == "__main__":
     unittest.main()

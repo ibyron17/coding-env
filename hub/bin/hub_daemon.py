@@ -1,7 +1,7 @@
 """hub_daemon.py — 프로세스 생명주기: 분리 spawn · ps 신원 확인 · SIGTERM/SIGKILL · 상태 보고.
 
 `is_our_server_process`·`browser_open_command`·`restart_note` 만 ★순수하다
-(tests/hub/test_hub_daemon.py 대상). `parse_server_record` 는 hub_model.py 에 있다(검수 m3 —
+(tests/hub/test_hub_daemon.py 대상). `parse_server_record` 는 hub_server_state.py 에 있다(검수 m3 —
 hub_collect.py 와 이중으로 유지하던 순수 파서를 하나로 합쳤다). 나머지(`start_server`/
 `stop_server`/`server_status`/`open_browser`/`restart_server`)는 subprocess·시그널·시각에
 닿는 I/O 다.
@@ -22,7 +22,7 @@ import webbrowser
 from pathlib import Path
 
 import hub_collect
-import hub_model
+import hub_server_state
 
 # "server-run" 이 있어야 한다 — 같은 hub.py 를 쓰는 배경 collect 프로세스(`hub.py collect`)를
 # 서버로 오인하면 PID 재사용 방어의 의미가 없어진다.
@@ -62,10 +62,10 @@ def is_our_server_process(ps_output: str, hub_py_path: str) -> bool:
     return hub_py_path in ps_output and SERVER_ENTRY_POINT_MARKER in ps_output
 
 
-# parse_server_record 는 hub_model.py 로 옮겼다(검수 m3) — hub_collect.py 와 이중으로
+# parse_server_record 는 hub_server_state.py 로 옮겼다(검수 m3) — hub_collect.py 와 이중으로
 # 유지하던 순수 파서를 하나로 합쳤다. 이 모듈은 (다른 모든 실사용 경로와 마찬가지로)
 # hub_collect.read_server_record() 를 통해서만 이 값을 읽는다. 직접 호출이 필요하면
-# hub_model.parse_server_record 를 쓴다.
+# hub_server_state.parse_server_record 를 쓴다.
 
 
 def browser_open_command(platform_name: str, url: str) -> list[str] | None:
@@ -149,7 +149,7 @@ def _spawn_server_process() -> None:
 
 
 def _server_already_running(ttl_ms: int) -> bool:
-    if hub_model.is_server_alive(_now_ms(), hub_collect.read_server_heartbeat_mtime_ms(), ttl_ms):
+    if hub_server_state.is_server_alive(_now_ms(), hub_collect.read_server_heartbeat_mtime_ms(), ttl_ms):
         return True
     record = hub_collect.read_server_record()
     if record is None:
@@ -160,7 +160,7 @@ def _server_already_running(ttl_ms: int) -> bool:
 def start_server() -> dict:
     """멱등 확인 → 포트 프로브 → 분리 spawn → 하트비트 대기."""
     config, _config_warnings = hub_collect.load_config()
-    ttl_ms = hub_model.server_heartbeat_ttl_ms(config.server_collect_interval_seconds)
+    ttl_ms = hub_server_state.server_heartbeat_ttl_ms(config.server_collect_interval_seconds)
 
     if _server_already_running(ttl_ms):
         return {"ok": True, "already_running": True}
@@ -171,7 +171,7 @@ def start_server() -> dict:
 
     deadline = time.monotonic() + SERVER_START_WAIT_SECONDS
     while time.monotonic() < deadline:
-        if hub_model.is_server_alive(_now_ms(), hub_collect.read_server_heartbeat_mtime_ms(), ttl_ms):
+        if hub_server_state.is_server_alive(_now_ms(), hub_collect.read_server_heartbeat_mtime_ms(), ttl_ms):
             record = hub_collect.read_server_record()
             return {
                 "ok": True,
@@ -284,7 +284,7 @@ def restart_server() -> dict:
     return result
 
 
-def server_status() -> hub_model.ServerStatus:
+def server_status() -> hub_server_state.ServerStatus:
     """프로세스 · 하트비트 · HTTP 응답 · 비정상 종료 흔적을 종합 판정한다."""
     config, _config_warnings = hub_collect.load_config()
     record = hub_collect.read_server_record()
@@ -292,8 +292,8 @@ def server_status() -> hub_model.ServerStatus:
         _ps_args_for_pid(record.pid) or "", HUB_PY_PATH
     )
     heartbeat_mtime_ms = hub_collect.read_server_heartbeat_mtime_ms()
-    ttl_ms = hub_model.server_heartbeat_ttl_ms(config.server_collect_interval_seconds)
-    alive = hub_model.is_server_alive(_now_ms(), heartbeat_mtime_ms, ttl_ms)
+    ttl_ms = hub_server_state.server_heartbeat_ttl_ms(config.server_collect_interval_seconds)
+    alive = hub_server_state.is_server_alive(_now_ms(), heartbeat_mtime_ms, ttl_ms)
     heartbeat_age_ms = (_now_ms() - heartbeat_mtime_ms) if heartbeat_mtime_ms is not None else None
     crashed_evidence = record is not None and not alive and not process_present
     # 프로세스(HTTP 서버 스레드)는 살아 있는데 하트비트만 만료됐다 — 수집 데몬 스레드만 죽은
@@ -306,7 +306,7 @@ def server_status() -> hub_model.ServerStatus:
     # 이 상태를 만들 수 있었다; 지금은 예방됐지만, 과거에 이미 만들어졌거나 수동 조작으로
     # 생길 수 있는 상태이므로 관측 필드로 남겨 사용자가 직접 발견하게 한다.
     orphaned_evidence = record is None and alive
-    return hub_model.ServerStatus(
+    return hub_server_state.ServerStatus(
         record=record,
         process_present=process_present,
         heartbeat_age_ms=heartbeat_age_ms,
@@ -322,7 +322,7 @@ def server_status() -> hub_model.ServerStatus:
 
 
 # ---- I/O: 브라우저 ----
-def _fallback_to_webbrowser(url: str, fallback_reason: str | None) -> hub_model.BrowserOpenResult:
+def _fallback_to_webbrowser(url: str, fallback_reason: str | None) -> hub_server_state.BrowserOpenResult:
     """포커스 경로가 없거나 실패했을 때 webbrowser 로 연다. 예외는 밖으로 내지 않는다(GOTCHA 7).
 
     webbrowser.open() 이 던지는 예외도 fallback_reason 에 담는다 — 포커스 경로 실패 사유가
@@ -335,10 +335,10 @@ def _fallback_to_webbrowser(url: str, fallback_reason: str | None) -> hub_model.
         opened = False
         if fallback_reason is None:
             fallback_reason = str(error)
-    return hub_model.BrowserOpenResult(opened=opened, focus_requested=False, fallback_reason=fallback_reason)
+    return hub_server_state.BrowserOpenResult(opened=opened, focus_requested=False, fallback_reason=fallback_reason)
 
 
-def open_browser(url: str, platform_name: str = sys.platform) -> hub_model.BrowserOpenResult:
+def open_browser(url: str, platform_name: str = sys.platform) -> hub_server_state.BrowserOpenResult:
     """포커스 경로로 URL 을 열고, 안 되면 webbrowser 로 폴백한다. 예외를 밖으로 내보내지 않는다."""
     command = browser_open_command(platform_name, url)
     if command is None:
@@ -350,7 +350,7 @@ def open_browser(url: str, platform_name: str = sys.platform) -> hub_model.Brows
     except (OSError, subprocess.TimeoutExpired) as error:
         return _fallback_to_webbrowser(url, fallback_reason=str(error))
     if result.returncode == 0:
-        return hub_model.BrowserOpenResult(opened=True, focus_requested=True, fallback_reason=None)
+        return hub_server_state.BrowserOpenResult(opened=True, focus_requested=True, fallback_reason=None)
     return _fallback_to_webbrowser(
         url, fallback_reason=f"{MACOS_OPEN_COMMAND_PATH} 종료 코드 {result.returncode}"
     )
