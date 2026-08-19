@@ -20,6 +20,8 @@ import hub_hook  # noqa: E402
 
 EIGHT_DAYS_SECONDS = 8 * 24 * 60 * 60
 ONE_HOUR_SECONDS = 60 * 60
+MACOS_PATH_MAX_BYTES = 1024      # 이벤트 줄에 함께 실리는 cwd 의 현실적 최댓값
+SESSION_ID_LENGTH = 36           # UUID 문자열 길이
 
 
 class HubHookScenarioTest(unittest.TestCase):
@@ -163,6 +165,122 @@ class ThrottleDebounceStampTest(HubHookScenarioTest):
         with mock.patch("subprocess.Popen"):
             self._run_hook_with_stdin({"hook_event_name": "Stop", "session_id": "s", "cwd": "/repo"})
         self.assertTrue(hub_collect.SPAWN_STAMP_PATH.exists())
+
+
+class PromptRecordingTest(HubHookScenarioTest):
+    """프롬프트 기록 상한 — 카드 발췌(120자)가 아니라 툴팁이 보여줄 전문의 상한이다."""
+
+    def _record_prompt(self, prompt: str) -> dict:
+        """UserPromptSubmit 훅을 1회 실행하고 그 줄이 남긴 이벤트를 돌려준다."""
+        hub_collect.HUB_HTML_PATH.write_text("fresh-marker")   # spawn 억제(이 테스트의 관심사 밖)
+        self._run_hook_with_stdin({
+            "hook_event_name": "UserPromptSubmit", "session_id": "s", "cwd": "/repo",
+            "prompt": prompt,
+        })
+        today = time.strftime("%Y-%m-%d", time.localtime())
+        lines = (hub_collect.EVENTS_DIR / f"{today}.jsonl").read_text(encoding="utf-8").splitlines()
+        return json.loads(lines[-1])
+
+    def test_prompt_within_limit_is_recorded_verbatim(self) -> None:
+        prompt = "가" * hub_hook.PROMPT_EXCERPT_MAX_CHARS
+        self.assertEqual(self._record_prompt(prompt)["p"], prompt)
+
+    def test_prompt_longer_than_display_excerpt_is_recorded_whole(self) -> None:
+        """카드에 보이는 120자보다 긴 프롬프트도 기록돼야 툴팁이 보여줄 뒷부분이 존재한다."""
+        prompt = ("긴 프롬프트 " * 60).strip()      # 419자 — 종전 상한(120)의 3.5배
+        self.assertEqual(self._record_prompt(prompt)["p"], prompt)
+
+    def test_surrounding_whitespace_is_trimmed(self) -> None:
+        self.assertEqual(self._record_prompt("  \n 프롬프트 \n\n ")["p"], "프롬프트")
+
+    def test_prompt_over_limit_is_clipped_with_truncation_mark(self) -> None:
+        prompt = "나" * (hub_hook.PROMPT_EXCERPT_MAX_CHARS + 500)
+        recorded = self._record_prompt(prompt)["p"]
+
+        self.assertEqual(
+            recorded, "나" * hub_hook.PROMPT_EXCERPT_MAX_CHARS + hub_hook.PROMPT_TRUNCATION_MARK
+        )
+        self.assertTrue(recorded.endswith(hub_hook.PROMPT_TRUNCATION_MARK))
+
+    def test_recorded_line_stays_within_single_write_buffer(self) -> None:
+        """`_append_event_line` 의 원자성 논거(1회 write())가 성립하는 줄 길이인지 확인한다.
+
+        최악의 줄은 프롬프트 하나가 아니라 "가장 깊은 cwd + 문자당 가장 긴 프롬프트"의 합이다 —
+        cwd 는 어디서도 길이를 제한하지 않으므로 함께 넣어야 경계가 진짜 경계가 된다. 상한을
+        올릴 때 이 테스트가 먼저 깨져야 한다 — 깨지지 않고 넘어가면 동시 append 가 조용히
+        섞이기 시작한다.
+        """
+        # 문자당 가장 긴 것은 비BMP(4B)가 아니라 제어문자다 — JSON 이 `\uXXXX`(6B)로 이스케이프한다.
+        # 상한을 넘겨 말줄임표(3B)까지 붙은 상태가 기록될 수 있는 가장 긴 줄이다.
+        prompt = "\x01" * (hub_hook.PROMPT_EXCERPT_MAX_CHARS + 1)
+        deepest_cwd = "/" + "a" * (MACOS_PATH_MAX_BYTES - 1)
+        hub_collect.HUB_HTML_PATH.write_text("fresh-marker")
+        self._run_hook_with_stdin({
+            "hook_event_name": "UserPromptSubmit", "session_id": "s" * SESSION_ID_LENGTH,
+            "cwd": deepest_cwd, "prompt": prompt,
+        })
+        today = time.strftime("%Y-%m-%d", time.localtime())
+        line_bytes = (hub_collect.EVENTS_DIR / f"{today}.jsonl").read_bytes()
+
+        self.assertLess(len(line_bytes), io.DEFAULT_BUFFER_SIZE)
+
+    def test_record_prompt_excerpt_false_omits_the_field(self) -> None:
+        hub_collect.CONFIG_PATH.write_text(json.dumps({"record_prompt_excerpt": False}))
+        self.assertNotIn("p", self._record_prompt("기록되지 않아야 하는 프롬프트"))
+
+
+class AutoInjectedPromptTest(HubHookScenarioTest):
+    """CLI 자동주입 블록 처리 — 실측 187건에서 관측된 세 태그(`ide_selection`·`ide_opened_file`·
+    `task-notification`)의 두 성격(뒤에 입력이 이어짐 / 순수 알림)을 그대로 시험한다."""
+
+    IDE_SELECTION_BLOCK = (
+        "<ide_selection>The user selected the lines 79 to 80 from /repo/a.js:\n"
+        "const x = 1;\nconst y = 2;\n</ide_selection>"
+    )
+    TASK_NOTIFICATION_BLOCK = (
+        "<task-notification>\n<task-id>abc123</task-id>\n"
+        "<status>completed</status>\n</task-notification>"
+    )
+
+    def _record_prompt(self, prompt: str) -> dict:
+        hub_collect.HUB_HTML_PATH.write_text("fresh-marker")
+        self._run_hook_with_stdin({
+            "hook_event_name": "UserPromptSubmit", "session_id": "s", "cwd": "/repo",
+            "prompt": prompt,
+        })
+        today = time.strftime("%Y-%m-%d", time.localtime())
+        lines = (hub_collect.EVENTS_DIR / f"{today}.jsonl").read_text(encoding="utf-8").splitlines()
+        return json.loads(lines[-1])
+
+    def test_ide_block_is_stripped_and_typed_prompt_survives(self) -> None:
+        """실측 사례 — IDE 선택 블록 뒤에 붙어 온 실제 입력이 발췌가 돼야 한다."""
+        prompt = self.IDE_SELECTION_BLOCK + "현재 수정사항들을 slide 에도 동일하게 적용해줘."
+        self.assertEqual(self._record_prompt(prompt)["p"], "현재 수정사항들을 slide 에도 동일하게 적용해줘.")
+
+    def test_consecutive_auto_injected_blocks_are_all_stripped(self) -> None:
+        prompt = (
+            "<ide_opened_file>The user opened /repo/b.js</ide_opened_file>\n"
+            + self.IDE_SELECTION_BLOCK + "\n푸시해줘"
+        )
+        self.assertEqual(self._record_prompt(prompt)["p"], "푸시해줘")
+
+    def test_pure_auto_injection_records_no_prompt_field(self) -> None:
+        """뒤에 입력이 없는 순수 알림은 기록할 프롬프트가 없다 — 필드를 싣지 않는다."""
+        self.assertNotIn("p", self._record_prompt(self.TASK_NOTIFICATION_BLOCK))
+
+    def test_turn_state_event_is_still_recorded_without_prompt_field(self) -> None:
+        """`p` 를 빼도 UserPromptSubmit 줄 자체는 남아야 한다 — 턴 상태(working) 판정의 근거다."""
+        event = self._record_prompt(self.TASK_NOTIFICATION_BLOCK)
+        self.assertEqual(event["e"], "UserPromptSubmit")
+
+    def test_tag_inside_the_body_is_not_stripped(self) -> None:
+        """앞에서만 벗긴다 — 본문 중간의 태그를 지우는 것은 입력 왜곡이다."""
+        prompt = "이 태그를 설명해줘: " + self.IDE_SELECTION_BLOCK
+        self.assertEqual(self._record_prompt(prompt)["p"], prompt)
+
+    def test_unknown_tag_is_left_alone(self) -> None:
+        prompt = "<div>사용자가 직접 쓴 태그</div> 이건 벗기지 않는다"
+        self.assertEqual(self._record_prompt(prompt)["p"], prompt)
 
 
 if __name__ == "__main__":

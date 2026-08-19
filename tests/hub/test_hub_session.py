@@ -77,6 +77,21 @@ class InternalEventFilterTest(unittest.TestCase):
         self.assertEqual(facts.task_excerpt, "원래 작업")
         self.assertEqual(facts.last_event_name, "SessionStart")
 
+    def test_prompt_without_excerpt_does_not_erase_the_previous_one(self) -> None:
+        """자동주입만 있던 턴(`p` 없음)이 직전에 입력한 프롬프트를 지우면 안 된다.
+
+        훅은 프롬프트가 전부 CLI 자동주입이면 `p` 를 싣지 않는다
+        (hub_hook.strip_auto_injected_blocks) — 그 None 을 그대로 대입하면 서브에이전트가 끝날
+        때마다 발췌가 사라져 "마지막으로 입력한 프롬프트"라는 의미가 깨진다.
+        """
+        events = [
+            _event("UserPromptSubmit", 0, prompt_excerpt="사용자가 입력한 작업"),
+            _event("UserPromptSubmit", 1000, prompt_excerpt=None),
+        ]
+        facts = _facts_from(events)
+        self.assertEqual(facts.task_excerpt, "사용자가 입력한 작업")
+        self.assertEqual(facts.turn_state, "running")   # 턴 상태는 자동주입에도 갱신된다
+
     def test_m6_untracked_subagent_stop_creates_no_subagent(self) -> None:
         facts = _facts_from([_event("SubagentStop", agent_type="", agent_id="agt-1")])
         self.assertEqual(facts.subagents, ())

@@ -261,10 +261,21 @@ DZH:HUB 데이터 계약
   .usage-pct-empty{color:var(--muted);font-weight:700}
   .usage-stale-note{color:var(--attention)}
   .usage.usage-stale .usage-summary{color:var(--muted)}
-  .tooltip{position:fixed;left:0;top:0;z-index:40;max-width:min(280px,calc(100vw - 32px));
+  /* 폭 280→420px · white-space · max-height 세 가지는 세션 발췌 전문 툴팁(.excerpt[data-tooltip])
+     때문에 들어왔다 — 여기 실리는 문구가 처음으로 "한 문장"이 아니라 여러 단락의 프롬프트다.
+     ① 폭: 기록 상한(500자)까지 찬 한글 프롬프트가 280px 에서 279px, 420px 에서 179px 로
+     실측된다 — 폭을 넓히는 쪽이 화면을 100px 덜 가린다. 기존 트리거 문구는 전부 280px 보다
+     짧아 줄 수만 줄어든다(실측 8곳 전부 1줄로 낙착, 잘림 없음).
+     ② pre-wrap: 프롬프트의 줄바꿈을 살린다. 기존 문구에는 개행이 없어 영향이 없다.
+     ③ max-height: ②의 대가다. 개행을 살리면 목록을 붙여넣은 프롬프트가 매우 길어진다 —
+     500자에 개행 250개면 실측 4180px 로 어떤 뷰포트도 넘는다. TOOLTIP_VIEWPORT_MARGIN_PX(8)
+     두 배를 뺀 값이라 tooltipPosition 의 클램프와 정확히 맞물린다. 넘치는 꼬리는 잘린다 —
+     스크롤은 주지 않는다(캡처 단계 scroll 리스너가 툴팁을 즉시 숨겨 스크롤바가 동작하지 않는다). */
+  .tooltip{position:fixed;left:0;top:0;z-index:40;max-width:min(420px,calc(100vw - 32px));
+           max-height:calc(100vh - 16px);overflow:hidden;
            padding:6px 9px;border-radius:8px;font-size:11.5px;line-height:1.45;font-weight:600;
            color:var(--bg);background:var(--ink);box-shadow:var(--shadow);
-           overflow-wrap:anywhere;visibility:hidden}
+           white-space:pre-wrap;overflow-wrap:anywhere;visibility:hidden}
   .tooltip.tooltip-visible{visibility:visible}
   /* 프로젝트 상세 패널(SP1) — 카드 클릭 시 우측에서 밀려 들어오는 **비모달** 패널이다.
      <dialog> 를 쓰지 않는 이유(결정 SP1): 넓은 화면에서는 배경 목록을 계속 써야 하므로
@@ -623,6 +634,15 @@ try{
   var STATE_LABEL = {working:'작업중', idle:'대기', stale:'소식 없음', done:'완료'};
   var STATE_GLYPH = {working:'●', idle:'○', stale:'▲', done:'✓'};
   var MAX_VISIBLE_AGENT_CHIPS = 2;            // 화면에 실을 칩 상한(결정 K1) — 상한 밖 타입은 표시하지 않는다
+  // 카드에 실을 발췌 글자 수 상한. 서버가 주는 task_excerpt 는 이보다 길 수 있고(훅의
+  // PROMPT_EXCERPT_MAX_CHARS = 500), 넘는 뒷부분은 툴팁이 전문으로 보여준다. 표시 상한을
+  // 클라이언트가 갖는 것은 MAX_VISIBLE_AGENT_CHIPS 가 세운 관례다 — 화면 상한은 데이터가
+  // 아니라 화면의 몫이다. 120 은 종전 훅 상한과 같은 값이라 카드의 겉모습은 바뀌지 않는다.
+  var EXCERPT_DISPLAY_MAX_CHARS = 120;
+  var TRUNCATION_MARK = '…';
+  // slice 는 UTF-16 코드유닛 단위로 자른다 — 경계에 서로게이트 쌍(이모지)이 반으로 걸리면
+  // 반쪼가리가 남아 U+FFFD 로 렌더된다. 마지막으로 남는 유닛이 상위 서로게이트면 한 칸 물린다.
+  var HIGH_SURROGATE_PATTERN = /[\uD800-\uDBFF]/;
   var AGENT_RUN_RUNNING_GLYPH = '●';          // 상태 배지의 working 글리프와 의도적으로 같은 모양
   var AGENT_RUN_RUNNING_LABEL = '진행 중';
   var AGENT_RUN_ENDED_LABEL = '종료';
@@ -817,14 +837,33 @@ try{
     return '<span class="agent-runs">' + visibleRuns.map(renderAgentChip).join('') + '</span>';
   }
 
+  // 카드에 보일 발췌 문구. 순수 함수 — 상한을 넘으면 말줄임표를 붙여 자른다.
+  function excerptDisplayText(fullText){
+    if(fullText.length <= EXCERPT_DISPLAY_MAX_CHARS) return fullText;
+    var cutLength = EXCERPT_DISPLAY_MAX_CHARS;
+    if(HIGH_SURROGATE_PATTERN.test(fullText.charAt(cutLength - 1))) cutLength -= 1;
+    return fullText.slice(0, cutLength) + TRUNCATION_MARK;
+  }
+
+  // 발췌 1줄. 카드 높이가 고정(340px)이라 긴 프롬프트를 화면에서 다 흘릴 수 없다 — 잘린
+  // 뒷부분은 hover 툴팁이 맡는다. data-tooltip 은 실제로 잘렸을 때만 붙인다: 보이는 텍스트와
+  // 같은 툴팁은 정보 손실이 없어 소음이며, 카드 이름에서 이미 같은 판단을 했다(결정 R4).
+  // 툴팁이 보여주는 것도 "전문"이 아니라 훅이 기록한 상한까지다 — 그 상한에서 잘렸다는 사실은
+  // 훅이 붙인 말줄임표(PROMPT_TRUNCATION_MARK)가 문구 끝에 그대로 실려 온다.
+  function renderSessionExcerpt(fullText){
+    if(!fullText) return '';
+    var displayText = excerptDisplayText(fullText);
+    var tooltipAttribute = displayText === fullText
+      ? '' : ' data-tooltip="' + escapeHtml(fullText) + '"';
+    return '<span class="excerpt"' + tooltipAttribute + '>' + escapeHtml(displayText) + '</span>';
+  }
+
   function renderSession(session){
-    var excerpt = session.task_excerpt
-      ? '<span class="excerpt">' + escapeHtml(session.task_excerpt) + '</span>' : '';
     return '<li><div class="session-line">'
       + renderStateBadge(session.state, session.base_state)
       + '<span class="session-time">' + elapsedLabel(session.last_event_at_ms) + '</span>'
       + renderAgentRuns(session.agent_runs)
-      + '</div>' + excerpt + '</li>';
+      + '</div>' + renderSessionExcerpt(session.task_excerpt) + '</li>';
   }
 
   // 숨김 조건 = 완료 + 표시할 발췌 없음 + 보이는 칩 0개(결정 V2). visibleAgentRuns 를 반드시

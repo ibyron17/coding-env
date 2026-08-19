@@ -141,8 +141,10 @@ python3 "$HOME/.claude/hub/bin/hub.py" install-statusline --json
 `already_installed` 가 모두 참이면 다음부터 생략):
 
 > **① 전역 훅 6개** — `SessionStart`·`UserPromptSubmit`·`Stop`·`SubagentStart`·`SubagentStop`·
-> `SessionEnd` 에 훅을 추가합니다. 프롬프트 앞부분(120자)이 `~/.claude/hub/events/` 에 평문으로
+> `SessionEnd` 에 훅을 추가합니다. 프롬프트 앞부분(500자)이 `~/.claude/hub/events/` 에 평문으로
 > 최대 7일 보관됩니다(`~/.claude/hub/config.json` 의 `record_prompt_excerpt:false` 로 끌 수 있음).
+> 편집기 선택 블록·서브에이전트 알림처럼 **CLI 가 자동으로 덧붙이는 내용은 기록하지 않습니다** —
+> 선택한 소스코드가 로그에 남지 않습니다.
 > **② 터미널 상태줄** — `~/.claude/settings.json` 의 `statusLine` 에 우리 커맨드를 등록합니다.
 > **모든 프로젝트의 터미널 상태줄**에 `세션 23% · 주간 41%` 가 상시 표시되고, 그 값이
 > `~/.claude/hub/rate_limits.json` 에 캡처돼 **허브의 사용량 패널을 채웁니다.** 이미 다른

@@ -15,6 +15,7 @@
 """
 
 import json
+import re
 import subprocess
 import sys
 import time
@@ -25,9 +26,61 @@ import hub_model
 import hub_server_state
 
 HUB_PY_PATH = Path(__file__).resolve().parent / "hub.py"
-PROMPT_EXCERPT_MAX_CHARS = 120
+# 기록 상한. 카드에 보이는 길이가 아니라 **툴팁이 보여줄 전문**의 상한이다 — 카드는
+# EXCERPT_DISPLAY_MAX_CHARS(hub_template.html)로 다시 줄여 보여주고, 그때 잘린 뒷부분을 툴팁이
+# 맡는다. 이 상한이 120 이던 동안은 툴팁이 보여줄 것이 애초에 기록되지 않았다.
+# 500 자의 근거(실측 187건 · 8일분): 사용자가 타이핑한 프롬프트는 중간값 51자·p90 571자라
+# 88건 중 79건이 이 안에 온전히 들어간다. 1000자로 올려도 담기는 건수는 81건으로 2건만
+# 늘어나는데(긴 것들은 어차피 수천 자다) 저장량은 1.3배가 되므로 여기서 끊는다.
+# 이 값을 올리면 events/*.jsonl 평문 보관 분량과 hub.html 인라인 크기가 함께 늘어난다 —
+# README 「프라이버시 고지」와 commands/hub.md 의 설치 동의 문구가 이 숫자를 그대로 인용하므로
+# 같이 고쳐야 한다.
+# 또 하나의 상한 근거 — `_append_event_line` 의 "1회 write() = 사실상 원자적 append" 논거는
+# 줄 하나가 파이썬 텍스트 버퍼(io.DEFAULT_BUFFER_SIZE = 8192B) 안에 들어간다는 전제 위에 서
+# 있다. 이 줄에는 프롬프트만 있는 게 아니라 길이를 제한하지 않는 `c`(cwd)도 함께 실리므로,
+# 최악의 줄은 "가장 깊은 경로 + 전부 제어문자인 프롬프트"다(제어문자는 JSON 이 `\uXXXX` 6B 로
+# 이스케이프해 문자당 가장 길다 — 비BMP 4B·한글 3B 보다 크다). 실측: cwd 1024B(macOS PATH_MAX)
+# + 제어문자 500자 + 말줄임표 = 4127B 로 버퍼의 절반이다. 이 상한을 올리려면 위 계산부터
+# 다시 해야 한다(테스트가 먼저 깨지게 해 두었다).
+PROMPT_EXCERPT_MAX_CHARS = 500
+# 상한에서 잘렸으면 그 사실이 툴팁에 보여야 한다 — 붙이지 않으면 툴팁이 "전문"이라고 거짓말한다.
+PROMPT_TRUNCATION_MARK = "…"
 REFRESH_THROTTLE_SECONDS = 5
 THROTTLE_MS = REFRESH_THROTTLE_SECONDS * 1000
+
+
+# 훅이 받는 `prompt` 에는 사용자가 타이핑한 것 외에 CLI 가 앞에 덧붙이는 블록이 섞여 온다.
+# 실측(187건)에서 관측된 것은 세 종류이고, 성격이 둘로 갈린다 — `<ide_selection>`·
+# `<ide_opened_file>` 은 **뒤에 실제 입력이 이어지고**(예: "…</ide_selection>현재 수정사항들을
+# slide 에도 동일하게 적용해줘."), `<task-notification>` 은 뒤에 아무것도 없는 순수 알림이다.
+# 그래서 "이런 프롬프트는 버린다"가 아니라 "선행 블록만 벗겨낸다"로 판정한다 — 벗기고 남은
+# 것이 곧 사용자가 입력한 프롬프트이고, 남은 것이 없으면 기록할 프롬프트가 없다는 뜻이다.
+# 앞에서만 벗긴다(`\A` 앵커) — 사용자가 본문 중간에 쓴 태그를 지우면 그건 입력 왜곡이다.
+# `ide_\w+` 로 계열을 묶은 것은 관측된 두 태그가 같은 IDE 연동 계열이라는 근거에 따른 것이며,
+# 슬래시 커맨드는 벗길 대상이 아니다 — 실측에서 `/hub server restart` 처럼 타이핑한 원문
+# 그대로 도착한다.
+AUTO_INJECTED_PROMPT_BLOCK = re.compile(r"\A\s*<(ide_\w+|task-notification)>.*?</\1>", re.DOTALL)
+
+
+def strip_auto_injected_blocks(prompt: str) -> str:
+    """프롬프트 앞에 붙은 CLI 자동주입 블록을 벗겨내고 사용자가 입력한 부분만 남긴다.
+
+    앞뒤 공백도 함께 정리한다 — "벗기고 남은 것이 있는가"의 판정이 공백 하나에 갈리면 안 되고,
+    화면에 실리는 발췌에 앞뒤 공백을 남길 이유도 없다.
+    """
+    remaining = prompt.lstrip()
+    while True:
+        match = AUTO_INJECTED_PROMPT_BLOCK.match(remaining)
+        if match is None:
+            return remaining.strip()
+        remaining = remaining[match.end():].lstrip()
+
+
+def _clip_prompt(prompt: str) -> str:
+    """기록 상한을 넘는 프롬프트를 자른다. 잘렸으면 말줄임표를 붙여 그 사실을 남긴다."""
+    if len(prompt) <= PROMPT_EXCERPT_MAX_CHARS:
+        return prompt
+    return prompt[:PROMPT_EXCERPT_MAX_CHARS] + PROMPT_TRUNCATION_MARK
 
 
 def _project_fields(payload: dict, record_prompt_excerpt: bool) -> dict:
@@ -44,7 +97,11 @@ def _project_fields(payload: dict, record_prompt_excerpt: bool) -> dict:
             fields[short_key] = payload[payload_key]
     prompt = payload.get("prompt")
     if record_prompt_excerpt and prompt:
-        fields["p"] = str(prompt)[:PROMPT_EXCERPT_MAX_CHARS]
+        # 전부 자동주입이었으면 `p` 를 아예 싣지 않는다 — 그 경우 세션의 발췌는 직전에 입력한
+        # 프롬프트를 그대로 유지한다(hub_session._apply_tracked_event 가 None 을 덮어쓰지 않는다).
+        typed_prompt = strip_auto_injected_blocks(str(prompt))
+        if typed_prompt:
+            fields["p"] = _clip_prompt(typed_prompt)
     return fields
 
 

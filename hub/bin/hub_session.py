@@ -185,7 +185,12 @@ def _apply_tracked_event(session: _MutableSession, event: HookEvent) -> None:
     """필터를 통과한(내부 이벤트가 아닌) 이벤트를 세션 사실에 반영한다."""
     if event.hook_event_name == "UserPromptSubmit":
         session.turn_state = "running"
-        session.task_excerpt = event.prompt_excerpt
+        # 발췌는 "있을 때만" 덮어쓴다 — 훅은 프롬프트가 전부 CLI 자동주입(`<task-notification>` 등)
+        # 이면 `p` 를 아예 싣지 않는다(hub_hook.strip_auto_injected_blocks). 무조건 대입하면 서브
+        # 에이전트가 끝날 때마다 그 None 이 발췌를 지워, "마지막으로 **입력한** 프롬프트"라는
+        # 발췌의 의미가 깨진다. 턴 상태(running)는 자동주입이든 아니든 갱신해야 하므로 위에 둔다.
+        if event.prompt_excerpt is not None:
+            session.task_excerpt = event.prompt_excerpt
     elif event.hook_event_name == "Stop":
         session.turn_state = "ended"
     elif event.hook_event_name == "SessionEnd":
