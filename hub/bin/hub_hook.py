@@ -55,11 +55,13 @@ THROTTLE_MS = REFRESH_THROTTLE_SECONDS * 1000
 # slide 에도 동일하게 적용해줘."), `<task-notification>` 은 뒤에 아무것도 없는 순수 알림이다.
 # 그래서 "이런 프롬프트는 버린다"가 아니라 "선행 블록만 벗겨낸다"로 판정한다 — 벗기고 남은
 # 것이 곧 사용자가 입력한 프롬프트이고, 남은 것이 없으면 기록할 프롬프트가 없다는 뜻이다.
-# 앞에서만 벗긴다(`\A` 앵커) — 사용자가 본문 중간에 쓴 태그를 지우면 그건 입력 왜곡이다.
+# 앞에서만 벗긴다 — 사용자가 본문 중간에 쓴 태그를 지우면 그건 입력 왜곡이다. 앵커는 패턴의
+# `\A` 가 아니라 `match(prompt, offset)` 이 담당한다(`\A` 는 문자열 진짜 처음에만 맞아
+# offset > 0 에서 영구히 실패한다). 선행 공백은 패턴의 `\s*` 가 함께 먹는다.
 # `ide_\w+` 로 계열을 묶은 것은 관측된 두 태그가 같은 IDE 연동 계열이라는 근거에 따른 것이며,
 # 슬래시 커맨드는 벗길 대상이 아니다 — 실측에서 `/hub server restart` 처럼 타이핑한 원문
 # 그대로 도착한다.
-AUTO_INJECTED_PROMPT_BLOCK = re.compile(r"\A\s*<(ide_\w+|task-notification)>.*?</\1>", re.DOTALL)
+AUTO_INJECTED_PROMPT_BLOCK = re.compile(r"\s*<(ide_\w+|task-notification)>.*?</\1>", re.DOTALL)
 
 
 def strip_auto_injected_blocks(prompt: str) -> str:
@@ -67,13 +69,17 @@ def strip_auto_injected_blocks(prompt: str) -> str:
 
     앞뒤 공백도 함께 정리한다 — "벗기고 남은 것이 있는가"의 판정이 공백 하나에 갈리면 안 되고,
     화면에 실리는 발췌에 앞뒤 공백을 남길 이유도 없다.
+
+    블록마다 문자열을 새로 슬라이스하지 않고 오프셋만 옮긴다(검수 3차 MEDIUM) — 슬라이스는
+    남은 길이에 비례하므로 블록이 n개 연속되면 O(n²)이 되고, 이 파일의 절대 규칙("세션을
+    막지 않는다")과 정면으로 부딛친다. 오프셋 방식은 입력 길이에 선형이다.
     """
-    remaining = prompt.lstrip()
+    offset = 0
     while True:
-        match = AUTO_INJECTED_PROMPT_BLOCK.match(remaining)
+        match = AUTO_INJECTED_PROMPT_BLOCK.match(prompt, offset)
         if match is None:
-            return remaining.strip()
-        remaining = remaining[match.end():].lstrip()
+            return prompt[offset:].strip()
+        offset = match.end()
 
 
 def _clip_prompt(prompt: str) -> str:
