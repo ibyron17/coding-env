@@ -56,6 +56,54 @@ record_failure() {
   log_error "$reason"
 }
 
+# 그룹 안에서 **서로 독립인** 서브체크의 실패를 모은다. 첫 실패에서 return 하면 그 뒤의
+# 서브체크가 아예 실행되지 않아, "고치고 다시 돌리기"를 실패 건수만큼 반복해야 한다 —
+# 실측: 무관한 회귀 2건(문서 문구 T25-5 · 색 대비 T25-110)을 동시에 주입하면 1건만
+# 보고되고 나머지는 실패로 등장조차 하지 않는다. 여기서 얻는 완화는 **그룹 내부**에
+# 한정된다 — 그룹끼리는 register_and_run_tests 가 `|| true` 로 부르므로 원래도 독립이다.
+#
+# **종속** 서브체크(파일 존재 검사, 값 추출 성공 여부처럼 뒤 검사의 전제가 되는 것)는
+# 여전히 record_failure + `return 1` 을 쓴다. 전제가 깨진 뒤의 검사는 결과가 무의미하고,
+# 빈 변수가 `[[ -ne ]]` 같은 비교에 들어가면 오류를 낸다.
+group_failures=()
+
+note_failure() {
+  group_failures+=("$1")
+  log_error "$1"
+}
+
+# 그룹 종료. 누적된 실패가 있으면 **그룹 1건**으로 기록한다 — 집계 단위가 그룹이어야
+# `total_tests=24` 총합 계약(passed + failed == 24)이 유지된다.
+#
+# record_failure 를 쓰지 않고 집계 두 줄을 직접 하는 이유: record_failure 는 기록과
+# [ERROR] 출력을 함께 하는데, 여기서는 note_failure 가 각 건을 이미 출력해 뒀다.
+# record_failure 를 부르면 같은 내용이 두 번 찍힌다(실패 1건일 때 특히 그렇다).
+finish_group() {
+  local group_name="$1"
+  local failure_count=${#group_failures[@]}
+  if ((failure_count == 0)); then
+    log_ok "$group_name 통과"
+    ((passed_tests++)) || true
+    return 0
+  fi
+  ((failed_tests++))
+  if ((failure_count == 1)); then
+    failed_list+=("$group_name: ${group_failures[0]}")
+  else
+    # 요약만 보고도 무엇이 깨졌는지 알 수 있게 전 건을 싣는다.
+    # ${array[*]} 대신 직접 이어 붙이는 이유: IFS 는 첫 글자만 구분자로 쓰므로
+    # IFS=' | ' 로는 공백 하나만 들어가 메시지들이 붙어 버린다.
+    local joined="${group_failures[0]}"
+    local index
+    for ((index = 1; index < failure_count; index++)); do
+      joined+=" | ${group_failures[index]}"
+    done
+    failed_list+=("$group_name: ${failure_count}건 동시 실패 — $joined")
+  fi
+  group_failures=()
+  return 1
+}
+
 # 단순 비교
 assert_equals() {
   local expected="$1"
@@ -998,6 +1046,7 @@ test_manifest_fields_complete() {
 # T22: dashboard 템플릿 무결성 — LLM 지시문 방식이라 런타임 Edit 결과는 검증 대상이 아니고,
 # 설치·문서 정합성만 자동 검증한다 (하위 검증 T22-1~T22-127).
 test_dashboard_template_integrity() {
+  group_failures=()   # 앞 그룹이 조기 return 했을 때의 잔여물 제거
   local test_name="T22"
   local test_desc="dashboard 템플릿 무결성 (T22-1~T22-128)"
   log_test_name "$test_name" "$test_desc"
@@ -1031,15 +1080,13 @@ test_dashboard_template_integrity() {
   local badge_class
   for badge_class in impl pass fail commit; do
     if ! grep -q "\.badge\.${badge_class}" "$dashboard_command_file"; then
-      record_failure "$test_name" "T22-3: 배지 class 미발견: .badge.$badge_class"
-      return 1
+      note_failure "T22-3: 배지 class 미발견: .badge.$badge_class"
     fi
   done
 
   # T22-4: 필터 라디오 3종과 CSS 규칙 존재
   if ! grep -q "dzf-review:checked" "$dashboard_command_file"; then
-    record_failure "$test_name" "T22-4: 필터 CSS 규칙(dzf-review:checked) 미발견"
-    return 1
+    note_failure "T22-4: 필터 CSS 규칙(dzf-review:checked) 미발견"
   fi
   if ! grep -q 'id="dzf-all"' "$dashboard_command_file" \
     || ! grep -q 'id="dzf-impl"' "$dashboard_command_file" \
@@ -1055,116 +1102,96 @@ test_dashboard_template_integrity() {
   local actual_count
   actual_count=$(ls "$REPO_ROOT/commands"/*.md | wc -l | xargs echo)
   if ! assert_equals "$actual_count" "$declared_count" "COMMANDS_FILE_COUNT 일치"; then
-    record_failure "$test_name" "T22-5: COMMANDS_FILE_COUNT=$declared_count, 실제 파일 수=$actual_count"
-    return 1
+    note_failure "T22-5: COMMANDS_FILE_COUNT=$declared_count, 실제 파일 수=$actual_count"
   fi
 
   # T22-7: div.legend 컴포넌트가 템플릿에서 제거됐는지 확인 (사용자 요청, 회귀 방지)
   if grep -q 'class="legend"' "$dashboard_command_file"; then
-    record_failure "$test_name" "T22-7: div.legend 가 여전히 템플릿에 남아있음"
-    return 1
+    note_failure "T22-7: div.legend 가 여전히 템플릿에 남아있음"
   fi
 
   # T22-8(역방향): 세션 구분 마커(session-head) 가 완전히 제거됐는지 확인 — 세션 탭 UI 전면 삭제
   if grep -q "session-head" "$dashboard_command_file"; then
-    record_failure "$test_name" "T22-8: session-head 세션 구분 마커가 여전히 남아있음"
-    return 1
+    note_failure "T22-8: session-head 세션 구분 마커가 여전히 남아있음"
   fi
 
   # T22-9: log 절차가 파일 전체 Read 대신 grep+windowed Read 방식을 문서화했는지 확인
   # (가변 비용 회귀 방지 — 다시 "파일 전체를 Read"로 되돌아가지 않았는지 확인)
   if ! grep -q "파일 전체를 Read하지 않는다" "$dashboard_command_file"; then
-    record_failure "$test_name" "T22-9: log 절차의 windowed-read 최적화 문구 미발견"
-    return 1
+    note_failure "T22-9: log 절차의 windowed-read 최적화 문구 미발견"
   fi
 
   # T22-10: 작업 추적 타이틀이 인라인 <b> 가 아니라 block 요소로 분리됐는지 확인
   # (필터 라디오와 같은 줄에 붙어 보이던 레이아웃 버그의 회귀 방지)
   if ! grep -q 'class="log-title"' "$dashboard_command_file"; then
-    record_failure "$test_name" "T22-10: log-title 블록 요소 미발견"
-    return 1
+    note_failure "T22-10: log-title 블록 요소 미발견"
   fi
 
   # T22-12: log 절차가 깨진 완전일치 grep 으로 퇴행하지 않았는지 확인 (이번 라운드에서 가장 중요한 테스트).
   # #dz-log 여는 태그가 data-server-port 를 갖는 순간 완전일치는 영원히 매칭에 실패하므로
   # 옛 패턴의 부활과 새 패턴의 누락을 양방향으로 막는다.
   if grep -q "grep -n '<ul class=\"log\" id=\"dz-log\">'" "$dashboard_command_file"; then
-    record_failure "$test_name" "T22-12: 깨진 완전일치 grep 패턴이 여전히 남아있음"
-    return 1
+    note_failure "T22-12: 깨진 완전일치 grep 패턴이 여전히 남아있음"
   fi
   if ! grep -q "grep -n 'id=\"dz-log\"'" "$dashboard_command_file"; then
-    record_failure "$test_name" "T22-12: 부분일치 grep 패턴 미발견"
-    return 1
+    note_failure "T22-12: 부분일치 grep 패턴 미발견"
   fi
 
   # T22-14(역방향): 세션 탭 CSS 골격과 삽입 마커가 완전히 제거됐는지 확인
   if grep -q 'label\[for\^="dzs-"\]' "$dashboard_command_file"; then
-    record_failure "$test_name" "T22-14: 세션 탭 라벨 CSS 골격이 여전히 남아있음"
-    return 1
+    note_failure "T22-14: 세션 탭 라벨 CSS 골격이 여전히 남아있음"
   fi
   if grep -q 'DZ:SESSION-RULES' "$dashboard_command_file"; then
-    record_failure "$test_name" "T22-14: DZ:SESSION-RULES 삽입 마커가 여전히 남아있음"
-    return 1
+    note_failure "T22-14: DZ:SESSION-RULES 삽입 마커가 여전히 남아있음"
   fi
 
   # T22-18(역방향): 세션별 .entry 필터 규칙(#dzs-*)이 완전히 제거됐는지 확인
   if grep -q '#dz-log > li:not(\[data-session=' "$dashboard_command_file"; then
-    record_failure "$test_name" "T22-18: 세션 필터가 옛 '> li' 패턴으로 되돌아감"
-    return 1
+    note_failure "T22-18: 세션 필터가 옛 '> li' 패턴으로 되돌아감"
   fi
   if grep -q '#dzs-1:checked ~ #dz-log .entry:not(\[data-session="1"\])' "$dashboard_command_file"; then
-    record_failure "$test_name" "T22-18: 세션별 .entry 필터 규칙(#dzs-1)이 여전히 남아있음"
-    return 1
+    note_failure "T22-18: 세션별 .entry 필터 규칙(#dzs-1)이 여전히 남아있음"
   fi
 
   # T22-19: 그룹 문법이 호출 규약에 문서화됨 (「그룹 × 단계」 통일 모델, 회귀 방지)
   if ! grep -qF '그룹A:단계1,단계2' "$dashboard_command_file"; then
-    record_failure "$test_name" "T22-19: 그룹 문법 예시(그룹A:단계1,단계2) 미발견"
-    return 1
+    note_failure "T22-19: 그룹 문법 예시(그룹A:단계1,단계2) 미발견"
   fi
 
   # T22-20: 하위 호환 정규화 규칙 존재 — 선형 호출을 그룹 모드로 오해석하지 않아야 한다
   if ! grep -q '이름 없는 그룹 1개' "$dashboard_command_file"; then
-    record_failure "$test_name" "T22-20: '이름 없는 그룹 1개' 정규화 규칙 미발견"
-    return 1
+    note_failure "T22-20: '이름 없는 그룹 1개' 정규화 규칙 미발견"
   fi
 
   # T22-21: 혼합 문법 시 중단 규칙 존재 — 오타를 추측 해석하는 퇴행 방지
   if ! grep -q '섞여 있다' "$dashboard_command_file"; then
-    record_failure "$test_name" "T22-21: 혼합 문법 중단 규칙(섞여 있다) 미발견"
-    return 1
+    note_failure "T22-21: 혼합 문법 중단 규칙(섞여 있다) 미발견"
   fi
 
   # T22-22: 매트릭스 셀렉터 2종 존재 (dz-cell-, dz-group-) — 셀렉터 계약 누락 방지
   if ! grep -q 'dz-cell-' "$dashboard_command_file"; then
-    record_failure "$test_name" "T22-22: dz-cell- 셀렉터 미발견"
-    return 1
+    note_failure "T22-22: dz-cell- 셀렉터 미발견"
   fi
   if ! grep -q 'dz-group-' "$dashboard_command_file"; then
-    record_failure "$test_name" "T22-22: dz-group- 셀렉터 미발견"
-    return 1
+    note_failure "T22-22: dz-group- 셀렉터 미발견"
   fi
 
   # T22-23: 매트릭스 CSS 가 템플릿에 상주 — init 이 CSS 를 주입하는 방식으로 퇴행하지 않아야 한다
   if ! grep -q 'table\.matrix{' "$dashboard_command_file"; then
-    record_failure "$test_name" "T22-23: table.matrix{ CSS 규칙 미발견"
-    return 1
+    note_failure "T22-23: table.matrix{ CSS 규칙 미발견"
   fi
 
   # T22-24: 선형 자산 비퇴화 — 매트릭스로 통합하며 선형 화면을 없애지 않아야 한다 (확정 방향 1)
   if ! grep -qF '<ol class="steps" id="dz-steps">' "$dashboard_command_file"; then
-    record_failure "$test_name" "T22-24: 선형 단계 목록 <ol id=\"dz-steps\"> 미발견"
-    return 1
+    note_failure "T22-24: 선형 단계 목록 <ol id=\"dz-steps\"> 미발견"
   fi
   if ! grep -q 'dz-step-{n}' "$dashboard_command_file"; then
-    record_failure "$test_name" "T22-24: dz-step-{n} 패턴 미발견"
-    return 1
+    note_failure "T22-24: dz-step-{n} 패턴 미발견"
   fi
 
   # T22-25: step 그룹 인자 문법 문서화 — 그룹 모드 갱신 방법이 불명확해지는 회귀 방지
   if ! grep -qF 'step <g>.<p>' "$dashboard_command_file"; then
-    record_failure "$test_name" "T22-25: step <g>.<p> 문법 미발견"
-    return 1
+    note_failure "T22-25: step <g>.<p> 문법 미발견"
   fi
 
   # T22-26: 결정적 완료 계수 명령 존재 — <style> 줄까지 세는 헐거운 패턴으로 퇴행 방지
@@ -1194,110 +1221,90 @@ test_dashboard_template_integrity() {
   local legacy_color_literal
   for legacy_color_literal in '#1F8A70' '#C2410C' '#F59E0B'; do
     if grep -qF -- "$legacy_color_literal" "$dashboard_command_file"; then
-      record_failure "$test_name" "T22-27: 색각 안전성 없는 팔레트가 남아 있음: $legacy_color_literal"
-      return 1
+      note_failure "T22-27: 색각 안전성 없는 팔레트가 남아 있음: $legacy_color_literal"
     fi
   done
 
   # T22-28: 게이트 전용 개념 미신설 — 별도 게이트 컴포넌트 부활(확정 방향 5 위반) 방지.
   # 이 검증은 매칭되면 실패다(역방향 assertion) — dz-gate- 셀렉터가 존재해서는 안 된다.
   if grep -q 'dz-gate-' "$dashboard_command_file"; then
-    record_failure "$test_name" "T22-28: dz-gate- 전용 셀렉터가 신설됨(게이트는 단계 1개 그룹으로 표현해야 함)"
-    return 1
+    note_failure "T22-28: dz-gate- 전용 셀렉터가 신설됨(게이트는 단계 1개 그룹으로 표현해야 함)"
   fi
 
   # T22-29: file:// 리로드 경로 비퇴화 — if(!isServed){...} 분기 자체와 그 판정식이 남아있는지
   # 확인한다(location.reload()·visibilitychange 만 보면 폴링/PiP 분기의 동일 문자열에도 매칭돼
   # 분기 전체를 지워도 통과하는 결함이 있었다).
   if ! grep -qF "if(!isServed){" "$dashboard_command_file"; then
-    record_failure "$test_name" "T22-29: if(!isServed){ 분기 미발견"
-    return 1
+    note_failure "T22-29: if(!isServed){ 분기 미발견"
   fi
   if ! grep -qF "location.protocol === 'http:'" "$dashboard_command_file"; then
-    record_failure "$test_name" "T22-29: isServed 판정식(location.protocol === 'http:') 미발견"
-    return 1
+    note_failure "T22-29: isServed 판정식(location.protocol === 'http:') 미발견"
   fi
 
   # T22-30: 폴링 경로 존재 — 미구현 / 브라우저 캐시로 갱신이 멈추는 퇴행 방지
   if ! grep -q 'DOMParser' "$dashboard_command_file"; then
-    record_failure "$test_name" "T22-30: DOMParser 미발견"
-    return 1
+    note_failure "T22-30: DOMParser 미발견"
   fi
   if ! grep -qF "cache:'no-store'" "$dashboard_command_file"; then
-    record_failure "$test_name" "T22-30: cache:'no-store' 미발견"
-    return 1
+    note_failure "T22-30: cache:'no-store' 미발견"
   fi
 
   # T22-31: 기능 감지 존재 — 감지 없이 호출해 미지원 브라우저에서 예외가 나는 퇴행 방지
   if ! grep -qF "'documentPictureInPicture' in window" "$dashboard_command_file"; then
-    record_failure "$test_name" "T22-31: documentPictureInPicture 기능 감지 미발견"
-    return 1
+    note_failure "T22-31: documentPictureInPicture 기능 감지 미발견"
   fi
 
   # T22-32: 자동 진입 금지 — 주석 문구만으로는 실제로 setTimeout/setInterval 로 자동 open 을
   # 넣어도 통과하는 결함이 있었다. requestWindow 호출이 정확히 1곳(click 리스너 안)뿐이고,
   # 타이머에서 호출되지 않는지까지 함께 확인한다.
   if ! grep -q '자동 재시도하지 않는다' "$dashboard_command_file"; then
-    record_failure "$test_name" "T22-32: 자동 재시도 금지 문구 미발견"
-    return 1
+    note_failure "T22-32: 자동 재시도 금지 문구 미발견"
   fi
   if [[ "$(grep -c 'requestWindow' "$dashboard_command_file")" -ne 1 ]]; then
-    record_failure "$test_name" "T22-32: requestWindow 호출이 정확히 1곳이 아님(click 리스너 밖에서 열릴 가능성)"
-    return 1
+    note_failure "T22-32: requestWindow 호출이 정확히 1곳이 아님(click 리스너 밖에서 열릴 가능성)"
   fi
   if grep -qE 'setTimeout\(.*requestWindow|setInterval\(.*requestWindow' "$dashboard_command_file"; then
-    record_failure "$test_name" "T22-32: setTimeout/setInterval 에서 requestWindow 를 호출함(자동 진입 회귀)"
-    return 1
+    note_failure "T22-32: setTimeout/setInterval 에서 requestWindow 를 호출함(자동 진입 회귀)"
   fi
 
   # T22-33: 스타일시트 복사 — PiP 창이 무스타일로 뜨는 퇴행 방지(CSS 미상속은 실측된 제약)
   if ! grep -qF "querySelectorAll('style')" "$dashboard_command_file"; then
-    record_failure "$test_name" "T22-33: querySelectorAll('style') 미발견"
-    return 1
+    note_failure "T22-33: querySelectorAll('style') 미발견"
   fi
   if ! grep -q 'head.appendChild' "$dashboard_command_file"; then
-    record_failure "$test_name" "T22-33: head.appendChild 미발견"
-    return 1
+    note_failure "T22-33: head.appendChild 미발견"
   fi
 
   # T22-34: 이동 방식 + 복귀 경로 — 복제 방식으로 바꾸거나 복귀를 빠뜨려 opener 가 영구히 비는 퇴행 방지.
   # 복귀 앵커는 wrapReturnAnchor(=wrap.nextSibling) 여야 한다 — pipButton 은 #dz-top-actions 의
   # 자식이라 document.body.insertBefore 의 참조 노드로 쓰면 NotFoundError 를 던진다(P0, PRP §0).
   if ! grep -qF 'body.appendChild(wrap)' "$dashboard_command_file"; then
-    record_failure "$test_name" "T22-34: body.appendChild(wrap) 미발견"
-    return 1
+    note_failure "T22-34: body.appendChild(wrap) 미발견"
   fi
   if ! grep -q 'pagehide' "$dashboard_command_file"; then
-    record_failure "$test_name" "T22-34: pagehide 미발견"
-    return 1
+    note_failure "T22-34: pagehide 미발견"
   fi
   if ! grep -qF 'insertBefore(wrap, wrapReturnAnchor)' "$dashboard_command_file"; then
-    record_failure "$test_name" "T22-34: insertBefore(wrap, wrapReturnAnchor) 미발견(PiP 복귀 경로 미검증)"
-    return 1
+    note_failure "T22-34: insertBefore(wrap, wrapReturnAnchor) 미발견(PiP 복귀 경로 미검증)"
   fi
   if grep -qF 'insertBefore(wrap, pipButton)' "$dashboard_command_file"; then
-    record_failure "$test_name" "T22-34: insertBefore(wrap, pipButton) 이 남아있음(NotFoundError 회귀, P0)"
-    return 1
+    note_failure "T22-34: insertBefore(wrap, pipButton) 이 남아있음(NotFoundError 회귀, P0)"
   fi
   if ! grep -qF 'wrapReturnAnchor = wrap.nextSibling' "$dashboard_command_file"; then
-    record_failure "$test_name" "T22-34: wrapReturnAnchor = wrap.nextSibling 앵커 캡처 미발견"
-    return 1
+    note_failure "T22-34: wrapReturnAnchor = wrap.nextSibling 앵커 캡처 미발견"
   fi
 
   # T22-35: 서버 바인딩 안전 — .claude 를 모든 인터페이스에 노출하는 회귀 방지(역방향 assertion 포함)
   if ! grep -qF -- '--bind 127.0.0.1' "$dashboard_command_file"; then
-    record_failure "$test_name" "T22-35: --bind 127.0.0.1 미발견"
-    return 1
+    note_failure "T22-35: --bind 127.0.0.1 미발견"
   fi
   if grep -q '0\.0\.0\.0' "$dashboard_command_file"; then
-    record_failure "$test_name" "T22-35: 0.0.0.0 바인딩 문자열이 발견됨"
-    return 1
+    note_failure "T22-35: 0.0.0.0 바인딩 문자열이 발견됨"
   fi
 
   # T22-36: serve 가 인터페이스에 노출 — 절차만 있고 규약·힌트에 없어 아무도 못 쓰는 퇴행 방지
   if ! head -4 "$dashboard_command_file" | grep -q 'serve'; then
-    record_failure "$test_name" "T22-36: argument-hint 에 serve 미발견"
-    return 1
+    note_failure "T22-36: argument-hint 에 serve 미발견"
   fi
   if ! grep -q '/dashboard serve' "$dashboard_command_file"; then
     record_failure "$test_name" "T22-36: /dashboard serve 언급 미발견"
@@ -1316,27 +1323,23 @@ test_dashboard_template_integrity() {
   wrap_end_line=$(grep -n 'id="dz-updated"' "$dashboard_command_file" | tail -1 | cut -d: -f1)
   if [[ -z "$pip_button_line" || -z "$wrap_open_line" || -z "$wrap_end_line" ]] \
     || { [[ "$pip_button_line" -ge "$wrap_open_line" ]] && [[ "$pip_button_line" -le "$wrap_end_line" ]]; }; then
-    record_failure "$test_name" "T22-37: 플로팅 버튼이 .wrap 범위 안에 있음(.wrap 바깥이어야 한다)"
-    return 1
+    note_failure "T22-37: 플로팅 버튼이 .wrap 범위 안에 있음(.wrap 바깥이어야 한다)"
   fi
 
   # T22-38: grep 유일성 불변식 — 스크립트가 [id="dz-log"] 형태를 쓰면 log·step 의 grep 앵커가
   # 줄 수를 잘못 세어 절차 전체가 깨진다(역방향 assertion).
   if grep -q '\[id="dz-' "$dashboard_command_file"; then
-    record_failure "$test_name" "T22-38: [id=\"dz- 형태의 셀렉터 문자열이 발견됨"
-    return 1
+    note_failure "T22-38: [id=\"dz- 형태의 셀렉터 문자열이 발견됨"
   fi
 
   # T22-39: 로그 카드 식별자 존재 — id 없이 구조 셀렉터(:nth-of-type)로 되돌아가는 회귀 방지
   if ! grep -qF 'id="dz-log-card"' "$dashboard_command_file"; then
-    record_failure "$test_name" "T22-39: id=\"dz-log-card\" 미발견"
-    return 1
+    note_failure "T22-39: id=\"dz-log-card\" 미발견"
   fi
 
   # T22-40: PiP 압축 규칙 존재 — 압축 뷰 자체의 유실 방지
   if ! grep -qF 'body.dz-pip #dz-log-card{display:none}' "$dashboard_command_file"; then
-    record_failure "$test_name" "T22-40: body.dz-pip #dz-log-card{display:none} 미발견"
-    return 1
+    note_failure "T22-40: body.dz-pip #dz-log-card{display:none} 미발견"
   fi
 
   # T22-41: 로그 앵커 비충돌 — log 절차 0-a 의 grep 앵커 `id="dz-log"` 는 닫는 따옴표까지 포함하므로
@@ -1344,174 +1347,141 @@ test_dashboard_template_integrity() {
   # (전체 카운트 방식은 이 파일이 마크다운 산문 안에서 'id="dz-log"' 를 예시로 여러 번 인용하기 때문에
   # 쓸 수 없다 — 템플릿 전문 구간만 대상으로 좁혀서 충돌 가능성을 직접 확인한다.)
   if awk '/^## 템플릿 전문/,/^```$/' "$dashboard_command_file" | grep -n 'id="dz-log"' | grep -q 'dz-log-card'; then
-    record_failure "$test_name" "T22-41: 로그 카드 id 가 log 절차의 grep 앵커와 충돌함"
-    return 1
+    note_failure "T22-41: 로그 카드 id 가 log 절차의 grep 앵커와 충돌함"
   fi
   if [[ "$(awk '/^## 템플릿 전문/,/^```$/' "$dashboard_command_file" | grep -c 'id="dz-log"')" -ne 1 ]]; then
-    record_failure "$test_name" "T22-41: 템플릿 안 id=\"dz-log\" 매칭 줄 수가 1이 아님(로그 카드 id 충돌 가능성)"
-    return 1
+    note_failure "T22-41: 템플릿 안 id=\"dz-log\" 매칭 줄 수가 1이 아님(로그 카드 id 충돌 가능성)"
   fi
 
   # T22-42: CSS 로만 숨김 — 스크립트가 카드를 DOM 에서 떼어내는 방식으로 퇴행하면 폴링이
   # 세션 변경으로 오판해 무한 리로드에 빠진다(역방향 assertion).
   if grep -qE '(getElementById|querySelector)\([^)]*dz-log-card' "$dashboard_command_file"; then
-    record_failure "$test_name" "T22-42: 스크립트가 dz-log-card 를 getElementById/querySelector 로 참조함"
-    return 1
+    note_failure "T22-42: 스크립트가 dz-log-card 를 getElementById/querySelector 로 참조함"
   fi
 
   # T22-43: 로그 동기화 비퇴화 — 압축을 넣으며 로그 동기화를 함께 지우지 않았는지 확인
   if ! grep -qF 'function syncLog' "$dashboard_command_file"; then
-    record_failure "$test_name" "T22-43: function syncLog 미발견"
-    return 1
+    note_failure "T22-43: function syncLog 미발견"
   fi
   if ! grep -qF "live.innerHTML = next.innerHTML" "$dashboard_command_file"; then
-    record_failure "$test_name" "T22-43: live.innerHTML = next.innerHTML 미발견"
-    return 1
+    note_failure "T22-43: live.innerHTML = next.innerHTML 미발견"
   fi
 
   # T22-44: 단계 상세 마크업·CSS — 상세 span 또는 빈 값 숨김 규칙 유실(빈 회색 줄 잔존) 방지
   if ! grep -qF 'class="step-detail"' "$dashboard_command_file"; then
-    record_failure "$test_name" "T22-44: class=\"step-detail\" 미발견"
-    return 1
+    note_failure "T22-44: class=\"step-detail\" 미발견"
   fi
   if ! grep -qF '.step-detail:empty{display:none}' "$dashboard_command_file"; then
-    record_failure "$test_name" "T22-44: .step-detail:empty{display:none} 미발견"
-    return 1
+    note_failure "T22-44: .step-detail:empty{display:none} 미발견"
   fi
 
   # T22-45: PiP 는 활성 상세만 — 요청 1·2 를 잇는 규칙의 유실(좁은 창이 상세로 도배) 방지
   if ! grep -qF 'body.dz-pip ol.steps li:not(.active) .step-detail' "$dashboard_command_file"; then
-    record_failure "$test_name" "T22-45: body.dz-pip ol.steps li:not(.active) .step-detail 미발견"
-    return 1
+    note_failure "T22-45: body.dz-pip ol.steps li:not(.active) .step-detail 미발견"
   fi
 
   # T22-46: 상세 규약 문서화 — 절차만 있고 규약에 없어 아무도 못 쓰는 회귀, 불변식 3 문구 유실 방지
   if ! head -4 "$dashboard_command_file" | grep -q '상세'; then
-    record_failure "$test_name" "T22-46: argument-hint 에 '상세' 미발견"
-    return 1
+    note_failure "T22-46: argument-hint 에 '상세' 미발견"
   fi
   if ! grep -qF 'step <n> <done|active|wait> ["상세"]' "$dashboard_command_file"; then
-    record_failure "$test_name" "T22-46: 호출 규약에 step <n> <done|active|wait> [\"상세\"] 미발견"
-    return 1
+    note_failure "T22-46: 호출 규약에 step <n> <done|active|wait> [\"상세\"] 미발견"
   fi
   if ! grep -q '줄바꿈을 넣지 않는다' "$dashboard_command_file"; then
-    record_failure "$test_name" "T22-46: '줄바꿈을 넣지 않는다' 문구 미발견"
-    return 1
+    note_failure "T22-46: '줄바꿈을 넣지 않는다' 문구 미발견"
   fi
 
   # T22-47: PiP 창 높이 콘텐츠 맞춤 — 고정 620px 요청 후 리사이즈를 안 하면 압축 뷰에서
   # 하단에 빈 여백이 남는 회귀(실제 사용자 리포트)가 재발한다.
   if ! grep -qF 'function resizePipToFit(){' "$dashboard_command_file"; then
-    record_failure "$test_name" "T22-47: function resizePipToFit 미발견"
-    return 1
+    note_failure "T22-47: function resizePipToFit 미발견"
   fi
   if ! grep -qF 'pipWindow.resizeTo(PIP_WIDTH,' "$dashboard_command_file"; then
-    record_failure "$test_name" "T22-47: resizeTo 호출 미발견"
-    return 1
+    note_failure "T22-47: resizeTo 호출 미발견"
   fi
   if ! grep -qF 'resizePipToFit();' "$dashboard_command_file"; then
-    record_failure "$test_name" "T22-47: apply() 안에서 resizePipToFit 호출 미발견"
-    return 1
+    note_failure "T22-47: apply() 안에서 resizePipToFit 호출 미발견"
   fi
 
   # T22-48: 구현 세부 작업 슬롯 셀렉터 4종 존재 — 슬롯 자체의 유실 방지
   if ! grep -qF 'id="dz-impl-card"' "$dashboard_command_file"; then
-    record_failure "$test_name" "T22-48: id=\"dz-impl-card\" 미발견"
-    return 1
+    note_failure "T22-48: id=\"dz-impl-card\" 미발견"
   fi
   if ! grep -qF 'id="dz-impl-tasks"' "$dashboard_command_file"; then
-    record_failure "$test_name" "T22-48: id=\"dz-impl-tasks\" 미발견"
-    return 1
+    note_failure "T22-48: id=\"dz-impl-tasks\" 미발견"
   fi
   if ! grep -qF 'id="dz-impl-count"' "$dashboard_command_file"; then
-    record_failure "$test_name" "T22-48: id=\"dz-impl-count\" 미발견"
-    return 1
+    note_failure "T22-48: id=\"dz-impl-count\" 미발견"
   fi
   if ! grep -qF 'id="dz-impl-{k}"' "$dashboard_command_file"; then
-    record_failure "$test_name" "T22-48: id=\"dz-impl-{k}\" 미발견"
-    return 1
+    note_failure "T22-48: id=\"dz-impl-{k}\" 미발견"
   fi
 
   # T22-49: 자동 숨김 규칙 존재 — 빈 카드가 모든 세션에 노출되는 회귀 방지(확정 사항 3 위반)
   if ! grep -qF '#dz-impl-card:not(:has(#dz-impl-tasks li)){display:none}' "$dashboard_command_file"; then
-    record_failure "$test_name" "T22-49: 구현 세부 작업 카드 자동 숨김 규칙 미발견"
-    return 1
+    note_failure "T22-49: 구현 세부 작업 카드 자동 숨김 규칙 미발견"
   fi
 
   # T22-50: 레이아웃 CSS 재사용 — 중복 정의가 생기면 매크로 목록과 세부 목록이 갈라진다(역방향 assertion).
   if ! grep -qF '<ol class="steps" id="dz-impl-tasks">' "$dashboard_command_file"; then
-    record_failure "$test_name" "T22-50: <ol class=\"steps\" id=\"dz-impl-tasks\"> 미발견"
-    return 1
+    note_failure "T22-50: <ol class=\"steps\" id=\"dz-impl-tasks\"> 미발견"
   fi
   if grep -q 'ol\.impl-tasks' "$dashboard_command_file"; then
-    record_failure "$test_name" "T22-50: ol.impl-tasks 레이아웃 규칙이 중복 정의됨"
-    return 1
+    note_failure "T22-50: ol.impl-tasks 레이아웃 규칙이 중복 정의됨"
   fi
 
   # T22-51: 폴링 동기화 추가 — 카드가 동기화에서 빠지면 http://·PiP 에서 영구히 stale 된다(설계 결정 5).
   if ! grep -qF 'function syncImplCard(fresh){' "$dashboard_command_file"; then
-    record_failure "$test_name" "T22-51: function syncImplCard(fresh){ 미발견"
-    return 1
+    note_failure "T22-51: function syncImplCard(fresh){ 미발견"
   fi
   if ! grep -qF 'syncImplCard(fresh);' "$dashboard_command_file"; then
-    record_failure "$test_name" "T22-51: apply() 안에서 syncImplCard 호출 미발견"
-    return 1
+    note_failure "T22-51: apply() 안에서 syncImplCard 호출 미발견"
   fi
 
   # T22-52: CSS 로만 숨김 — 스크립트가 impl 카드를 DOM 에서 떼어내거나 인라인 스타일로 숨기면
   # 폴링의 outerHTML 대입 대상이 사라져 카드가 영구히 되살아나지 않는다(역방향 assertion).
   if grep -n 'dz-impl-card' "$dashboard_command_file" | grep -qE 'remove\(|style\.display'; then
-    record_failure "$test_name" "T22-52: 스크립트가 dz-impl-card 를 DOM/인라인 스타일로 조작함"
-    return 1
+    note_failure "T22-52: 스크립트가 dz-impl-card 를 DOM/인라인 스타일로 조작함"
   fi
 
   # T22-53: 기존 시각화 동기화 비퇴화 — 새 동기화를 넣으며 기존 함수를 개조·파손하지 않았는지 확인
   if ! grep -qF "querySelector('#dz-steps,#dz-matrix')" "$dashboard_command_file"; then
-    record_failure "$test_name" "T22-53: querySelector('#dz-steps,#dz-matrix') 미발견"
-    return 1
+    note_failure "T22-53: querySelector('#dz-steps,#dz-matrix') 미발견"
   fi
 
   # T22-54: 매크로 진행률 비침해 문구 — 세부 완료가 매크로 분모에 섞여 step 전이 산술이 무너지는 회귀 방지(불변식 6)
   if ! grep -q '구현 세부 작업의 상태 변화는 매크로 진행률을 바꾸지 않는다' "$dashboard_command_file"; then
-    record_failure "$test_name" "T22-54: 매크로 진행률 비침해 문구 미발견"
-    return 1
+    note_failure "T22-54: 매크로 진행률 비침해 문구 미발견"
   fi
 
   # T22-55: 데이터 출처 한계 문구 — 사라지면 실시간 진행률로 오인된다(확정 사항 2)
   if ! grep -q '서브에이전트 내부의 실시간 진행률이 아니다' "$dashboard_command_file"; then
-    record_failure "$test_name" "T22-55: '서브에이전트 내부의 실시간 진행률이 아니다' 문구 미발견"
-    return 1
+    note_failure "T22-55: '서브에이전트 내부의 실시간 진행률이 아니다' 문구 미발견"
   fi
   if ! grep -q '디스패치' "$dashboard_command_file"; then
-    record_failure "$test_name" "T22-55: '디스패치' 문구 미발견"
-    return 1
+    note_failure "T22-55: '디스패치' 문구 미발견"
   fi
 
   # T22-56: 병렬 active 허용 문구 — 단일 활성 가정이 슬며시 들어오면 이 패널의 존재 이유가 사라진다
   if ! grep -q '동시에 여러 항목이 active 일 수 있다' "$dashboard_command_file"; then
-    record_failure "$test_name" "T22-56: '동시에 여러 항목이 active 일 수 있다' 문구 미발견"
-    return 1
+    note_failure "T22-56: '동시에 여러 항목이 active 일 수 있다' 문구 미발견"
   fi
 
   # T22-57: 규약 노출 — 절차만 있고 규약에 없으면 아무도 못 쓴다
   if ! head -4 "$dashboard_command_file" | grep -q 'impl set'; then
-    record_failure "$test_name" "T22-57: argument-hint 에 'impl set' 미발견"
-    return 1
+    note_failure "T22-57: argument-hint 에 'impl set' 미발견"
   fi
   if ! grep -qF '/dashboard impl <k> <done|active|wait> ["상세"]' "$dashboard_command_file"; then
-    record_failure "$test_name" "T22-57: 호출 규약에 /dashboard impl <k> <done|active|wait> [\"상세\"] 미발견"
-    return 1
+    note_failure "T22-57: 호출 규약에 /dashboard impl <k> <done|active|wait> [\"상세\"] 미발견"
   fi
 
   # T22-58: 가드 문구 + PiP 미숨김 — 재호출이 진행 상태를 날리는 회귀 / 곁눈질 화면에서 가장 값진
   # 카드를 숨기는 규칙이 몰래 추가되는 회귀를 각각 막는다(뒤쪽은 역방향 assertion, 설계 결정 6).
   if ! grep -q '이미 목록이 있으면 덮어쓰지 않는다' "$dashboard_command_file"; then
-    record_failure "$test_name" "T22-58: '이미 목록이 있으면 덮어쓰지 않는다' 가드 문구 미발견"
-    return 1
+    note_failure "T22-58: '이미 목록이 있으면 덮어쓰지 않는다' 가드 문구 미발견"
   fi
   if grep -qF 'body.dz-pip #dz-impl-card{display:none}' "$dashboard_command_file"; then
-    record_failure "$test_name" "T22-58: PiP 에서 impl 카드를 숨기는 규칙이 추가됨"
-    return 1
+    note_failure "T22-58: PiP 에서 impl 카드를 숨기는 규칙이 추가됨"
   fi
 
   # T22-61: 호출 규약 비대화 방지 (최우선, 역방향) — 커밋 a6966aa 는 "현재 위치/다음 단계" 카드를
@@ -1519,18 +1489,15 @@ test_dashboard_template_integrity() {
   # 파생 뷰이므로 dz-current 계열 셀렉터나 규약상의 위치/다음단계 인자가 다시 나타나면 같은
   # 실패의 재발이다.
   if grep -qE 'dz-current|"현재 위치"' "$dashboard_command_file"; then
-    record_failure "$test_name" "T22-61: 제거된 dz-current 계열 셀렉터·인자가 부활함"
-    return 1
+    note_failure "T22-61: 제거된 dz-current 계열 셀렉터·인자가 부활함"
   fi
   if ! grep -qF 'step <n> <done|active|wait> ["상세"]' "$dashboard_command_file"; then
-    record_failure "$test_name" "T22-61: step 호출 규약 원형 미발견"
-    return 1
+    note_failure "T22-61: step 호출 규약 원형 미발견"
   fi
 
   # T22-68: 자동 발행 절 제목 존재 — 절차 자체가 유실되면 init 의 두 분기가 참조할 대상이 없다.
   if ! grep -qF '## 자동 발행 — `init` 의 공통 하위 절차' "$dashboard_command_file"; then
-    record_failure "$test_name" "T22-68: 자동 발행 절 제목 미발견"
-    return 1
+    note_failure "T22-68: 자동 발행 절 제목 미발견"
   fi
 
   # T22-69: file:// 폴백 생존(최우선) — 서버 실패 시 URL 을 아무것도 못 주는 순수 퇴행을 막는다
@@ -1563,8 +1530,7 @@ test_dashboard_template_integrity() {
   local scan_token
   for scan_token in REUSE FREE NONE; do
     if ! grep -qF "$scan_token" "$dashboard_command_file"; then
-      record_failure "$test_name" "T22-71: 포트 스캔 토큰 미발견: $scan_token"
-      return 1
+      note_failure "T22-71: 포트 스캔 토큰 미발견: $scan_token"
     fi
   done
 
@@ -1579,50 +1545,42 @@ test_dashboard_template_integrity() {
   local bind_occurrence_count
   bind_occurrence_count=$(grep -c -- '--bind 127.0.0.1' "$dashboard_command_file")
   if [[ "$bind_occurrence_count" -lt 2 ]]; then
-    record_failure "$test_name" "T22-73: --bind 127.0.0.1 등장 횟수가 2 미만"
-    return 1
+    note_failure "T22-73: --bind 127.0.0.1 등장 횟수가 2 미만"
   fi
   if grep -q '0\.0\.0\.0' "$dashboard_command_file"; then
-    record_failure "$test_name" "T22-73: 0.0.0.0 바인딩 문자열이 발견됨"
-    return 1
+    note_failure "T22-73: 0.0.0.0 바인딩 문자열이 발견됨"
   fi
 
   # T22-74: 실패가 init 을 중단시키지 않음 — 발행 실패가 착수 자체를 막으면 안 된다(설계 결정 7).
   if ! grep -qF '이 절차의 어떤 실패도 `init` 을 중단시키지 않는다' "$dashboard_command_file"; then
-    record_failure "$test_name" "T22-74: 실패 비차단 문구 미발견"
-    return 1
+    note_failure "T22-74: 실패 비차단 문구 미발견"
   fi
 
   # T22-75: SSH 가드 — 원격 세션에서 엉뚱한 머신의 브라우저를 여는 사고를 막는다(설계 결정 6).
   if ! grep -qF 'SSH_CONNECTION' "$dashboard_command_file"; then
-    record_failure "$test_name" "T22-75: SSH_CONNECTION 가드 미발견"
-    return 1
+    note_failure "T22-75: SSH_CONNECTION 가드 미발견"
   fi
 
   # T22-76: 브라우저 열기 무재시도 — 열기 실패 시 무한 재시도로 이어지는 회귀를 막는다.
   if ! grep -qF '재시도하지 않고' "$dashboard_command_file"; then
-    record_failure "$test_name" "T22-76: 재시도 금지 문구 미발견"
-    return 1
+    note_failure "T22-76: 재시도 금지 문구 미발견"
   fi
 
   # T22-77: step/log/impl 비발행 — 갱신 명령마다 탭이 열리는 최악의 회귀를 막는다(확정 사항 3).
   if ! grep -qF '서버를 띄우지도, 브라우저를 열지도 않는다' "$dashboard_command_file"; then
-    record_failure "$test_name" "T22-77: step·log·impl 비발행 문구 미발견"
-    return 1
+    note_failure "T22-77: step·log·impl 비발행 문구 미발견"
   fi
 
   # T22-78: serve 의 명시 포트 무추측 규칙 생존(역방향) — 자동 스캔을 넣으며 명시 포트의
   # 무추측 규칙까지 지워 버리는 회귀를 막는다.
   if ! grep -qF '다른 포트를 **추측해서 재시도하지 말고**' "$dashboard_command_file"; then
-    record_failure "$test_name" "T22-78: serve 의 명시 포트 무추측 규칙 미발견"
-    return 1
+    note_failure "T22-78: serve 의 명시 포트 무추측 규칙 미발견"
   fi
 
   # T22-79: stop 안내에 포트 포함 — 자동 경로가 8792 를 썼는데 안내가 8791 을 죽이라고 하면
   # 엉뚱한 서버를 끈다.
   if ! grep -qF '/dashboard serve stop {포트}' "$dashboard_command_file"; then
-    record_failure "$test_name" "T22-79: /dashboard serve stop {포트} 미발견"
-    return 1
+    note_failure "T22-79: /dashboard serve stop {포트} 미발견"
   fi
 
   # T22-80: 템플릿의 #dz-log 여는 태그에 포트 각인 슬롯이 비어 있는 상태로 존재하는지 확인 —
@@ -1644,8 +1602,7 @@ test_dashboard_template_integrity() {
   local autopublish_call_section serve_start_section serve_stop_section
   autopublish_call_section=$(sed -n '/^### 3\. URL 확정과 포트 각인/,/^### 4\./p' "$dashboard_command_file")
   if [[ -z "$autopublish_call_section" ]]; then
-    record_failure "$test_name" "T22-81: 「자동 발행」 3단계(URL 확정과 포트 각인) 범위 추출 실패 — 앵커가 깨졌다"
-    return 1
+    note_failure "T22-81: 「자동 발행」 3단계(URL 확정과 포트 각인) 범위 추출 실패 — 앵커가 깨졌다"
   fi
   if ! grep -qF '[포트 각인]' <<< "$autopublish_call_section"; then
     record_failure "$test_name" "T22-81: 「자동 발행」 3단계에 [포트 각인] 호출 없음(자동으로 뜬 서버가 영영 안 죽는 회귀)"
@@ -1653,8 +1610,7 @@ test_dashboard_template_integrity() {
   fi
   serve_start_section=$(sed -n '/^3\. 아래를 \*\*백그라운드\*\*/,/^4\. `stop`/p' "$dashboard_command_file")
   if [[ -z "$serve_start_section" ]]; then
-    record_failure "$test_name" "T22-81: serve 3단계(기동) 범위 추출 실패 — 앵커가 깨졌다"
-    return 1
+    note_failure "T22-81: serve 3단계(기동) 범위 추출 실패 — 앵커가 깨졌다"
   fi
   if ! grep -qF '[포트 각인]' <<< "$serve_start_section"; then
     record_failure "$test_name" "T22-81: serve 3단계(기동 성공 시)에 [포트 각인] 호출 없음(수동 serve 서버가 영영 안 죽는 회귀)"
@@ -1662,8 +1618,7 @@ test_dashboard_template_integrity() {
   fi
   serve_stop_section=$(sed -n '/^4\. `stop`/,/^5\. 위 \[자동 발행\]/p' "$dashboard_command_file")
   if [[ -z "$serve_stop_section" ]]; then
-    record_failure "$test_name" "T22-81: serve 4단계(stop) 범위 추출 실패 — 앵커가 깨졌다"
-    return 1
+    note_failure "T22-81: serve 4단계(stop) 범위 추출 실패 — 앵커가 깨졌다"
   fi
   if ! grep -qF '[포트 각인]' <<< "$serve_stop_section"; then
     record_failure "$test_name" "T22-81: serve 4단계(stop 시)에 [포트 각인] 호출 없음(각인 해제 누락 — 낡은 각인이 다른 프로젝트 서버를 끄는 회귀)"
@@ -1674,8 +1629,7 @@ test_dashboard_template_integrity() {
   local log_section
   log_section=$(sed -n '/^## `log`/,/^## 자동 발행/p' "$dashboard_command_file")
   if ! grep -qF 'pkill -f "http.server' <<< "$log_section"; then
-    record_failure "$test_name" "T22-82: log 절에서 pkill 자동 종료 로직 미발견"
-    return 1
+    note_failure "T22-82: log 절에서 pkill 자동 종료 로직 미발견"
   fi
   if ! grep -qF '첫 인자가 `commit` 일 때만' <<< "$log_section"; then
     record_failure "$test_name" "T22-82: log 절에서 commit 전용 분기 조건 미발견"
@@ -1688,8 +1642,7 @@ test_dashboard_template_integrity() {
   local step_impl_section
   step_impl_section=$(sed -n '/^## `step`/,/^## `log`/p' "$dashboard_command_file")
   if [[ -z "$step_impl_section" ]]; then
-    record_failure "$test_name" "T22-83: step·impl 절 범위 추출 실패 — 앵커가 깨졌다"
-    return 1
+    note_failure "T22-83: step·impl 절 범위 추출 실패 — 앵커가 깨졌다"
   fi
   if grep -q 'pkill' <<< "$step_impl_section"; then
     record_failure "$test_name" "T22-83: step·impl 절 범위에 pkill 이 번져 있음"
@@ -1700,8 +1653,7 @@ test_dashboard_template_integrity() {
   local script_block
   script_block=$(sed -n '/^<script>/,/<\/script>/p' "$dashboard_command_file")
   if [[ -z "$script_block" ]]; then
-    record_failure "$test_name" "T22-84: <script> 블록 범위 추출 실패 — 앵커가 깨졌다"
-    return 1
+    note_failure "T22-84: <script> 블록 범위 추출 실패 — 앵커가 깨졌다"
   fi
   if grep -q 'data-server-port' <<< "$script_block"; then
     record_failure "$test_name" "T22-84: <script> 블록이 data-server-port 를 참조함(불변식 8 위반)"
@@ -1713,24 +1665,20 @@ test_dashboard_template_integrity() {
   local poll_body
   poll_body=$(sed -n '/function poll(){/,/setInterval(poll,/p' "$dashboard_command_file")
   if [[ -z "$poll_body" ]]; then
-    record_failure "$test_name" "T22-85: poll() 범위 추출 실패 — 앵커가 깨졌다"
-    return 1
+    note_failure "T22-85: poll() 범위 추출 실패 — 앵커가 깨졌다"
   fi
   if grep -q 'close()\|location.reload' <<< "$poll_body"; then
-    record_failure "$test_name" "T22-85: poll() 실패 경로에서 close()/location.reload 발견 — PiP 고정 회귀"
-    return 1
+    note_failure "T22-85: poll() 실패 경로에서 close()/location.reload 발견 — PiP 고정 회귀"
   fi
 
   # T22-86: sleep 6 지연과 그 근거(POLL_INTERVAL_MS) — 지연을 "불필요한 대기"로 오해해
   # 지우면 커밋 화면이 PiP 에 닿지 못한다. log 절 범위로 좁혀서 검사한다(파일 전역이면
   # 이 지연이 log commit 경로 밖으로 옮겨져도 통과해 버린다).
   if ! grep -qF 'sleep 6 && pkill' <<< "$log_section"; then
-    record_failure "$test_name" "T22-86: log 절 범위에서 sleep 6 && pkill 미발견"
-    return 1
+    note_failure "T22-86: log 절 범위에서 sleep 6 && pkill 미발견"
   fi
   if ! grep -qF 'POLL_INTERVAL_MS' <<< "$log_section"; then
-    record_failure "$test_name" "T22-86: log 절 범위에서 POLL_INTERVAL_MS 근거 문구 미발견"
-    return 1
+    note_failure "T22-86: log 절 범위에서 POLL_INTERVAL_MS 근거 문구 미발견"
   fi
 
   # T22-87: 종료 코드 1(이미 꺼진 서버) 비에러 처리 문구 — 없으면 커밋 턴마다 불필요한
@@ -1745,20 +1693,17 @@ test_dashboard_template_integrity() {
   local session_relic
   for session_relic in 'data-current-session' 'data-session=' 'sessionTabsChanged' 'dzs-'; do
     if grep -qF -- "$session_relic" "$dashboard_command_file"; then
-      record_failure "$test_name" "T22-91: 세션 탭 잔재 발견: $session_relic"
-      return 1
+      note_failure "T22-91: 세션 탭 잔재 발견: $session_relic"
     fi
   done
 
   # T22-92(역방향+정방향): 부제(#dz-subtitle) 잔재 전무 확인 — 셀렉터·마크업이 모두 사라지고
   # 동적 셀렉터 표 제목이 6종으로 갱신됐는지 함께 본다.
   if grep -qF 'dz-subtitle' "$dashboard_command_file"; then
-    record_failure "$test_name" "T22-92: dz-subtitle 잔재 발견"
-    return 1
+    note_failure "T22-92: dz-subtitle 잔재 발견"
   fi
   if grep -qF 'class="sub"' "$dashboard_command_file"; then
-    record_failure "$test_name" "T22-92: class=\"sub\" 잔재 발견"
-    return 1
+    note_failure "T22-92: class=\"sub\" 잔재 발견"
   fi
   if ! grep -qF '동적(치환 대상) — 6 셀렉터' "$dashboard_command_file"; then
     record_failure "$test_name" "T22-92: 동적 셀렉터 표 제목이 6 셀렉터로 갱신되지 않음"
@@ -1770,16 +1715,13 @@ test_dashboard_template_integrity() {
   local init_section
   init_section=$(sed -n '/^## `init`/,/^## `step`/p' "$dashboard_command_file")
   if [[ -z "$init_section" ]]; then
-    record_failure "$test_name" "T22-93: init 절 범위 추출 실패 — 앵커가 깨졌다"
-    return 1
+    note_failure "T22-93: init 절 범위 추출 실패 — 앵커가 깨졌다"
   fi
   if grep -qF '이미 존재하면' <<< "$init_section"; then
-    record_failure "$test_name" "T22-93: init 절에 '이미 존재하면' 분기가 남아있음"
-    return 1
+    note_failure "T22-93: init 절에 '이미 존재하면' 분기가 남아있음"
   fi
   if ! grep -qF 'rm -f .claude/dashboard.html' <<< "$init_section"; then
-    record_failure "$test_name" "T22-93: init 절에 rm -f .claude/dashboard.html 미발견"
-    return 1
+    note_failure "T22-93: init 절에 rm -f .claude/dashboard.html 미발견"
   fi
   if ! grep -qF '읽지 않은 기존 파일을 덮어쓰지 못한다' <<< "$init_section"; then
     record_failure "$test_name" "T22-93: Write 도구 제약 근거 문구 미발견"
@@ -1791,12 +1733,10 @@ test_dashboard_template_integrity() {
   local browser_open_section
   browser_open_section=$(sed -n '/^### 4\. 브라우저 열기/,/^### 5\./p' "$dashboard_command_file")
   if [[ -z "$browser_open_section" ]]; then
-    record_failure "$test_name" "T22-94: 브라우저 열기 절 범위 추출 실패 — 앵커가 깨졌다"
-    return 1
+    note_failure "T22-94: 브라우저 열기 절 범위 추출 실패 — 앵커가 깨졌다"
   fi
   if ! grep -qF '전면으로 올리는' <<< "$browser_open_section"; then
-    record_failure "$test_name" "T22-94: 탭 활성화(전면) 지시 미발견"
-    return 1
+    note_failure "T22-94: 탭 활성화(전면) 지시 미발견"
   fi
   if grep -qF 'open -g' "$dashboard_command_file"; then
     record_failure "$test_name" "T22-94: open -g(백그라운드) 옵션 문자열 발견"
@@ -1808,30 +1748,26 @@ test_dashboard_template_integrity() {
   local now_card_relic
   for now_card_relic in 'dz-now-card' 'dz-now-elapsed' 'dz-now-since' 'dz-now-next' 'renderNowCard' 'data-started-at' 'now-row' 'now-label' 'now-value' 'now-title'; do
     if grep -qF -- "$now_card_relic" "$dashboard_command_file"; then
-      record_failure "$test_name" "T22-96: 「지금」 카드 잔재 발견: $now_card_relic"
-      return 1
+      note_failure "T22-96: 「지금」 카드 잔재 발견: $now_card_relic"
     fi
   done
 
   # T22-97(R1): body.dz-embedded #dz-pip-btn CSS 규칙 존재 — 허브 모달 안에서 플로팅 버튼을
   # 숨기는 규칙 자체가 없으면 R1 전체가 죽어 있다.
   if ! grep -qF 'body.dz-embedded #dz-pip-btn' "$dashboard_command_file"; then
-    record_failure "$test_name" "T22-97: body.dz-embedded #dz-pip-btn CSS 규칙 미발견"
-    return 1
+    note_failure "T22-97: body.dz-embedded #dz-pip-btn CSS 규칙 미발견"
   fi
 
   # T22-98(R1): 임베드 판정식 — self !== top 이 없으면 늘 false 로 오판정한다.
   if ! grep -qF 'window.self !== window.top' "$dashboard_command_file"; then
-    record_failure "$test_name" "T22-98: window.self !== window.top 판정식 미발견"
-    return 1
+    note_failure "T22-98: window.self !== window.top 판정식 미발견"
   fi
 
   # T22-99(R1, GOTCHA 3): isEmbedded 는 선언 1 + 사용 1, 정확히 2줄이어야 한다 — 그 이상이면
   # 문서 산문에도 그 식별자를 쓴 것이고, if(isEmbedded) return 이 있으면 폴링이 임베드
   # 판정으로 조기 반환하는 회귀다(결정 B2).
   if [[ "$(grep -c 'isEmbedded' "$dashboard_command_file")" -ne 2 ]]; then
-    record_failure "$test_name" "T22-99: isEmbedded 등장 횟수가 정확히 2가 아님"
-    return 1
+    note_failure "T22-99: isEmbedded 등장 횟수가 정확히 2가 아님"
   fi
   if grep -qE 'if\(isEmbedded\) return' "$dashboard_command_file"; then
     record_failure "$test_name" "T22-99: if(isEmbedded) return 발견(폴링 조기 반환 회귀)"
@@ -1842,16 +1778,14 @@ test_dashboard_template_integrity() {
   local r2_step3a_token
   for r2_step3a_token in '### 3-a. 열기 대상 확정' 'NOHUB' 'server-status --json' '열기 대상 URL'; do
     if ! grep -qF -- "$r2_step3a_token" "$dashboard_command_file"; then
-      record_failure "$test_name" "T22-100: 3-a 절 토큰 미발견: $r2_step3a_token"
-      return 1
+      note_failure "T22-100: 3-a 절 토큰 미발견: $r2_step3a_token"
     fi
   done
 
   # T22-101(R2, 결정 F3 → hub-detail-side-panel.md 승인 항목 6): 허브 기본 포트를 하드코딩하지
   # 않는다(역방향) + 보고 표에 패널 문구 존재(결정 F5 의 대시보드 URL 병기 회귀 방지).
   if grep -qF '8794' "$dashboard_command_file"; then
-    record_failure "$test_name" "T22-101: 허브 기본 포트(8794) 가 하드코딩됨"
-    return 1
+    note_failure "T22-101: 허브 기본 포트(8794) 가 하드코딩됨"
   fi
   if ! grep -qF '패널' "$dashboard_command_file"; then
     record_failure "$test_name" "T22-101: 보고 표에 '패널' 문구 미발견(대시보드 URL 병기 회귀)"
@@ -1868,40 +1802,34 @@ test_dashboard_template_integrity() {
   local r6_token
   for r6_token in 'FOCUSED' 'NOTFOUND' 'UNSUPPORTED' 'osascript'; do
     if ! grep -qF -- "$r6_token" <<< "$browser_open_r6_section"; then
-      record_failure "$test_name" "T22-102: 4번 범위에 $r6_token 미발견"
-      return 1
+      note_failure "T22-102: 4번 범위에 $r6_token 미발견"
     fi
   done
 
   # T22-103(R6, 가장 값진 검사): ① is running 검사 존재(GOTCHA 10 — 없으면 꺼진 브라우저를
   # 실행시킨다) ② 4번 범위에 '2-b 를 건너뛰고' 또는 '끝이다' 존재(GOTCHA 11 — 중복 탭 방지).
   if ! grep -qF 'is running' "$dashboard_command_file"; then
-    record_failure "$test_name" "T22-103: 'is running' 검사 미발견(꺼진 브라우저를 실행시키는 회귀)"
-    return 1
+    note_failure "T22-103: 'is running' 검사 미발견(꺼진 브라우저를 실행시키는 회귀)"
   fi
   if ! grep -qF '2-b 를 건너뛰고' <<< "$browser_open_r6_section" \
     && ! grep -qF '끝이다' <<< "$browser_open_r6_section"; then
-    record_failure "$test_name" "T22-103: 4번 범위에 '2-b 를 건너뛰고' 또는 '끝이다' 미발견(중복 탭 회귀)"
-    return 1
+    note_failure "T22-103: 4번 범위에 '2-b 를 건너뛰고' 또는 '끝이다' 미발견(중복 탭 회귀)"
   fi
 
   # T22-104(R6, 결정 TR4 역방향): URL 매칭은 정확 일치여야 한다 — 느슨한 매칭 흔적이 있으면
   # 남의 프로젝트 탭을 앞으로 가져올 수 있다.
   if ! grep -qF 'URL of' <<< "$browser_open_r6_section"; then
-    record_failure "$test_name" "T22-104: 'URL of' 미발견(URL 비교 코드 자체가 없음)"
-    return 1
+    note_failure "T22-104: 'URL of' 미발견(URL 비교 코드 자체가 없음)"
   fi
   if grep -qE 'starts with|contains' <<< "$browser_open_r6_section"; then
-    record_failure "$test_name" "T22-104: 느슨한 매칭 흔적(starts with/contains) 발견"
-    return 1
+    note_failure "T22-104: 느슨한 매칭 흔적(starts with/contains) 발견"
   fi
 
   # T22-105(R1): 템플릿의 #dz-log 여는 태그에 data-owner-token 속성이 추가됐다 —
   # 속성 순서(id → data-owner-token → data-server-port)까지 고정한다(절차 (4)의 Edit
   # old_string 이 이 순서를 전제한다). 역방향: 토큰 없는 옛 줄이 남아있지 않다.
   if ! grep -qF 'id="dz-log" data-owner-token="" data-server-port=""' "$dashboard_command_file"; then
-    record_failure "$test_name" "T22-105: #dz-log 여는 태그에 data-owner-token 속성 미발견(순서 포함)"
-    return 1
+    note_failure "T22-105: #dz-log 여는 태그에 data-owner-token 속성 미발견(순서 포함)"
   fi
   if grep -qF 'id="dz-log" data-server-port=""></ul>' "$dashboard_command_file"; then
     record_failure "$test_name" "T22-105: 토큰 없는 옛 #dz-log 줄이 남아있음"
@@ -1915,8 +1843,7 @@ test_dashboard_template_integrity() {
   local init_ownership_token
   for init_ownership_token in 'ABSENT' 'RECENT' 'STALE' '/dev/urandom' 'data-owner-token'; do
     if ! grep -qF -- "$init_ownership_token" <<< "$init_section"; then
-      record_failure "$test_name" "T22-106: init 절 범위에서 토큰 미발견: $init_ownership_token"
-      return 1
+      note_failure "T22-106: init 절 범위에서 토큰 미발견: $init_ownership_token"
     fi
   done
   if grep -qF '**Edit 하지 않는다.**' <<< "$init_section"; then
@@ -1930,16 +1857,13 @@ test_dashboard_template_integrity() {
   local step_section
   step_section=$(sed -n '/^## `step`/,/^## `impl`/p' "$dashboard_command_file")
   if [[ -z "$step_section" ]]; then
-    record_failure "$test_name" "T22-107: step 절 범위 추출 실패 — 앵커가 깨졌다"
-    return 1
+    note_failure "T22-107: step 절 범위 추출 실패 — 앵커가 깨졌다"
   fi
   if ! grep -qF -- "-e 'id=\"dz-log\"'" <<< "$step_section"; then
-    record_failure "$test_name" "T22-107: step 절에 소유권 검증용 grep 패턴 미발견"
-    return 1
+    note_failure "T22-107: step 절에 소유권 검증용 grep 패턴 미발견"
   fi
   if ! grep -qF '항상 4줄' <<< "$step_section"; then
-    record_failure "$test_name" "T22-107: step 절에 '항상 4줄' 문구 미발견"
-    return 1
+    note_failure "T22-107: step 절에 '항상 4줄' 문구 미발견"
   fi
   if grep -qF '결과는 항상 3줄' <<< "$step_section"; then
     record_failure "$test_name" "T22-107: step 절에 옛 '결과는 항상 3줄' 문구가 남아있음(반쪽 구현)"
@@ -1951,20 +1875,16 @@ test_dashboard_template_integrity() {
   local impl_section
   impl_section=$(sed -n '/^## `impl`/,/^## `log`/p' "$dashboard_command_file")
   if [[ -z "$impl_section" ]]; then
-    record_failure "$test_name" "T22-108: impl 절 범위 추출 실패 — 앵커가 깨졌다"
-    return 1
+    note_failure "T22-108: impl 절 범위 추출 실패 — 앵커가 깨졌다"
   fi
   if ! grep -qF 'id="dz-log"' <<< "$impl_section"; then
-    record_failure "$test_name" "T22-108: impl 절에 id=\"dz-log\" 미발견"
-    return 1
+    note_failure "T22-108: impl 절에 id=\"dz-log\" 미발견"
   fi
   if ! grep -qF '항상 3줄' <<< "$impl_section"; then
-    record_failure "$test_name" "T22-108: impl 절에 '항상 3줄' 문구 미발견"
-    return 1
+    note_failure "T22-108: impl 절에 '항상 3줄' 문구 미발견"
   fi
   if ! grep -qF '그 줄을 뺀 나머지' <<< "$impl_section"; then
-    record_failure "$test_name" "T22-108: impl set 0단계에 '그 줄을 뺀 나머지' 문구 미발견(GOTCHA 1)"
-    return 1
+    note_failure "T22-108: impl set 0단계에 '그 줄을 뺀 나머지' 문구 미발견(GOTCHA 1)"
   fi
   if grep -qF '결과는 항상 2줄' <<< "$impl_section"; then
     record_failure "$test_name" "T22-108: impl 절에 옛 '결과는 항상 2줄' 문구가 남아있음(반쪽 구현)"
@@ -1989,8 +1909,7 @@ test_dashboard_template_integrity() {
   local script_token_leak
   for script_token_leak in "getAttribute('data-owner-token'" 'dataset.ownerToken' "querySelector('[data-owner-token"; do
     if grep -qF -- "$script_token_leak" "$dashboard_command_file"; then
-      record_failure "$test_name" "T22-109: 스크립트가 토큰을 읽는 흔적 발견(불변식 9 위반): $script_token_leak"
-      return 1
+      note_failure "T22-109: 스크립트가 토큰을 읽는 흔적 발견(불변식 9 위반): $script_token_leak"
     fi
   done
 
@@ -2008,8 +1927,7 @@ test_dashboard_template_integrity() {
   local ownership_vocab
   for ownership_vocab in 'MINE' 'FOREIGN' 'SKIP'; do
     if ! grep -qF -- "$ownership_vocab" "$dashboard_command_file"; then
-      record_failure "$test_name" "T22-110: 소유권 검증 어휘 미발견: $ownership_vocab"
-      return 1
+      note_failure "T22-110: 소유권 검증 어휘 미발견: $ownership_vocab"
     fi
   done
   if ! grep -qF 'Bash 호출을 새로 만들지 않는다' "$dashboard_command_file"; then
@@ -2019,27 +1937,22 @@ test_dashboard_template_integrity() {
   local log_section
   log_section=$(sed -n '/^## `log`/,/^## 자동 발행/p' "$dashboard_command_file")
   if [[ -z "$log_section" ]]; then
-    record_failure "$test_name" "T22-110: log 절 범위 추출 실패 — 앵커가 깨졌다"
-    return 1
+    note_failure "T22-110: log 절 범위 추출 실패 — 앵커가 깨졌다"
   fi
   if ! grep -qF 'FOREIGN' <<< "$step_section"; then
-    record_failure "$test_name" "T22-110: step 절에 FOREIGN(소유권 검증) 참조 미발견(반쪽 구현)"
-    return 1
+    note_failure "T22-110: step 절에 FOREIGN(소유권 검증) 참조 미발견(반쪽 구현)"
   fi
   if ! grep -qF 'FOREIGN' <<< "$impl_section"; then
-    record_failure "$test_name" "T22-110: impl 절에 FOREIGN(소유권 검증) 참조 미발견(반쪽 구현)"
-    return 1
+    note_failure "T22-110: impl 절에 FOREIGN(소유권 검증) 참조 미발견(반쪽 구현)"
   fi
   if ! grep -qF 'FOREIGN' <<< "$log_section"; then
-    record_failure "$test_name" "T22-110: log 절에 FOREIGN(소유권 검증) 참조 미발견(반쪽 구현)"
-    return 1
+    note_failure "T22-110: log 절에 FOREIGN(소유권 검증) 참조 미발견(반쪽 구현)"
   fi
 
   # T22-111(허브 T25-28 과 대칭): 다크 테마는 미디어 쿼리 + data-theme 속성 오버라이드 둘 다로
   # 성립해야 한다 — 한쪽만 남으면 localStorage 차단 환경 또는 수동 오버라이드가 죽는다.
   if ! grep -qF "prefers-color-scheme" "$dashboard_command_file"; then
-    record_failure "$test_name" "T22-111: prefers-color-scheme 가 없음"
-    return 1
+    note_failure "T22-111: prefers-color-scheme 가 없음"
   fi
   if ! grep -qF ':root[data-theme="dark"]' "$dashboard_command_file"; then
     record_failure "$test_name" "T22-111: :root[data-theme=\"dark\"] 가 없음"
@@ -2074,14 +1987,12 @@ test_dashboard_template_integrity() {
   wrap_end_line=$(grep -n 'id="dz-updated"' "$dashboard_command_file" | tail -1 | cut -d: -f1)
   if [[ -z "$theme_toggle_line" || -z "$wrap_open_line" || -z "$wrap_end_line" ]] \
     || { [[ "$theme_toggle_line" -ge "$wrap_open_line" ]] && [[ "$theme_toggle_line" -le "$wrap_end_line" ]]; }; then
-    record_failure "$test_name" "T22-114: 테마 토글이 .wrap 범위 안에 있음(.wrap 바깥이어야 한다)"
-    return 1
+    note_failure "T22-114: 테마 토글이 .wrap 범위 안에 있음(.wrap 바깥이어야 한다)"
   fi
 
   # T22-115: 허브 모달(iframe) 안에서는 테마 토글이 숨어야 한다 — 남으면 허브 토글과 중복된다.
   if ! grep -qF 'body.dz-embedded #dz-theme-toggle' "$dashboard_command_file"; then
-    record_failure "$test_name" "T22-115: body.dz-embedded #dz-theme-toggle CSS 규칙 미발견"
-    return 1
+    note_failure "T22-115: body.dz-embedded #dz-theme-toggle CSS 규칙 미발견"
   fi
 
   # T22-116: PiP 창으로 data-theme 를 전파하는 코드가 있는지 — 없으면 다크에서 플로팅 창만
@@ -2096,33 +2007,28 @@ test_dashboard_template_integrity() {
   local legacy_hex_literal
   for legacy_hex_literal in '#E5F3EE' '#EAF2FB' '#FBE9E2' '#E7EAF3' '#2D78C8' '#4B5A6D' '#1F8A70' '#C2410C' '#F59E0B'; do
     if grep -qF -- "$legacy_hex_literal" "$dashboard_command_file"; then
-      record_failure "$test_name" "T22-117: 색각 안전성 없는 구형 리터럴이 남아 있음: $legacy_hex_literal"
-      return 1
+      note_failure "T22-117: 색각 안전성 없는 구형 리터럴이 남아 있음: $legacy_hex_literal"
     fi
   done
 
   # T22-118(단방향 읽기 계약, iframe 테마 동기화 안 D): 'dzh-theme' 리터럴은 존재해야 하지만,
   # 대시보드가 이 키에 쓰는 코드(setItem('dzh-theme')는 없어야 한다 — 소유자는 허브뿐이다.
   if ! grep -qF "'dzh-theme'" "$dashboard_command_file"; then
-    record_failure "$test_name" "T22-118: 'dzh-theme' 리터럴 미발견(허브 모달 테마 동기화 코드 자체가 없음)"
-    return 1
+    note_failure "T22-118: 'dzh-theme' 리터럴 미발견(허브 모달 테마 동기화 코드 자체가 없음)"
   fi
   if grep -qF "setItem('dzh-theme'" "$dashboard_command_file"; then
-    record_failure "$test_name" "T22-118: setItem('dzh-theme' 발견 — 대시보드가 허브 키에 쓰고 있음(단방향 읽기 계약 위반)"
-    return 1
+    note_failure "T22-118: setItem('dzh-theme' 발견 — 대시보드가 허브 키에 쓰고 있음(단방향 읽기 계약 위반)"
   fi
   # 실제 쓰기 지점(setItem(storageKey, ...))은 리터럴이 아니라 변수를 거치므로 위 grep 만으로는
   # 우회 가능하다 — 클릭 핸들러 안에 명시적 embedded 가드가 있는지도 확인한다(검수 지적 반영).
   if ! grep -A2 "themeToggleButton.addEventListener('click'" "$dashboard_command_file" | grep -qF 'if(embedded) return;'; then
-    record_failure "$test_name" "T22-118: 테마 토글 클릭 핸들러에 embedded 가드 없음(CSS display:none 에만 의존)"
-    return 1
+    note_failure "T22-118: 테마 토글 클릭 핸들러에 embedded 가드 없음(CSS display:none 에만 의존)"
   fi
 
   # T22-119(문서=스펙 정합): 「정적 요소」 표에 테마 토글 행, 폴링 계약 표에 data-theme 언급이
   # 있어야 한다 — 코드만 바뀌고 스펙 문서가 뒤처지는 회귀를 막는다.
   if ! grep -qF '#dz-theme-toggle` | 라이트/다크 테마 토글' "$dashboard_command_file"; then
-    record_failure "$test_name" "T22-119: 「정적 요소 추가」 표에 #dz-theme-toggle 행 미발견"
-    return 1
+    note_failure "T22-119: 「정적 요소 추가」 표에 #dz-theme-toggle 행 미발견"
   fi
   if ! grep -qF '<html data-theme>' "$dashboard_command_file"; then
     record_failure "$test_name" "T22-119: 폴링 계약 표에 <html data-theme> 언급 미발견"
@@ -2169,25 +2075,21 @@ test_dashboard_template_integrity() {
   local top_actions_css_line
   top_actions_css_line=$(grep -n '#dz-top-actions{' "$dashboard_command_file" | tail -1)
   if [[ -z "$top_actions_css_line" ]]; then
-    record_failure "$test_name" "T22-123: #dz-top-actions{ CSS 규칙 줄 미발견"
-    return 1
+    note_failure "T22-123: #dz-top-actions{ CSS 규칙 줄 미발견"
   fi
   if grep -qF 'position:fixed' <<< "$top_actions_css_line"; then
-    record_failure "$test_name" "T22-123: #dz-top-actions 에 position:fixed 가 남아있음(흐름 배치 회귀)"
-    return 1
+    note_failure "T22-123: #dz-top-actions 에 position:fixed 가 남아있음(흐름 배치 회귀)"
   fi
 
   # T22-124(프로젝트 헤더): 허브 모달에서 프로젝트 명이 모달 제목과 중복 표시되는 회귀 방지.
   if ! grep -qF 'body.dz-embedded #dz-page-head' "$dashboard_command_file"; then
-    record_failure "$test_name" "T22-124: body.dz-embedded #dz-page-head CSS 규칙 미발견"
-    return 1
+    note_failure "T22-124: body.dz-embedded #dz-page-head CSS 규칙 미발견"
   fi
 
   # T22-125(프로젝트 헤더, T22-119 와 대칭): 값 출처(basename "$PWD")가 사라져 헤더가 플레이스홀더로
   # 남는 회귀 + 코드만 바뀌고 스펙 문서(구조 요소 목록)가 뒤처지는 회귀를 함께 막는다.
   if ! grep -qF 'basename "$PWD"' "$dashboard_command_file"; then
-    record_failure "$test_name" "T22-125: basename \"\$PWD\" 미발견(프로젝트 명 값 출처 없음)"
-    return 1
+    note_failure "T22-125: basename \"\$PWD\" 미발견(프로젝트 명 값 출처 없음)"
   fi
   if ! grep -qF '`#dz-project-name` — 프로젝트 표시 이름' "$dashboard_command_file"; then
     record_failure "$test_name" "T22-125: 구조 요소 목록에 #dz-project-name 행 미발견"
@@ -2205,20 +2107,17 @@ test_dashboard_template_integrity() {
   local progress_guard_token
   for progress_guard_token in '진행 단계 목록에' '커밋' 'log commit' '검수 완료가 곧 100%'; do
     if ! grep -qF -- "$progress_guard_token" <<< "$call_convention_section"; then
-      record_failure "$test_name" "T22-126: 진행 단계 가드 문구 토큰 미발견: $progress_guard_token"
-      return 1
+      note_failure "T22-126: 진행 단계 가드 문구 토큰 미발견: $progress_guard_token"
     fi
   done
 
   # T22-127(요청 2): 복사용 표준 단계 목록 리터럴과 init 파싱 시 커밋/푸시 제외 규칙이 사라지는
   # 회귀 방지.
   if ! grep -qF '설계|승인|구현|검수' "$dashboard_command_file"; then
-    record_failure "$test_name" "T22-127: 표준 단계 목록 리터럴(설계|승인|구현|검수) 미발견"
-    return 1
+    note_failure "T22-127: 표준 단계 목록 리터럴(설계|승인|구현|검수) 미발견"
   fi
   if ! grep -qF '제외하고 진행' "$dashboard_command_file"; then
-    record_failure "$test_name" "T22-127: init 3단계에 '제외하고 진행' 문구 미발견"
-    return 1
+    note_failure "T22-127: init 3단계에 '제외하고 진행' 문구 미발견"
   fi
 
   # T22-128(허브 상세 패널 가로 넘침 회귀 방지): `.entry .detail` 은 `white-space:pre-wrap` 만
@@ -2226,12 +2125,10 @@ test_dashboard_template_integrity() {
   # 접지 못해 상자를 뚫고 나갔다 — 폭 550px 인 허브 패널에서 실측 clientWidth 399 / scrollWidth
   # 504. `break-word` 가 아니라 `anywhere` 를 고정하는 이유는 dashboard.md 의 규칙 주석에 있다.
   if ! grep -qE '\.entry \.detail\{[^}]*white-space:pre-wrap;overflow-wrap:anywhere\}' "$dashboard_command_file"; then
-    record_failure "$test_name" "T22-128: .entry .detail 규칙에 overflow-wrap:anywhere 가 없음(가로 넘침 회귀)"
-    return 1
+    note_failure "T22-128: .entry .detail 규칙에 overflow-wrap:anywhere 가 없음(가로 넘침 회귀)"
   fi
 
-  log_ok "$test_name 통과"
-  ((passed_tests++))
+  finish_group "$test_name"
 }
 
 # T23: 대시보드 옵션의 대화형 설치·사후 전환 절차 문서 정합성 (하위 검증 T23-1~T23-11).
@@ -2354,6 +2251,7 @@ test_hub_unit_tests() {
 
 # T25: 허브 문서·상수 정합성 (하위 검증 T25-1~T25-110)
 test_hub_docs_and_constants() {
+  group_failures=()   # 앞 그룹이 조기 return 했을 때의 잔여물 제거
   local test_name="T25"
   local test_desc="허브 문서·상수 정합성 (T25-1~T25-110)"
   log_test_name "$test_name" "$test_desc"
@@ -2411,47 +2309,39 @@ test_hub_docs_and_constants() {
   local doc_file
   for doc_file in "$hub_settings_file" "$hub_command_file" "$hub_readme_file"; do
     if ! grep -qF "$marker" "$doc_file"; then
-      record_failure "$test_name" "T25-3: $marker 마커 미발견: $doc_file"
-      return 1
+      note_failure "T25-3: $marker 마커 미발견: $doc_file"
     fi
   done
 
   # T25-4: 훅 커맨드 문자열에 || true 와 >/dev/null 이 모두 있다
   if ! grep -F "|| true" "$hub_settings_file" | grep -qF ">/dev/null"; then
-    record_failure "$test_name" "T25-4: 훅 커맨드에 || true 와 >/dev/null 이 한 줄에 함께 없음"
-    return 1
+    note_failure "T25-4: 훅 커맨드에 || true 와 >/dev/null 이 한 줄에 함께 없음"
   fi
 
   # T25-5: type: "http" 를 쓰지 말라는 근거 문구
   if ! grep -qF 'type: "http"' "$hub_command_file"; then
-    record_failure "$test_name" "T25-5: type:\"http\" 관련 근거 문구 미발견"
-    return 1
+    note_failure "T25-5: type:\"http\" 관련 근거 문구 미발견"
   fi
 
   # T25-6: dashboard.md 에 불변식 2·5 문구가 여전히 존재한다 (티어 1 파서의 전제)
   if ! grep -qF '<li id="dz-step-…">' "$dashboard_command_file"; then
-    record_failure "$test_name" "T25-6: 불변식 2 문구(dz-step) 미발견"
-    return 1
+    note_failure "T25-6: 불변식 2 문구(dz-step) 미발견"
   fi
   if ! grep -qF '<li id="dz-impl-…">' "$dashboard_command_file"; then
-    record_failure "$test_name" "T25-6: 불변식 5 문구(dz-impl) 미발견"
-    return 1
+    note_failure "T25-6: 불변식 5 문구(dz-impl) 미발견"
   fi
 
   # T25-7: hub_hook.py 에 Notification 문자열이 없다 (미설치 결정의 회귀 방지)
   if grep -q "Notification" "$hub_hook_file"; then
-    record_failure "$test_name" "T25-7: hub_hook.py 에 Notification 문자열이 존재함"
-    return 1
+    note_failure "T25-7: hub_hook.py 에 Notification 문자열이 존재함"
   fi
 
   # T25-8(개정 — 포트 상수가 hub_model.py 로 이동): 8794 정합, 8791 부재
   if ! grep -q "8794" "$hub_model_file" || ! grep -q "8794" "$hub_command_file"; then
-    record_failure "$test_name" "T25-8: 포트 8794 가 hub_model.py 또는 commands/hub.md 에 없음"
-    return 1
+    note_failure "T25-8: 포트 8794 가 hub_model.py 또는 commands/hub.md 에 없음"
   fi
   if grep -q "8791" "$hub_model_file" "$hub_command_file"; then
-    record_failure "$test_name" "T25-8: /dashboard 의 포트 8791 이 허브 파일에 등장함"
-    return 1
+    note_failure "T25-8: /dashboard 의 포트 8791 이 허브 파일에 등장함"
   fi
 
   # T25-9: README.md 가 "독립 커맨드 2종"으로 갱신됐다
@@ -2480,22 +2370,18 @@ test_hub_docs_and_constants() {
   # session.short_id 는 더 이상 렌더되지 않고(세션 줄이 agent_runs 로 재구성됨), 대신 세션
   # 줄이 실제로 넣는 동적 값(run.agent_type)이 escapeHtml 을 통과하는지 확인한다.
   if grep -qF "+ session.short_id +" "$hub_template_file"; then
-    record_failure "$test_name" "T25-11: session.short_id 가 escapeHtml 없이 삽입됨(m9 회귀)"
-    return 1
+    note_failure "T25-11: session.short_id 가 escapeHtml 없이 삽입됨(m9 회귀)"
   fi
   if ! grep -qF "escapeHtml(run.agent_type)" "$hub_template_file"; then
-    record_failure "$test_name" "T25-11: 서브에이전트 타입명이 escapeHtml 없이 삽입됨"
-    return 1
+    note_failure "T25-11: 서브에이전트 타입명이 escapeHtml 없이 삽입됨"
   fi
 
   # T25-12(검수 M6 회귀): 티어 1 렌더에 활성 단계·구현 진행·stale 병기가 반영됐다
   if ! grep -qF "renderTier1ActiveStep" "$hub_template_file"; then
-    record_failure "$test_name" "T25-12: 티어 1 렌더에 활성 단계 표시가 없음"
-    return 1
+    note_failure "T25-12: 티어 1 렌더에 활성 단계 표시가 없음"
   fi
   if ! grep -qF "renderTier1ImplProgress" "$hub_template_file"; then
-    record_failure "$test_name" "T25-12: 티어 1 렌더에 구현 진행(impl_done/impl_total) 표시가 없음"
-    return 1
+    note_failure "T25-12: 티어 1 렌더에 구현 진행(impl_done/impl_total) 표시가 없음"
   fi
   if ! grep -qF "직전 " "$hub_template_file"; then
     record_failure "$test_name" "T25-12: stale 세션의 '직전 <base_state>' 병기 문구가 없음"
@@ -2505,8 +2391,7 @@ test_hub_docs_and_constants() {
   # T25-13(검수 M1 회귀): JSON 유니코드 이스케이프로 교체됐고, HTML 엔티티 치환으로 되돌아가지 않았다
   local render_hub_html_file="$REPO_ROOT/hub/bin/hub_model.py"
   if ! grep -qF "u003c" "$render_hub_html_file"; then
-    record_failure "$test_name" "T25-13: render_hub_html 에 JSON 유니코드 이스케이프(u003c)가 없음"
-    return 1
+    note_failure "T25-13: render_hub_html 에 JSON 유니코드 이스케이프(u003c)가 없음"
   fi
   if grep -qF "&lt;" "$render_hub_html_file"; then
     record_failure "$test_name" "T25-13: render_hub_html 이 HTML 엔티티 치환으로 회귀함(M1 회귀)"
@@ -2518,15 +2403,13 @@ test_hub_docs_and_constants() {
   local source_file
   for source_file in "$REPO_ROOT"/hub/bin/*.py "$hub_command_file"; do
     if grep -qE "$serve_leftover_pattern" "$source_file"; then
-      record_failure "$test_name" "T25-14: $source_file 에 폐기된 serve 잔재가 남아 있음"
-      return 1
+      note_failure "T25-14: $source_file 에 폐기된 serve 잔재가 남아 있음"
     fi
   done
 
   # T25-15: hub_server.py 가 SimpleHTTPRequestHandler 를 쓰지 않고 화이트리스트를 갖는다(노출 표면 회귀 방지)
   if grep -qF "SimpleHTTPRequestHandler" "$hub_server_file"; then
-    record_failure "$test_name" "T25-15: hub_server.py 가 SimpleHTTPRequestHandler 를 사용함(디렉토리 전체 노출 위험)"
-    return 1
+    note_failure "T25-15: hub_server.py 가 SimpleHTTPRequestHandler 를 사용함(디렉토리 전체 노출 위험)"
   fi
   if ! grep -qF "ALLOWED_REQUEST_PATHS" "$hub_server_file"; then
     record_failure "$test_name" "T25-15: hub_server.py 에 ALLOWED_REQUEST_PATHS 화이트리스트가 없음"
@@ -2587,12 +2470,10 @@ else:
 PYEOF
 )
   if [[ "$ast_check_output" == "NO_KILL_CALLS_FOUND" ]]; then
-    record_failure "$test_name" "T25-16: hub_daemon.py 에서 os.kill 호출을 찾지 못함"
-    return 1
+    note_failure "T25-16: hub_daemon.py 에서 os.kill 호출을 찾지 못함"
   fi
   if [[ "$ast_check_output" != "OK" ]]; then
-    record_failure "$test_name" "T25-16: 신원 확인 없이 os.kill 을 호출하는 지점 — $ast_check_output"
-    return 1
+    note_failure "T25-16: 신원 확인 없이 os.kill 을 호출하는 지점 — $ast_check_output"
   fi
 
   # T25-17: hub_daemon.py 에 start_new_session=True 가 있다(세션 무관 수명, 요구 R-1 의 기계적 강제)
@@ -2605,14 +2486,12 @@ PYEOF
   local tier3_function_body
   tier3_function_body=$(awk '/^def _tier3_activity_by_encoded_name\(/{flag=1; next} flag && /^def /{exit} flag{print}' "$hub_collect_file")
   if ! echo "$tier3_function_body" | grep -qF "except OSError"; then
-    record_failure "$test_name" "T25-18: _tier3_activity_by_encoded_name 에 except OSError 가드가 없음"
-    return 1
+    note_failure "T25-18: _tier3_activity_by_encoded_name 에 except OSError 가드가 없음"
   fi
 
   # T25-19: commands/hub.md 에 last_collect_failure·event_read_warnings 등장(R3-m2 회귀)
   if ! grep -qF "last_collect_failure" "$hub_command_file"; then
-    record_failure "$test_name" "T25-19: commands/hub.md 에 last_collect_failure 미언급"
-    return 1
+    note_failure "T25-19: commands/hub.md 에 last_collect_failure 미언급"
   fi
   if ! grep -qF "event_read_warnings" "$hub_command_file"; then
     record_failure "$test_name" "T25-19: commands/hub.md 에 event_read_warnings 미언급"
@@ -2642,8 +2521,7 @@ PYEOF
   readme_hub_mentions=$(grep -c "hub" "$readme_file" || true)
   readme_hub_link_count=$(grep -cF "hub/README.md" "$readme_file" || true)
   if [[ "$readme_hub_mentions" -gt 14 ]]; then
-    record_failure "$test_name" "T25-22: README.md 의 허브 언급이 ${readme_hub_mentions}줄(기대 14줄 이하)"
-    return 1
+    note_failure "T25-22: README.md 의 허브 언급이 ${readme_hub_mentions}줄(기대 14줄 이하)"
   fi
   if [[ "$readme_hub_link_count" -eq 0 ]]; then
     record_failure "$test_name" "T25-22: README.md 에 hub/README.md 링크가 없음"
@@ -2656,28 +2534,23 @@ PYEOF
   uninstall_hooks_line=$(grep -n "uninstall-hooks" "$hub_install_file" | head -1 | cut -d: -f1)
   rm_rf_line=$(grep -n 'rm -rf "\$TARGET_BIN_DIR"' "$hub_install_file" | head -1 | cut -d: -f1)
   if [[ -z "$server_stop_line" || -z "$uninstall_hooks_line" || -z "$rm_rf_line" ]]; then
-    record_failure "$test_name" "T25-23: server-stop/uninstall-hooks/rm -rf 셋 중 하나를 hub/install.sh 에서 찾지 못함"
-    return 1
+    note_failure "T25-23: server-stop/uninstall-hooks/rm -rf 셋 중 하나를 hub/install.sh 에서 찾지 못함"
   fi
   if [[ "$server_stop_line" -ge "$rm_rf_line" || "$uninstall_hooks_line" -ge "$rm_rf_line" ]]; then
-    record_failure "$test_name" "T25-23: server-stop·uninstall-hooks 가 rm -rf 보다 앞에 있지 않음(순서 위반)"
-    return 1
+    note_failure "T25-23: server-stop·uninstall-hooks 가 rm -rf 보다 앞에 있지 않음(순서 위반)"
   fi
 
   # T25-24: commands/env-update.md 에 조건부 허브 절과 판정 경로(hub/bin/hub.py)가 있다(R-5 연동 회귀)
   if ! grep -qF "Phase 4b" "$env_update_command_file"; then
-    record_failure "$test_name" "T25-24: commands/env-update.md 에 Phase 4b 절이 없음"
-    return 1
+    note_failure "T25-24: commands/env-update.md 에 Phase 4b 절이 없음"
   fi
   if ! grep -qF "hub/bin/hub.py" "$env_update_command_file"; then
-    record_failure "$test_name" "T25-24: commands/env-update.md 에 판정 경로(hub/bin/hub.py)가 없음"
-    return 1
+    note_failure "T25-24: commands/env-update.md 에 판정 경로(hub/bin/hub.py)가 없음"
   fi
 
   # T25-25: commands/hub.md 사전 조건이 install.sh --scope user 를 안내하지 않고 hub/install.sh 를 안내한다
   if grep -qF "install.sh --scope user 를 먼저 실행" "$hub_command_file"; then
-    record_failure "$test_name" "T25-25: commands/hub.md 가 존재하지 않는 절차(install.sh --scope user)를 안내함"
-    return 1
+    note_failure "T25-25: commands/hub.md 가 존재하지 않는 절차(install.sh --scope user)를 안내함"
   fi
   if ! grep -qF "hub/install.sh" "$hub_command_file"; then
     record_failure "$test_name" "T25-25: commands/hub.md 사전 조건에 hub/install.sh 안내가 없음"
@@ -2721,25 +2594,21 @@ PYEOF
 
   HOME="$sandbox_stop_ok" "$hub_install_file" --uninstall > /dev/null 2>&1
   if [[ -d "$sandbox_stop_ok/.claude/hub/bin" ]]; then
-    record_failure "$test_name" "T25-26: server-stop 성공(압축 JSON)인데 bin/ 이 삭제되지 않음(오판 의심)"
-    return 1
+    note_failure "T25-26: server-stop 성공(압축 JSON)인데 bin/ 이 삭제되지 않음(오판 의심)"
   fi
 
   if HOME="$sandbox_stop_fail" "$hub_install_file" --uninstall > /dev/null 2>&1; then
-    record_failure "$test_name" "T25-26: server-stop 실패인데 hub/install.sh --uninstall 이 성공(exit 0)으로 끝남"
-    return 1
+    note_failure "T25-26: server-stop 실패인데 hub/install.sh --uninstall 이 성공(exit 0)으로 끝남"
   fi
   if [[ ! -f "$sandbox_stop_fail/.claude/hub/bin/hub.py" ]]; then
-    record_failure "$test_name" "T25-26: server-stop 실패 시 bin/ 이 보존되지 않음(정지 수단 소멸)"
-    return 1
+    note_failure "T25-26: server-stop 실패 시 bin/ 이 보존되지 않음(정지 수단 소멸)"
   fi
 
   # T25-28(결정 T1·T3 회귀): 다크 테마는 미디어 쿼리 + data-theme 속성 오버라이드 둘 다로
   # 성립하고, 'dzh-theme' 리터럴은 head FOUC 스크립트 + 본문 IIFE 두 곳에 각각 등장해야 한다
   # (head 스크립트는 자족적이어야 해서 상수 공유가 불가능하다).
   if ! grep -qF "prefers-color-scheme" "$hub_template_file"; then
-    record_failure "$test_name" "T25-28: hub_template.html 에 prefers-color-scheme 가 없음"
-    return 1
+    note_failure "T25-28: hub_template.html 에 prefers-color-scheme 가 없음"
   fi
   if ! grep -qF "data-theme" "$hub_template_file"; then
     record_failure "$test_name" "T25-28: hub_template.html 에 data-theme 가 없음"
@@ -2756,16 +2625,14 @@ PYEOF
   local legacy_color
   for legacy_color in "#1F8A70" "#C2410C" "#F59E0B"; do
     if grep -qF "$legacy_color" "$hub_template_file"; then
-      record_failure "$test_name" "T25-29: hub_template.html 에 색각 안전성 없는 팔레트($legacy_color)가 남아 있음"
-      return 1
+      note_failure "T25-29: hub_template.html 에 색각 안전성 없는 팔레트($legacy_color)가 남아 있음"
     fi
   done
 
   # T25-30(색 이외 채널 회귀 방지): 상태 배지가 색만이 아니라 글리프로도 구분되고,
   # 그 글리프는 스크린리더에서 숨겨진다(aria-hidden).
   if ! grep -qF "STATE_GLYPH" "$hub_template_file"; then
-    record_failure "$test_name" "T25-30: hub_template.html 에 STATE_GLYPH 가 없음"
-    return 1
+    note_failure "T25-30: hub_template.html 에 STATE_GLYPH 가 없음"
   fi
   if ! grep -qF "aria-hidden" "$hub_template_file"; then
     record_failure "$test_name" "T25-30: hub_template.html 에 aria-hidden 이 없음"
@@ -2791,8 +2658,7 @@ PYEOF
                     "repeat(auto-fill,minmax(max(320px,calc((100% - 24px)/3 - 1px)),1fr))" \
                     "align-items:start" "grid-column:1/-1"; do
     if ! grep -qF "$grid_token" "$hub_template_file"; then
-      record_failure "$test_name" "T25-32: hub_template.html 에 그리드 규칙($grid_token)이 없음"
-      return 1
+      note_failure "T25-32: hub_template.html 에 그리드 규칙($grid_token)이 없음"
     fi
   done
 
@@ -2800,12 +2666,10 @@ PYEOF
   # 접기 버튼은 정적 마크업이어야 하고, 패널 컨테이너를 통째로 다시 그리는 코드가 되살아나면
   # 접힘 상태가 30초 틱마다 초기화된다.
   if ! grep -qF '<button id="dzh-usage-toggle"' "$hub_template_file"; then
-    record_failure "$test_name" "T25-33: 접기 버튼이 정적 마크업으로 존재하지 않음"
-    return 1
+    note_failure "T25-33: 접기 버튼이 정적 마크업으로 존재하지 않음"
   fi
   if ! grep -qF 'id="dzh-usage-body"' "$hub_template_file"; then
-    record_failure "$test_name" "T25-33: 파생 본문 컨테이너(#dzh-usage-body)가 없음"
-    return 1
+    note_failure "T25-33: 파생 본문 컨테이너(#dzh-usage-body)가 없음"
   fi
   if grep -qF "usageEl.innerHTML" "$hub_template_file"; then
     record_failure "$test_name" "T25-33: usageEl.innerHTML 대입이 부활함 — 재렌더가 접기 버튼을 파괴한다"
@@ -2817,8 +2681,7 @@ PYEOF
   local a11y_token
   for a11y_token in "aria-expanded" 'aria-controls="dzh-usage-body"' 'role="progressbar"'; do
     if ! grep -qF "$a11y_token" "$hub_template_file"; then
-      record_failure "$test_name" "T25-34: hub_template.html 에 접근성 속성($a11y_token)이 없음"
-      return 1
+      note_failure "T25-34: hub_template.html 에 접근성 속성($a11y_token)이 없음"
     fi
   done
 
@@ -2841,32 +2704,27 @@ PYEOF
   local doc_token
   for doc_token in "우하단" "접기" "그리드"; do
     if ! grep -qF "$doc_token" "$hub_readme_layout_file"; then
-      record_failure "$test_name" "T25-36: hub/README.md 에 화면 배치 설명($doc_token)이 없음"
-      return 1
+      note_failure "T25-36: hub/README.md 에 화면 배치 설명($doc_token)이 없음"
     fi
   done
 
   # T25-37(검수 m3 회귀): escapeHtml 이 따옴표도 이스케이프한다. usage-meta 의 title="..." 이
   # 이 함수의 첫 속성 자리 사용처라, 따옴표를 넘기면 그대로 속성이 끊길 수 있었다.
   if ! grep -qF '.replace(/"/g' "$hub_template_file"; then
-    record_failure "$test_name" 'T25-37: escapeHtml 에 큰따옴표 이스케이프가 없음'
-    return 1
+    note_failure 'T25-37: escapeHtml 에 큰따옴표 이스케이프가 없음'
   fi
   if ! grep -qF ".replace(/'/g" "$hub_template_file"; then
-    record_failure "$test_name" "T25-37: escapeHtml 에 작은따옴표 이스케이프가 없음"
-    return 1
+    note_failure "T25-37: escapeHtml 에 작은따옴표 이스케이프가 없음"
   fi
 
   # T25-38(GOTCHA 1 회귀): statusLine 커맨드 줄이 stdout 을 리다이렉트하지 않는다.
   # `2>/dev/null` 은 `>/dev/null` 을 부분 문자열로 포함하므로 grep -F '>/dev/null' 로는
   # 검사할 수 없다(정상 커맨드가 항상 걸린다) — `>` 앞 문자가 숫자가 아닌 경우만 잡는다(GOTCHA 6).
   if grep -F 'hub_statusline.py' "$hub_settings_file" | grep -qE '(^|[^0-9])>/dev/null'; then
-    record_failure "$test_name" "T25-38: statusLine 커맨드가 stdout 을 리다이렉트함 — 상태줄이 사라진다"
-    return 1
+    note_failure "T25-38: statusLine 커맨드가 stdout 을 리다이렉트함 — 상태줄이 사라진다"
   fi
   if ! grep -F 'hub_statusline.py' "$hub_settings_file" | grep -qF '2>/dev/null'; then
-    record_failure "$test_name" "T25-38: statusLine 커맨드 줄에 2>/dev/null 이 없음"
-    return 1
+    note_failure "T25-38: statusLine 커맨드 줄에 2>/dev/null 이 없음"
   fi
   if ! grep -F 'hub_statusline.py' "$hub_settings_file" | grep -qF '|| true'; then
     record_failure "$test_name" "T25-38: statusLine 커맨드 줄에 || true 가 없음"
@@ -2882,8 +2740,7 @@ PYEOF
   uninstall_statusline_line=$(grep -n "uninstall-statusline" "$hub_install_file" | head -1 | cut -d: -f1)
   rm_rf_line_t39=$(grep -n 'rm -rf "\$TARGET_BIN_DIR"' "$hub_install_file" | head -1 | cut -d: -f1)
   if [[ -z "$uninstall_statusline_line" || -z "$rm_rf_line_t39" ]]; then
-    record_failure "$test_name" "T25-39: uninstall-statusline/rm -rf 중 하나를 hub/install.sh 에서 찾지 못함"
-    return 1
+    note_failure "T25-39: uninstall-statusline/rm -rf 중 하나를 hub/install.sh 에서 찾지 못함"
   fi
   if [[ "$uninstall_statusline_line" -ge "$rm_rf_line_t39" ]]; then
     record_failure "$test_name" "T25-39: uninstall-statusline 이 rm -rf 보다 앞에 있지 않음(순서 위반)"
@@ -2895,8 +2752,7 @@ PYEOF
   local statusline_marker="# DZH_HUB_STATUSLINE"
   for doc_file in "$hub_settings_file" "$hub_command_file" "$hub_readme_file"; do
     if ! grep -qF "$statusline_marker" "$doc_file"; then
-      record_failure "$test_name" "T25-40: $statusline_marker 마커 미발견: $doc_file"
-      return 1
+      note_failure "T25-40: $statusline_marker 마커 미발견: $doc_file"
     fi
   done
 
@@ -2904,8 +2760,7 @@ PYEOF
   # '실행 중인 것만' 으로 되돌아가지 않고, "+N" 오버플로 칩(agent-chip-more)도 되살아나지
   # 않는다(결정 K1~K3).
   if grep -qF "active_agent_types" "$hub_template_file" "$hub_session_file"; then
-    record_failure "$test_name" "T25-43: active_agent_types 가 부활함 — 완료 세션이 다시 빈 목록이 된다"
-    return 1
+    note_failure "T25-43: active_agent_types 가 부활함 — 완료 세션이 다시 빈 목록이 된다"
   fi
   if grep -qF "agent-chip-more" "$hub_template_file"; then
     record_failure "$test_name" "T25-43: agent-chip-more 가 남아 있음 — +N 오버플로 칩은 결정 K3 로 삭제됨"
@@ -2930,40 +2785,33 @@ PYEOF
   local reset_time_token
   for reset_time_token in "usage-reset" "rate_limit_resets" "초기화 " "renderUsageResetRow"; do
     if ! grep -qF "$reset_time_token" "$hub_template_file"; then
-      record_failure "$test_name" "T25-41: hub_template.html 에 초기화 예정 시각 토큰($reset_time_token)이 없음"
-      return 1
+      note_failure "T25-41: hub_template.html 에 초기화 예정 시각 토큰($reset_time_token)이 없음"
     fi
   done
   # 폴링 주기는 5초에서 1분으로 바뀌었다(사용자 요청 — 5초는 너무 짧다). 이 검사는 원래
   # 5000 을 고정했는데, 그 커밋은 주기 변경을 모르는 상태에서 작성됐다. 값만 갱신하고
   # "주기가 임의로 바뀌지 않는다"는 검사의 의도는 그대로 유지한다.
   if ! grep -qF "POLL_INTERVAL_MS = 60000" "$hub_template_file"; then
-    record_failure "$test_name" "T25-41: POLL_INTERVAL_MS = 60000 회귀(폴링 주기가 바뀜)"
-    return 1
+    note_failure "T25-41: POLL_INTERVAL_MS = 60000 회귀(폴링 주기가 바뀜)"
   fi
   # '약 15분 주기'는 데스크톱 앱 샘플링 주기 전제 문구였다. 퍼센트 출처가 statusLine 캡처로
   # 바뀌며(결정 P1·P6) 그 전제 자체가 사라졌다 — 새 문구로 교체한다(승인 항목 5).
   if ! grep -qF "세션 진행 중에만 갱신" "$hub_template_file"; then
-    record_failure "$test_name" "T25-41: '세션 진행 중에만 갱신' 문구 회귀(사용량 갱신 주기 고지 유실)"
-    return 1
+    note_failure "T25-41: '세션 진행 중에만 갱신' 문구 회귀(사용량 갱신 주기 고지 유실)"
   fi
 
   # T25-42(문서 정합): hub/README.md·commands/hub.md 에 새 파일·서브커맨드가 문서화돼 있다.
   if ! grep -qF "rate_limits.json" "$hub_readme_file"; then
-    record_failure "$test_name" "T25-42: hub/README.md 에 rate_limits.json 언급이 없음"
-    return 1
+    note_failure "T25-42: hub/README.md 에 rate_limits.json 언급이 없음"
   fi
   if ! grep -qiF "statusline" "$hub_readme_file"; then
-    record_failure "$test_name" "T25-42: hub/README.md 에 statusline 언급이 없음"
-    return 1
+    note_failure "T25-42: hub/README.md 에 statusline 언급이 없음"
   fi
   if ! grep -qF "install-statusline" "$hub_command_file"; then
-    record_failure "$test_name" "T25-42: commands/hub.md 에 install-statusline 이 없음"
-    return 1
+    note_failure "T25-42: commands/hub.md 에 install-statusline 이 없음"
   fi
   if ! grep -qF "uninstall-statusline" "$hub_command_file"; then
-    record_failure "$test_name" "T25-42: commands/hub.md 에 uninstall-statusline 이 없음"
-    return 1
+    note_failure "T25-42: commands/hub.md 에 uninstall-statusline 이 없음"
   fi
 
   # T25-44(커스텀 툴팁 회귀): 네이티브 title 툴팁이 하나도 남지 않고, 커스텀 툴팁이 위임·
@@ -2984,21 +2832,18 @@ PYEOF
   # T25-45(문서 정합): 세션 줄 구성과 툴팁 거동이 hub/README.md 에 반영돼 있다.
   for doc_token in "서브에이전트" "툴팁"; do
     if ! grep -qF "$doc_token" "$hub_readme_file"; then
-      record_failure "$test_name" "T25-45: hub/README.md 에 화면 설명($doc_token)이 없음"
-      return 1
+      note_failure "T25-45: hub/README.md 에 화면 설명($doc_token)이 없음"
     fi
   done
 
   # T25-46(브라우저 타이틀 회귀): 탭 제목이 "Claude Agents Manager" 로 고정돼 있다.
   if ! grep -qF '<title>Claude Agents Manager</title>' "$hub_template_file"; then
-    record_failure "$test_name" "T25-46: hub_template.html 에 <title>Claude Agents Manager</title> 가 없음"
-    return 1
+    note_failure "T25-46: hub_template.html 에 <title>Claude Agents Manager</title> 가 없음"
   fi
 
   # T25-47(파비콘 회귀): 인라인 SVG data: URI 파비콘 링크가 유지돼 있다.
   if ! grep -qF 'rel="icon"' "$hub_template_file"; then
-    record_failure "$test_name" "T25-47: hub_template.html 에 rel=\"icon\" 이 없음"
-    return 1
+    note_failure "T25-47: hub_template.html 에 rel=\"icon\" 이 없음"
   fi
   if ! grep -qF 'data:image/svg+xml' "$hub_template_file"; then
     record_failure "$test_name" "T25-47: hub_template.html 에 data:image/svg+xml 파비콘이 없음"
@@ -3016,8 +2861,7 @@ PYEOF
   done
   for restart_token in "def restart_server" "def restart_note" "_wait_for_port_release"; do
     if ! grep -qF "$restart_token" "$hub_daemon_file"; then
-      record_failure "$test_name" "T25-48: hub_daemon.py 에 $restart_token 이 없음"
-      return 1
+      note_failure "T25-48: hub_daemon.py 에 $restart_token 이 없음"
     fi
   done
   if ! grep -qF '"already_running": True' "$hub_daemon_file"; then
@@ -3026,8 +2870,7 @@ PYEOF
   fi
   for restart_token in "server restart" "server-restart"; do
     if ! grep -qF "$restart_token" "$hub_command_file"; then
-      record_failure "$test_name" "T25-48: commands/hub.md 에 $restart_token 이 없음"
-      return 1
+      note_failure "T25-48: commands/hub.md 에 $restart_token 이 없음"
     fi
   done
   if ! grep -E '^argument-hint:' "$hub_command_file" | grep -qF "server restart"; then
@@ -3040,17 +2883,14 @@ PYEOF
   local focus_token
   for focus_token in "def browser_open_command" "/usr/bin/open" "darwin" "webbrowser"; do
     if ! grep -qF "$focus_token" "$hub_daemon_file"; then
-      record_failure "$test_name" "T25-49: hub_daemon.py 에 $focus_token 이 없음"
-      return 1
+      note_failure "T25-49: hub_daemon.py 에 $focus_token 이 없음"
     fi
   done
   if grep -qF "shell=True" "$hub_daemon_file"; then
-    record_failure "$test_name" "T25-49: hub_daemon.py 가 shell=True 를 씀 — URL 을 셸에 넘기지 않는다"
-    return 1
+    note_failure "T25-49: hub_daemon.py 가 shell=True 를 씀 — URL 을 셸에 넘기지 않는다"
   fi
   if grep -qF "webbrowser" "$hub_py_file"; then
-    record_failure "$test_name" "T25-49: hub.py 에 webbrowser 직접 호출이 남음 — hub_daemon.open_browser 로 단일화할 것"
-    return 1
+    note_failure "T25-49: hub.py 에 webbrowser 직접 호출이 남음 — hub_daemon.open_browser 로 단일화할 것"
   fi
   if ! grep -qF "browser_focus_requested" "$hub_command_file"; then
     record_failure "$test_name" "T25-49: commands/hub.md 에 browser_focus_requested 보고 규칙이 없음"
@@ -3058,20 +2898,17 @@ PYEOF
   fi
   for focus_token in "restart" "포커스"; do
     if ! grep -qF "$focus_token" "$hub_readme_file"; then
-      record_failure "$test_name" "T25-49: hub/README.md 에 서버 제어 설명($focus_token)이 없음"
-      return 1
+      note_failure "T25-49: hub/README.md 에 서버 제어 설명($focus_token)이 없음"
     fi
   done
 
   # T25-50(결정 W1 회귀): 그리드 트랙 최소폭이 3열 상한 계산식으로 바뀌었고, hub/README.md 의
   # 열 수 고지가 1~3열로 갱신돼 있다.
   if ! grep -qF "max(320px" "$hub_template_file"; then
-    record_failure "$test_name" "T25-50: hub_template.html 에 max(320px 트랙 계산이 없음"
-    return 1
+    note_failure "T25-50: hub_template.html 에 max(320px 트랙 계산이 없음"
   fi
   if ! grep -qF "/3 - 1px)" "$hub_template_file"; then
-    record_failure "$test_name" "T25-50: hub_template.html 에 3열 상한 계산(/3 - 1px)이 없음(GOTCHA 1)"
-    return 1
+    note_failure "T25-50: hub_template.html 에 3열 상한 계산(/3 - 1px)이 없음(GOTCHA 1)"
   fi
   if ! grep -qF "1~3열" "$hub_readme_file"; then
     record_failure "$test_name" "T25-50: hub/README.md 의 열 수 고지가 1~3열로 갱신되지 않음"
@@ -3083,20 +2920,17 @@ PYEOF
   local client_filter_token
   for client_filter_token in "shouldRenderSession" "visibleAgentRuns"; do
     if ! grep -qF "$client_filter_token" "$hub_template_file"; then
-      record_failure "$test_name" "T25-51: hub_template.html 에 $client_filter_token 이 없음"
-      return 1
+      note_failure "T25-51: hub_template.html 에 $client_filter_token 이 없음"
     fi
   done
   if ! grep -qF "sessions=session_views" "$hub_project_file"; then
-    record_failure "$test_name" "T25-51: hub_project.py 가 세션을 걸러내는 것으로 보임(sessions=session_views 부재)"
-    return 1
+    note_failure "T25-51: hub_project.py 가 세션을 걸러내는 것으로 보임(sessions=session_views 부재)"
   fi
 
   # T25-52(결정 K1~K3 회귀 — 안 A): "+N" 오버플로 칩 로직(overflowRuns)이 없고,
   # summarize_agent_runs 의 정렬 키에 실행 중 우선순위(K2)가 반영돼 있다.
   if grep -qF "overflowRuns" "$hub_template_file"; then
-    record_failure "$test_name" "T25-52: hub_template.html 에 오버플로 칩 흔적(overflowRuns)이 남아 있음"
-    return 1
+    note_failure "T25-52: hub_template.html 에 오버플로 칩 흔적(overflowRuns)이 남아 있음"
   fi
   if ! grep -qF "0 if is_running_by_type[agent_type] else 1" "$hub_session_file"; then
     record_failure "$test_name" "T25-52: hub_session.py 의 summarize_agent_runs 정렬 키에 실행 중 우선순위(K2)가 없음"
@@ -3110,8 +2944,7 @@ PYEOF
   ms_per_hour_decl_line=$(grep -n "var MS_PER_HOUR" "$hub_template_file" | head -1 | cut -d: -f1)
   stale_cutoff_decl_line=$(grep -n "var STALE_SESSION_HIDE_AFTER_MS" "$hub_template_file" | head -1 | cut -d: -f1)
   if [[ -z "$ms_per_hour_decl_line" || -z "$stale_cutoff_decl_line" ]]; then
-    record_failure "$test_name" "T25-53: MS_PER_HOUR/STALE_SESSION_HIDE_AFTER_MS 선언을 hub_template.html 에서 찾지 못함"
-    return 1
+    note_failure "T25-53: MS_PER_HOUR/STALE_SESSION_HIDE_AFTER_MS 선언을 hub_template.html 에서 찾지 못함"
   fi
   if [[ "$stale_cutoff_decl_line" -le "$ms_per_hour_decl_line" ]]; then
     record_failure "$test_name" "T25-53: STALE_SESSION_HIDE_AFTER_MS 가 MS_PER_HOUR 보다 앞서 선언됨(GOTCHA 2)"
@@ -3131,8 +2964,7 @@ PYEOF
   local capture_source_token
   for capture_source_token in "session_used_percent" "usage_sample_from_capture" "same_capture_values"; do
     if ! grep -qF "$capture_source_token" "$hub_usage_file"; then
-      record_failure "$test_name" "T25-54: hub_usage.py 에 캡처 단일 출처 토큰($capture_source_token)이 없음"
-      return 1
+      note_failure "T25-54: hub_usage.py 에 캡처 단일 출처 토큰($capture_source_token)이 없음"
     fi
   done
 
@@ -3141,19 +2973,16 @@ PYEOF
   # 결정 A2)이 두 번째 생산자를 더하면서 더 이상 참이 아니게 됐다 — "퍼센트의 출처는" 으로
   # 완화해 두 생산자를 모두 포괄한다(T25-54 가 이미 겪은 것과 같은 종류의 재개정).
   if grep -qF "macOS 데스크톱 앱" "$hub_command_file"; then
-    record_failure "$test_name" "T25-55: commands/hub.md 에 macOS 데스크톱 앱 문구가 남아 있음(결정 P1 위반)"
-    return 1
+    note_failure "T25-55: commands/hub.md 에 macOS 데스크톱 앱 문구가 남아 있음(결정 P1 위반)"
   fi
   if ! grep -qF "퍼센트의 출처는" "$hub_command_file"; then
-    record_failure "$test_name" "T25-55: commands/hub.md 의 usage_sample_age_ms 설명에 출처 설명이 없음"
-    return 1
+    note_failure "T25-55: commands/hub.md 의 usage_sample_age_ms 설명에 출처 설명이 없음"
   fi
 
   # T25-56(전제 2 회귀 — #dzh-data 계약 불변): HubSnapshot 의 usage·rate_limit_resets 두
   # 필드가 그대로 있고, 템플릿이 여전히 snapshot.usage·snapshot.rate_limit_resets 를 읽는다.
   if ! grep -qF "usage: UsageSample | None = None" "$hub_model_file"; then
-    record_failure "$test_name" "T25-56: hub_model.py 의 HubSnapshot.usage 필드가 계약과 다름"
-    return 1
+    note_failure "T25-56: hub_model.py 의 HubSnapshot.usage 필드가 계약과 다름"
   fi
   if ! grep -qF "rate_limit_resets: RateLimitResets | None = None" "$hub_model_file"; then
     record_failure "$test_name" "T25-56: hub_model.py 의 HubSnapshot.rate_limit_resets 필드가 계약과 다름"
@@ -3162,8 +2991,7 @@ PYEOF
   local snapshot_field_token
   for snapshot_field_token in "snapshot.usage" "snapshot.rate_limit_resets"; do
     if ! grep -qF "$snapshot_field_token" "$hub_template_file"; then
-      record_failure "$test_name" "T25-56: hub_template.html 이 $snapshot_field_token 를 읽지 않음"
-      return 1
+      note_failure "T25-56: hub_template.html 이 $snapshot_field_token 를 읽지 않음"
     fi
   done
 
@@ -3171,12 +2999,10 @@ PYEOF
   # 대시보드 라우트는 정규식으로만 해석되고, 기존 화이트리스트는 그대로 남으며, 요청
   # 문자열(self.path)로 경로를 조립하는 코드가 없다.
   if ! grep -qF "PROJECT_DASHBOARD_PATH_PATTERN" "$hub_server_file"; then
-    record_failure "$test_name" "T25-57: hub_server.py 에 PROJECT_DASHBOARD_PATH_PATTERN 이 없음"
-    return 1
+    note_failure "T25-57: hub_server.py 에 PROJECT_DASHBOARD_PATH_PATTERN 이 없음"
   fi
   if ! grep -qF '[0-9a-f]{16}' "$hub_server_file"; then
-    record_failure "$test_name" "T25-57: hub_server.py 에 [0-9a-f]{16} 패턴이 없음"
-    return 1
+    note_failure "T25-57: hub_server.py 에 [0-9a-f]{16} 패턴이 없음"
   fi
   if ! grep -qF "ALLOWED_REQUEST_PATHS" "$hub_server_file"; then
     record_failure "$test_name" "T25-57: hub_server.py 에 ALLOWED_REQUEST_PATHS 가 없음(T25-15 보강)"
@@ -3185,31 +3011,26 @@ PYEOF
   local path_concat_token
   for path_concat_token in "os.path.join" "/ self.path" "+ self.path"; do
     if grep -qF "$path_concat_token" "$hub_server_file"; then
-      record_failure "$test_name" "T25-57: hub_server.py 가 요청 문자열로 경로를 조립하는 것으로 보임($path_concat_token)"
-      return 1
+      note_failure "T25-57: hub_server.py 가 요청 문자열로 경로를 조립하는 것으로 보임($path_concat_token)"
     fi
   done
 
   # T25-58(R4 회귀, 결정 X1): .project-name 에 data-tooltip 이 없다 — 보이는 텍스트와
   # 같아 제거해도 정보 손실이 없다.
   if grep -qF 'project-name" data-tooltip' "$hub_template_file"; then
-    record_failure "$test_name" "T25-58: hub_template.html 의 project-name 에 data-tooltip 잔재가 있음"
-    return 1
+    note_failure "T25-58: hub_template.html 의 project-name 에 data-tooltip 잔재가 있음"
   fi
 
   # T25-59(R5 회귀, 결정 E1~E3): 헤더 버튼 클러스터가 고정 위치를 버리고 .head-row 문서
   # 흐름 안으로 들어왔다.
   if grep -qF "padding-right:150px" "$hub_template_file"; then
-    record_failure "$test_name" "T25-59: hub_template.html 에 padding-right:150px 잔재가 있음"
-    return 1
+    note_failure "T25-59: hub_template.html 에 padding-right:150px 잔재가 있음"
   fi
   if grep -qF "position:fixed;top:16px;right:16px" "$hub_template_file"; then
-    record_failure "$test_name" "T25-59: hub_template.html 에 .top-actions 고정 위치 잔재가 있음"
-    return 1
+    note_failure "T25-59: hub_template.html 에 .top-actions 고정 위치 잔재가 있음"
   fi
   if ! grep -qF ".head-row{display:flex" "$hub_template_file"; then
-    record_failure "$test_name" "T25-59: hub_template.html 에 .head-row{display:flex 가 없음"
-    return 1
+    note_failure "T25-59: hub_template.html 에 .head-row{display:flex 가 없음"
   fi
   if ! grep -qF ".top-actions{margin-left:auto" "$hub_template_file"; then
     record_failure "$test_name" "T25-59: hub_template.html 에 .top-actions{margin-left:auto 가 없음"
@@ -3222,13 +3043,11 @@ PYEOF
   local forbidden_token
   for forbidden_token in "shell=True" "print(" "str(error)"; do
     if grep -qF "$forbidden_token" "$hub_usage_fetch_file"; then
-      record_failure "$test_name" "T25-60: hub_usage_fetch.py 에 금지 토큰($forbidden_token)이 있음"
-      return 1
+      note_failure "T25-60: hub_usage_fetch.py 에 금지 토큰($forbidden_token)이 있음"
     fi
   done
   if ! grep -qF "FAILURE_REASON_MESSAGES" "$hub_usage_fetch_file"; then
-    record_failure "$test_name" "T25-60: hub_usage_fetch.py 에 FAILURE_REASON_MESSAGES 가 없음"
-    return 1
+    note_failure "T25-60: hub_usage_fetch.py 에 FAILURE_REASON_MESSAGES 가 없음"
   fi
 
   # T25-61(R1 구조): hub_usage.py 에 parse_usage_api_response·should_attempt_usage_api_poll·
@@ -3242,8 +3061,7 @@ PYEOF
   local model_token
   for model_token in "should_attempt_usage_api_poll" "UsageApiPollState"; do
     if ! grep -qF "$model_token" "$hub_usage_file"; then
-      record_failure "$test_name" "T25-61: hub_usage.py 에 $model_token 이 없음"
-      return 1
+      note_failure "T25-61: hub_usage.py 에 $model_token 이 없음"
     fi
   done
   if ! grep -qF '"usage_api_enabled": bool' "$hub_collect_file"; then
@@ -3256,8 +3074,7 @@ PYEOF
   local order_token
   for order_token in "'dzh-project-order'" "orderedProjectPaths" "isReordering" "card-drag-handle"; do
     if ! grep -qF "$order_token" "$hub_template_file"; then
-      record_failure "$test_name" "T25-62: hub_template.html 에 $order_token 이 없음"
-      return 1
+      note_failure "T25-62: hub_template.html 에 $order_token 이 없음"
     fi
   done
   if grep -qF "stableSortedProjects" "$hub_template_file"; then
@@ -3270,13 +3087,11 @@ PYEOF
   local modal_markup_token
   for modal_markup_token in '<aside id="dzh-detail-panel"' 'id="dzh-detail-frame"' ".icon-btn"; do
     if ! grep -qF "$modal_markup_token" "$hub_template_file"; then
-      record_failure "$test_name" "T25-63: hub_template.html 에 $modal_markup_token 이 없음"
-      return 1
+      note_failure "T25-63: hub_template.html 에 $modal_markup_token 이 없음"
     fi
   done
   if ! grep -qF "THEME_CYCLE = ['light', 'dark']" "$hub_template_file"; then
-    record_failure "$test_name" "T25-63: hub_template.html 의 THEME_CYCLE 이 2상태가 아님"
-    return 1
+    note_failure "T25-63: hub_template.html 의 THEME_CYCLE 이 2상태가 아님"
   fi
   if grep -qF "'system'" "$hub_template_file"; then
     record_failure "$test_name" "T25-63: hub_template.html 에 3상태 테마 잔재('system')가 남아 있음"
@@ -3288,8 +3103,7 @@ PYEOF
   local readme_doc_token
   for readme_doc_token in "카드 순서" "상세 패널" "usage_api_enabled"; do
     if ! grep -qF "$readme_doc_token" "$hub_readme_file"; then
-      record_failure "$test_name" "T25-64: hub/README.md 에 $readme_doc_token 설명이 없음"
-      return 1
+      note_failure "T25-64: hub/README.md 에 $readme_doc_token 설명이 없음"
     fi
   done
   if ! grep -qF "usage_api_last_failure" "$hub_command_file"; then
@@ -3302,21 +3116,18 @@ PYEOF
   local r3_token
   for r3_token in '.card.card-working{' "card-working'" '@keyframes card-working-glow' 'prefers-reduced-motion'; do
     if ! grep -qF -- "$r3_token" "$hub_template_file"; then
-      record_failure "$test_name" "T25-65: hub_template.html 에 $r3_token 이 없음"
-      return 1
+      note_failure "T25-65: hub_template.html 에 $r3_token 이 없음"
     fi
   done
   if ! grep -qF '작업중' "$hub_readme_file"; then
-    record_failure "$test_name" "T25-65: hub/README.md 「화면 배치」에 작업중 강조 설명이 없음"
-    return 1
+    note_failure "T25-65: hub/README.md 「화면 배치」에 작업중 강조 설명이 없음"
   fi
 
   # T25-66(R4): 바깥 클릭 리스너 — closest 가드 2종이 있어야 하고, GOTCHA 2 를 줄 번호
   # 비교로 기계적으로 강제한다(T25-53 선례) — if(!isServed){ 뒤로 가면 file:// 모드에서
   # 기능이 조용히 사라진다.
   if ! grep -qF "closest('#dzh-usage')" "$hub_template_file"; then
-    record_failure "$test_name" "T25-66: closest('#dzh-usage') 가드 미발견"
-    return 1
+    note_failure "T25-66: closest('#dzh-usage') 가드 미발견"
   fi
   if ! grep -qF "closest('#dzh-detail-panel')" "$hub_template_file"; then
     record_failure "$test_name" "T25-66: closest('#dzh-detail-panel') 가드 미발견"
@@ -3329,38 +3140,31 @@ PYEOF
   outside_click_guard_line=$(grep -n "closest('#dzh-usage')" "$hub_template_file" | head -1 | cut -d: -f1)
   is_served_gate_line=$(grep -n 'if(!isServed){' "$hub_template_file" | tail -1 | cut -d: -f1)
   if [[ -z "$outside_click_guard_line" || -z "$is_served_gate_line" || "$outside_click_guard_line" -ge "$is_served_gate_line" ]]; then
-    record_failure "$test_name" "T25-66: 바깥 클릭 리스너가 if(!isServed){ 뒤에 등록됨(GOTCHA 2 위반)"
-    return 1
+    note_failure "T25-66: 바깥 클릭 리스너가 if(!isServed){ 뒤에 등록됨(GOTCHA 2 위반)"
   fi
   if ! grep -qF '바깥' "$hub_readme_file"; then
-    record_failure "$test_name" "T25-66: hub/README.md 사용량 패널 절에 바깥 클릭 설명이 없음"
-    return 1
+    note_failure "T25-66: hub/README.md 사용량 패널 절에 바깥 클릭 설명이 없음"
   fi
 
   # T25-67(R5, 역방향 중심): 패널 안 툴팁 2종과 죽은 옵저버가 사라졌는지 확인하면서도,
   # renderUsageResetRow·usage-meta·data-tooltip(패널 밖)은 여전히 살아 있어야 한다 —
   # "지운 것"과 "지우면 안 되는 것"을 함께 감사한다.
   if grep -qF '이 정보를 확인한 시각' "$hub_template_file"; then
-    record_failure "$test_name" "T25-67: '이 정보를 확인한 시각' 툴팁 문구가 남아 있음"
-    return 1
+    note_failure "T25-67: '이 정보를 확인한 시각' 툴팁 문구가 남아 있음"
   fi
   if grep -qF 'usage-meta" data-tooltip' "$hub_template_file"; then
-    record_failure "$test_name" "T25-67: usage-meta 의 data-tooltip 속성이 남아 있음"
-    return 1
+    note_failure "T25-67: usage-meta 의 data-tooltip 속성이 남아 있음"
   fi
   # ③ 반전(R-B): R5 는 이 옵저버를 지웠지만(결정 UT4), R-B 가 조건부로 되살렸다(결정 EX7) —
   # 만료 안내 줄(.usage-stale-note)이 패널 안 유일한 트리거이므로 T25-71 이 이 복원을 강제한다.
   if ! grep -qF 'usageBodyElForTooltipObserver' "$hub_template_file"; then
-    record_failure "$test_name" "T25-67: usageBodyElForTooltipObserver 가 없음(R-B 가 조건부로 복원해야 함, 결정 EX7)"
-    return 1
+    note_failure "T25-67: usageBodyElForTooltipObserver 가 없음(R-B 가 조건부로 복원해야 함, 결정 EX7)"
   fi
   if ! grep -qF 'renderUsageResetRow' "$hub_template_file"; then
-    record_failure "$test_name" "T25-67: renderUsageResetRow 함수가 사라짐(과잉 제거)"
-    return 1
+    note_failure "T25-67: renderUsageResetRow 함수가 사라짐(과잉 제거)"
   fi
   if ! grep -qF 'usage-meta' "$hub_template_file" || ! grep -qF 'data-tooltip' "$hub_template_file"; then
-    record_failure "$test_name" "T25-67: usage-meta 또는 data-tooltip(패널 밖) 이 과잉 제거됨"
-    return 1
+    note_failure "T25-67: usage-meta 또는 data-tooltip(패널 밖) 이 과잉 제거됨"
   fi
   if ! grep -qF 'rate_limit_capture_age_ms' "$hub_readme_file"; then
     record_failure "$test_name" "T25-67: hub/README.md 에 캡처 시각 진단 창구(rate_limit_capture_age_ms) 언급이 없음"
@@ -3386,8 +3190,7 @@ PYEOF
   local card_order_section
   card_order_section=$(sed -n '/^## 카드 순서/,/^## /p' "$hub_readme_file")
   if grep -qF '←' <<< "$card_order_section"; then
-    record_failure "$test_name" "T25-68: hub/README.md 「카드 순서」에 ← 가 남아 있음(키보드 조작 잔재)"
-    return 1
+    note_failure "T25-68: hub/README.md 「카드 순서」에 ← 가 남아 있음(키보드 조작 잔재)"
   fi
   if ! grep -qF '드래그' <<< "$card_order_section"; then
     record_failure "$test_name" "T25-68: hub/README.md 「카드 순서」에 드래그 설명이 없음"
@@ -3403,25 +3206,21 @@ PYEOF
   local stale_display_token
   for stale_display_token in "usage-stale-note" "USAGE_STALE_TOOLTIP" "usage-pct-empty" "is_stale"; do
     if ! grep -qF -- "$stale_display_token" "$hub_template_file"; then
-      record_failure "$test_name" "T25-71: hub_template.html 에 $stale_display_token 이 없음"
-      return 1
+      note_failure "T25-71: hub_template.html 에 $stale_display_token 이 없음"
     fi
   done
   if ! grep -qF "tooltipDismissObserver.observe(usageBodyElForTooltipObserver" "$hub_template_file"; then
-    record_failure "$test_name" "T25-71: tooltipDismissObserver 가 #dzh-usage-body 를 다시 관찰하지 않음(GOTCHA 1)"
-    return 1
+    note_failure "T25-71: tooltipDismissObserver 가 #dzh-usage-body 를 다시 관찰하지 않음(GOTCHA 1)"
   fi
 
   # T25-72(R-B 파이썬 계약): UsageSample.is_stale·mark_stale_usage_sample 이 hub_usage.py 에
   # 있고, hub_collect.py 가 그 함수를 부른다. 역방향(핵심) — _capture_for_snapshot 범위 안에
   # 만료 시 지우던 옛 경로(usage = None)가 되살아나지 않았다.
   if ! grep -qF "is_stale: bool = False" "$hub_usage_file"; then
-    record_failure "$test_name" "T25-72: hub_usage.py 에 is_stale: bool = False 필드가 없음"
-    return 1
+    note_failure "T25-72: hub_usage.py 에 is_stale: bool = False 필드가 없음"
   fi
   if ! grep -qF "def mark_stale_usage_sample" "$hub_usage_file"; then
-    record_failure "$test_name" "T25-72: hub_usage.py 에 mark_stale_usage_sample 함수가 없음"
-    return 1
+    note_failure "T25-72: hub_usage.py 에 mark_stale_usage_sample 함수가 없음"
   fi
   if ! grep -qF "mark_stale_usage_sample" "$hub_collect_file"; then
     record_failure "$test_name" "T25-72: hub_collect.py 가 mark_stale_usage_sample 을 호출하지 않음"
@@ -3441,8 +3240,7 @@ PYEOF
   local hub_install_section
   hub_install_section=$(sed -n '/^## `\/hub install`/,/^## `\/hub off`/p' "$hub_command_file")
   if ! echo "$hub_install_section" | grep -qF "install-statusline"; then
-    record_failure "$test_name" "T25-73: commands/hub.md 의 /hub install 절에 install-statusline 이 없음"
-    return 1
+    note_failure "T25-73: commands/hub.md 의 /hub install 절에 install-statusline 이 없음"
   fi
   if ! grep -F "다음 단계" "$hub_install_file" | grep -qF "상태줄"; then
     record_failure "$test_name" "T25-73: hub/install.sh 의 '다음 단계' 안내에 상태줄 언급이 없음"
@@ -3451,8 +3249,7 @@ PYEOF
   local quick_start_section
   quick_start_section=$(sed -n '/^## 빠른 시작/,/^## /p' "$hub_readme_file")
   if ! echo "$quick_start_section" | grep -qF "상태줄"; then
-    record_failure "$test_name" "T25-73: hub/README.md 「빠른 시작」에 상태줄 언급이 없음"
-    return 1
+    note_failure "T25-73: hub/README.md 「빠른 시작」에 상태줄 언급이 없음"
   fi
   if grep -qF "settings.json" "$hub_install_file"; then
     record_failure "$test_name" "T25-73: hub/install.sh 가 settings.json 을 언급함(전제 1 위반)"
@@ -3476,8 +3273,7 @@ PYEOF
   local usage_panel_section
   usage_panel_section=$(sed -n '/^## 사용량 패널/,/^## /p' "$hub_readme_file")
   if ! echo "$usage_panel_section" | grep -qF "조회되지 않음"; then
-    record_failure "$test_name" "T25-74: hub/README.md 사용량 패널 절에 '조회되지 않음' 설명이 없음"
-    return 1
+    note_failure "T25-74: hub/README.md 사용량 패널 절에 '조회되지 않음' 설명이 없음"
   fi
   if echo "$usage_panel_section" | grep -qF "5시간보다 오래됐거나(세션을 한동안 안"; then
     record_failure "$test_name" "T25-74: hub/README.md 에 R-B 이전의 낡은 숨김 서술이 남아 있음"
@@ -3537,8 +3333,7 @@ PYEOF
   css_breakpoint=$(grep -oE '@media \(min-width:[0-9]+px\)' "$hub_template_file" | head -1 | grep -oE '[0-9]+')
   js_breakpoint=$(grep -oE 'PANEL_PUSH_MIN_WIDTH_PX = [0-9]+' "$hub_template_file" | grep -oE '[0-9]+')
   if [[ -z "$css_breakpoint" || -z "$js_breakpoint" || "$css_breakpoint" != "$js_breakpoint" ]]; then
-    record_failure "$test_name" "T25-78: CSS 브레이크포인트($css_breakpoint)와 JS PANEL_PUSH_MIN_WIDTH_PX($js_breakpoint)가 다름"
-    return 1
+    note_failure "T25-78: CSS 브레이크포인트($css_breakpoint)와 JS PANEL_PUSH_MIN_WIDTH_PX($js_breakpoint)가 다름"
   fi
 
   # T25-79(결정 SP12·SP13·SP16·SP17 양방향 애니메이션 세트 + 소스 순서, hub-detail-side-panel.md
@@ -3599,8 +3394,7 @@ PYEOF
   local panel_stop_token
   for panel_stop_token in 'about:blank' 'contentWindow.location.replace(' 'openPanelTarget'; do
     if ! grep -qF -- "$panel_stop_token" "$hub_template_file"; then
-      record_failure "$test_name" "T25-80: hub_template.html 에 $panel_stop_token 이 없음"
-      return 1
+      note_failure "T25-80: hub_template.html 에 $panel_stop_token 이 없음"
     fi
   done
   if grep -qF -- 'panelFrameEl.src' "$hub_template_file"; then
@@ -3615,13 +3409,11 @@ PYEOF
   local readme_panel_token
   for readme_panel_token in '상세 패널' '밀' '덮' '나간다'; do
     if ! grep -qF -- "$readme_panel_token" "$hub_readme_file"; then
-      record_failure "$test_name" "T25-81: hub/README.md 에 $readme_panel_token 토큰이 없음"
-      return 1
+      note_failure "T25-81: hub/README.md 에 $readme_panel_token 토큰이 없음"
     fi
   done
   if ! grep -qF -- 'H1⁗' "$hub_template_file"; then
-    record_failure "$test_name" "T25-81: hub_template.html 머리 주석에 H1⁗ 이 없음"
-    return 1
+    note_failure "T25-81: hub_template.html 머리 주석에 H1⁗ 이 없음"
   fi
   if grep -qF '모달' "$hub_readme_file"; then
     record_failure "$test_name" "T25-81: hub/README.md 에 '모달' 잔재가 남아 있음"
@@ -3689,8 +3481,7 @@ PYEOF
   for detail_close_token in '.detail-close{' 'class="detail-close"' '.detail-close svg{' \
       'aria-label="닫기"' 'data-tooltip="닫기 (Esc)"'; do
     if ! grep -qF -- "$detail_close_token" "$hub_template_file"; then
-      record_failure "$test_name" "T25-85: hub_template.html 에 $detail_close_token 이 없음"
-      return 1
+      note_failure "T25-85: hub_template.html 에 $detail_close_token 이 없음"
     fi
   done
   # "border-bottom:" (선언 형태)만 본다 — SP11 시안 A 설명 주석 자체가 "border-bottom 을
@@ -3703,8 +3494,7 @@ PYEOF
   local removed_detail_close_token
   for removed_detail_close_token in '<button id="dzh-detail-close" class="icon-btn"' '>✕<'; do
     if grep -qF -- "$removed_detail_close_token" "$hub_template_file"; then
-      record_failure "$test_name" "T25-85: hub_template.html 에 옛 닫기 버튼 잔재($removed_detail_close_token)가 남아 있음"
-      return 1
+      note_failure "T25-85: hub_template.html 에 옛 닫기 버튼 잔재($removed_detail_close_token)가 남아 있음"
     fi
   done
 
@@ -3713,8 +3503,7 @@ PYEOF
   # (if is_filtered:)이 _apply_tracked_event 호출보다 먼저 나와야 한다(선례: T25-83 의 줄
   # 번호 비교) — 그래야 compact 가 이 함수에 도달하기 전에 걸러진다(GOTCHA 1).
   if ! grep -qF 'elif event.hook_event_name == "SessionStart":' "$hub_session_file"; then
-    record_failure "$test_name" "T25-86: hub_session.py 에 SessionStart 부활 분기가 없음"
-    return 1
+    note_failure "T25-86: hub_session.py 에 SessionStart 부활 분기가 없음"
   fi
   if ! grep -qF 'session.ended_at_ms = None' "$hub_session_file"; then
     record_failure "$test_name" "T25-86: hub_session.py 에 session.ended_at_ms = None 대입이 없음"
@@ -3763,8 +3552,7 @@ PYEOF
   for gn5_display_token in 'data-tier1-previous' 'tier1-prev-label' '이전 작업' \
       '.card[data-tier1-previous] .tier1-pct{color:var(--muted)}'; do
     if ! grep -qF -- "$gn5_display_token" "$hub_template_file"; then
-      record_failure "$test_name" "T25-88: hub_template.html 에 $gn5_display_token 이 없음"
-      return 1
+      note_failure "T25-88: hub_template.html 에 $gn5_display_token 이 없음"
     fi
   done
   if grep -qE '\.(tier1-prev-label|detail-note)\{[^}]*#[0-9a-fA-F]{3}' "$hub_template_file"; then
@@ -3802,17 +3590,14 @@ PYEOF
   local doc_sync_token
   for doc_sync_token in '이전 작업' '구세대' '/dashboard init'; do
     if ! grep -qF -- "$doc_sync_token" "$hub_readme_file"; then
-      record_failure "$test_name" "T25-90: hub/README.md 에 $doc_sync_token 토큰이 없음"
-      return 1
+      note_failure "T25-90: hub/README.md 에 $doc_sync_token 토큰이 없음"
     fi
   done
   if ! grep -qF -- '재부착' "$hub_dashboard_prp_file"; then
-    record_failure "$test_name" "T25-90: docs/prps/hub-dashboard.md 에 재부착 토큰이 없음"
-    return 1
+    note_failure "T25-90: docs/prps/hub-dashboard.md 에 재부착 토큰이 없음"
   fi
   if grep -qF -- '— CSS 가 숨긴다' "$hub_readme_file"; then
-    record_failure "$test_name" "T25-90: hub/README.md 에 옛 단정 문구(— CSS 가 숨긴다)가 남아 있음(LG1)"
-    return 1
+    note_failure "T25-90: hub/README.md 에 옛 단정 문구(— CSS 가 숨긴다)가 남아 있음(LG1)"
   fi
 
   # T25-91(ZG1·ZG2 상수·술어 계약 + 선언 순서, GOTCHA 1·2, docs/prps/hub-zombie-subagent-guard.md):
@@ -3820,12 +3605,10 @@ PYEOF
   # 상수 < is_running_subagent < _compute_base_state 다(기본 인자 평가 시점 NameError 회피,
   # 선례: T25-87 의 줄 번호 비교). 역방향(핵심, G8) — 옛 무조건 판정이 소스에서 사라졌다.
   if ! grep -qF 'SUBAGENT_ZOMBIE_AFTER_MS = 90 * 60 * 1000' "$hub_session_file"; then
-    record_failure "$test_name" "T25-91: hub_session.py 에 SUBAGENT_ZOMBIE_AFTER_MS = 90 * 60 * 1000 이 없음"
-    return 1
+    note_failure "T25-91: hub_session.py 에 SUBAGENT_ZOMBIE_AFTER_MS = 90 * 60 * 1000 이 없음"
   fi
   if ! grep -qF 'def is_running_subagent(' "$hub_session_file"; then
-    record_failure "$test_name" "T25-91: hub_session.py 에 def is_running_subagent( 이 없음"
-    return 1
+    note_failure "T25-91: hub_session.py 에 def is_running_subagent( 이 없음"
   fi
   if grep -qF 'sub.ended_at_ms is None for sub in facts.subagents' "$hub_session_file"; then
     record_failure "$test_name" "T25-91 역방향: hub_session.py 에 옛 무조건 판정이 남아 있음(G8 위반)"
@@ -3850,12 +3633,10 @@ PYEOF
   base_state_body=$(awk '/^def _compute_base_state\(/{flag=1; next} flag && /^def compute_session_view\(/{exit} flag{print}' "$hub_session_file")
   summarize_agent_runs_body=$(awk '/^def summarize_agent_runs\(/{flag=1; next} flag && /^def /{exit} flag{print}' "$hub_session_file")
   if [[ "$(echo "$base_state_body" | grep -c 'is_running_subagent(')" -eq 0 ]]; then
-    record_failure "$test_name" "T25-92: _compute_base_state 본문에 is_running_subagent( 호출이 없음(GOTCHA 4)"
-    return 1
+    note_failure "T25-92: _compute_base_state 본문에 is_running_subagent( 호출이 없음(GOTCHA 4)"
   fi
   if [[ "$(echo "$summarize_agent_runs_body" | grep -c 'is_running_subagent(')" -eq 0 ]]; then
-    record_failure "$test_name" "T25-92: summarize_agent_runs 본문에 is_running_subagent( 호출이 없음(GOTCHA 4)"
-    return 1
+    note_failure "T25-92: summarize_agent_runs 본문에 is_running_subagent( 호출이 없음(GOTCHA 4)"
   fi
   if [[ "$(echo "$summarize_agent_runs_body" | grep -c 'ended_at_ms is None')" -ne 0 ]]; then
     record_failure "$test_name" "T25-92 역방향: summarize_agent_runs 범위 안에 ended_at_ms is None 직접 비교가 남아 있음"
@@ -3869,8 +3650,7 @@ PYEOF
   local zombie_default_arg_count
   zombie_default_arg_count=$(grep -cF 'zombie_after_ms: int = SUBAGENT_ZOMBIE_AFTER_MS' "$hub_session_file")
   if [[ "$zombie_default_arg_count" -ne 2 ]]; then
-    record_failure "$test_name" "T25-93: zombie_after_ms 기본 인자 선언 수=$zombie_default_arg_count (기대: 2 — compute_session_view·summarize_agent_runs)"
-    return 1
+    note_failure "T25-93: zombie_after_ms 기본 인자 선언 수=$zombie_default_arg_count (기대: 2 — compute_session_view·summarize_agent_runs)"
   fi
   if ! grep -qF '0 if is_running_by_type[agent_type] else 1' "$hub_session_file"; then
     record_failure "$test_name" "T25-93 역방향: hub_session.py 에 0 if is_running_by_type[agent_type] else 1 이 없음(T25-52 회귀, GOTCHA 3)"
@@ -3890,21 +3670,17 @@ PYEOF
   local zg7_doc_token
   for zg7_doc_token in '좀비' '90분'; do
     if ! grep -qF -- "$zg7_doc_token" "$hub_readme_file"; then
-      record_failure "$test_name" "T25-94: hub/README.md 에 $zg7_doc_token 토큰이 없음"
-      return 1
+      note_failure "T25-94: hub/README.md 에 $zg7_doc_token 토큰이 없음"
     fi
   done
   if ! grep -qF -- 'hub-zombie-subagent-guard' "$hub_dashboard_prp_file"; then
-    record_failure "$test_name" "T25-94: docs/prps/hub-dashboard.md 에 hub-zombie-subagent-guard 참조가 없음"
-    return 1
+    note_failure "T25-94: docs/prps/hub-dashboard.md 에 hub-zombie-subagent-guard 참조가 없음"
   fi
   if ! grep -qF -- 'hub-zombie-subagent-guard' "$hub_session_revival_prp_file"; then
-    record_failure "$test_name" "T25-94: docs/prps/hub-session-revival-and-stale-tier1.md 에 hub-zombie-subagent-guard 참조가 없음"
-    return 1
+    note_failure "T25-94: docs/prps/hub-session-revival-and-stale-tier1.md 에 hub-zombie-subagent-guard 참조가 없음"
   fi
   if ! grep -qF -- '2. turn_state == "running" 또는 살아 있는 서브에이전트 존재' "$hub_dashboard_prp_file"; then
-    record_failure "$test_name" "T25-94: docs/prps/hub-dashboard.md 의 규칙 2 원문 줄이 사라짐(개정 관례 위반, GOTCHA 10)"
-    return 1
+    note_failure "T25-94: docs/prps/hub-dashboard.md 의 규칙 2 원문 줄이 사라짐(개정 관례 위반, GOTCHA 10)"
   fi
   if grep -qF -- '— CSS 가 숨긴다' "$hub_readme_file"; then
     record_failure "$test_name" "T25-94: hub/README.md 에 옛 단정 문구(— CSS 가 숨긴다)가 남아 있음(T25-90 승계 확인)"
@@ -3918,8 +3694,7 @@ PYEOF
   local detail_panel_rule detail_head_rule
   detail_panel_rule=$(sed -n '/\.detail-panel{/,/}/p' "$hub_template_file" | awk '{print} /}/{exit}')
   if ! echo "$detail_panel_rule" | grep -qF 'background:var(--bg)'; then
-    record_failure "$test_name" "T25-95: .detail-panel 규칙에 background:var(--bg) 가 없음"
-    return 1
+    note_failure "T25-95: .detail-panel 규칙에 background:var(--bg) 가 없음"
   fi
   if echo "$detail_panel_rule" | grep -qF 'background:var(--surface)'; then
     record_failure "$test_name" "T25-95: .detail-panel 규칙에 옛 background:var(--surface) 가 남아 있음"
@@ -3936,12 +3711,10 @@ PYEOF
   local detail_note_markup detail_note_rule
   detail_note_markup=$(sed -n '/<p id="dzh-detail-note"/,/>/p' "$hub_template_file")
   if [[ -z "$detail_note_markup" ]]; then
-    record_failure "$test_name" "T25-96: hub_template.html 에 <p id=\"dzh-detail-note\" 마크업을 찾지 못함"
-    return 1
+    note_failure "T25-96: hub_template.html 에 <p id=\"dzh-detail-note\" 마크업을 찾지 못함"
   fi
   if ! echo "$detail_note_markup" | grep -qF 'data-tooltip='; then
-    record_failure "$test_name" "T25-96: dzh-detail-note 마크업에 data-tooltip= 이 없음"
-    return 1
+    note_failure "T25-96: dzh-detail-note 마크업에 data-tooltip= 이 없음"
   fi
   if echo "$detail_note_markup" | grep -qF 'hidden'; then
     record_failure "$test_name" "T25-96: dzh-detail-note 마크업에 hidden 속성이 남아 있음"
@@ -3951,17 +3724,14 @@ PYEOF
   local detail_note_rule_token
   for detail_note_rule_token in 'white-space:nowrap' 'visibility:hidden' 'line-height:16px'; do
     if ! echo "$detail_note_rule" | grep -qF -- "$detail_note_rule_token"; then
-      record_failure "$test_name" "T25-96: .detail-note 규칙에 $detail_note_rule_token 이 없음"
-      return 1
+      note_failure "T25-96: .detail-note 규칙에 $detail_note_rule_token 이 없음"
     fi
   done
   if ! grep -qF -- 'detail-note-visible' "$hub_template_file"; then
-    record_failure "$test_name" "T25-96: hub_template.html 에 detail-note-visible 클래스가 없음"
-    return 1
+    note_failure "T25-96: hub_template.html 에 detail-note-visible 클래스가 없음"
   fi
   if grep -qF -- 'panelNoteEl.hidden' "$hub_template_file"; then
-    record_failure "$test_name" "T25-96: hub_template.html 에 panelNoteEl.hidden 대입이 남아 있음"
-    return 1
+    note_failure "T25-96: hub_template.html 에 panelNoteEl.hidden 대입이 남아 있음"
   fi
   if grep -qF -- 'DETAIL_NOTE_TEXT' "$hub_template_file"; then
     record_failure "$test_name" "T25-96: hub_template.html 에 DETAIL_NOTE_TEXT 상수가 남아 있음"
@@ -4012,8 +3782,7 @@ PYEOF
   local removed_icon_token
   for removed_icon_token in '>☾<' '☀' '>≡<' '>»<' 'THEME_GLYPH' 'cdn.' 'unpkg' 'createIcons'; do
     if grep -qF -- "$removed_icon_token" "$hub_template_file"; then
-      record_failure "$test_name" "T25-98: hub_template.html 에 옛 글리프·CDN 잔재($removed_icon_token)가 남아 있음"
-      return 1
+      note_failure "T25-98: hub_template.html 에 옛 글리프·CDN 잔재($removed_icon_token)가 남아 있음"
     fi
   done
 
@@ -4033,8 +3802,7 @@ PYEOF
   local head_comment_body
   head_comment_body=$(sed -n '/^<!--$/,/^-->$/p' "$hub_template_file")
   if ! echo "$head_comment_body" | grep -qF -- 'detail-note-visible'; then
-    record_failure "$test_name" "T25-99: hub_template.html 머리 주석에 detail-note-visible 이 없음"
-    return 1
+    note_failure "T25-99: hub_template.html 머리 주석에 detail-note-visible 이 없음"
   fi
   if echo "$head_comment_body" | grep -qF -- 'hidden·textContent 만 바뀐다'; then
     record_failure "$test_name" "T25-99: hub_template.html 머리 주석에 옛 계약 문구(hidden·textContent 만 바뀐다)가 남아 있음"
@@ -4054,8 +3822,7 @@ PYEOF
   for py_source_file in "$REPO_ROOT"/hub/bin/*.py; do
     py_line_count=$(wc -l < "$py_source_file" | tr -d ' ')
     if [[ "$py_line_count" -gt 800 ]]; then
-      record_failure "$test_name" "T25-100: $py_source_file 이 800줄을 넘음($py_line_count 줄)"
-      return 1
+      note_failure "T25-100: $py_source_file 이 800줄을 넘음($py_line_count 줄)"
     fi
   done
 
@@ -4070,8 +3837,7 @@ PYEOF
       'def compose_project_views(' 'def is_server_alive(' 'def should_spawn_collect(' \
       'def parse_server_record('; do
     if grep -qF -- "$relocated_symbol_def" "$hub_model_file"; then
-      record_failure "$test_name" "T25-101: hub_model.py 에 이동한 심볼의 정의($relocated_symbol_def)가 남아 있음(MS2 위반)"
-      return 1
+      note_failure "T25-101: hub_model.py 에 이동한 심볼의 정의($relocated_symbol_def)가 남아 있음(MS2 위반)"
     fi
   done
 
@@ -4080,12 +3846,10 @@ PYEOF
   # hub_project 로 간다). 역방향 — hub_project.py 가 hub_model 을 임포트하면 안 된다
   # (간선 방향이 반대로 뒤집힌다).
   if grep -qE '^(import|from) hub_' "$hub_server_state_file"; then
-    record_failure "$test_name" "T25-102: hub_server_state.py 가 다른 허브 모듈을 임포트함(잎 모듈 계약 위반)"
-    return 1
+    note_failure "T25-102: hub_server_state.py 가 다른 허브 모듈을 임포트함(잎 모듈 계약 위반)"
   fi
   if grep -qE '^(import|from) hub_project' "$hub_session_file"; then
-    record_failure "$test_name" "T25-102: hub_session.py 가 hub_project 를 임포트함(의존 방향 위반)"
-    return 1
+    note_failure "T25-102: hub_session.py 가 hub_project 를 임포트함(의존 방향 위반)"
   fi
   if grep -qE '^import hub_model' "$hub_project_file"; then
     record_failure "$test_name" "T25-102 역방향: hub_project.py 가 hub_model 을 임포트함(역방향 간선 금지)"
@@ -4108,20 +3872,17 @@ PYEOF
   for relocated_test_class in "class SubagentZombieGuardTest" "class ComposeProjectViewsTest" \
       "class ParseServerRecordTest"; do
     if grep -qF -- "$relocated_test_class" "$hub_model_test_file"; then
-      record_failure "$test_name" "T25-103: test_hub_model.py 에 이관된 테스트 클래스($relocated_test_class)가 잔류함"
-      return 1
+      note_failure "T25-103: test_hub_model.py 에 이관된 테스트 클래스($relocated_test_class)가 잔류함"
     fi
   done
 
   # T25-104(문서 정합, 결정 MS10): hub/README.md 가 15개 파일을 고지하고, hub-dashboard.md
   # 모듈 구성표가 hub_session.py 를 안다. 역방향 — 옛 "12개 파일" 고지가 남아 있으면 안 된다.
   if ! grep -qF "15개 파일" "$hub_readme_file"; then
-    record_failure "$test_name" "T25-104: hub/README.md 에 15개 파일 고지가 없음"
-    return 1
+    note_failure "T25-104: hub/README.md 에 15개 파일 고지가 없음"
   fi
   if grep -qF "12개 파일" "$hub_readme_file"; then
-    record_failure "$test_name" "T25-104: hub/README.md 에 옛 12개 파일 고지가 남아 있음"
-    return 1
+    note_failure "T25-104: hub/README.md 에 옛 12개 파일 고지가 남아 있음"
   fi
   if ! grep -qF "hub_session.py" "$hub_dashboard_prp_file"; then
     record_failure "$test_name" "T25-104: docs/prps/hub-dashboard.md 모듈 구성표에 hub_session.py 가 없음"
@@ -4136,16 +3897,14 @@ PYEOF
       'function panelEmptyReason(' '.detail-panel.detail-empty .detail-frame{display:none}' \
       '.detail-panel.detail-empty .detail-empty-reason{display:block}' 'id="dzh-detail-empty-reason"'; do
     if ! grep -qF -- "$oc4_oc5_token" "$hub_template_file"; then
-      record_failure "$test_name" "T25-105: hub_template.html 에 $oc4_oc5_token 이 없음"
-      return 1
+      note_failure "T25-105: hub_template.html 에 $oc4_oc5_token 이 없음"
     fi
   done
   # 불변식 OC-A(키 부재 ⇔ 사유 존재)의 강제 지점은 무조건 else 다 — else if 로 좁혀지면
   # 이 리터럴 줄 자체가 사라진다(속성 이름만 보는 substring 검사로는 조건부화를 못 잡는다).
   if ! grep -qF -- "else cardAttrs += ' data-panel-empty-reason=\"' + escapeHtml(emptyReason) + '\"';" \
       "$hub_template_file"; then
-    record_failure "$test_name" "T25-105: data-panel-empty-reason 부여가 무조건 else 가 아님(불변식 OC-A 위반)"
-    return 1
+    note_failure "T25-105: data-panel-empty-reason 부여가 무조건 else 가 아님(불변식 OC-A 위반)"
   fi
   if grep -qF -- "CLICKABLE_CARD_SELECTOR = '[' + DASHBOARD_KEY_ATTRIBUTE + ']';" "$hub_template_file"; then
     record_failure "$test_name" "T25-105: hub_template.html 에 옛 단일 속성 셀렉터가 남아 있음(결정 OC5 회귀)"
@@ -4180,8 +3939,7 @@ PYEOF
   local oc1_token
   for oc1_token in 'openPanelTarget' 'PROJECT_PATH_ATTRIBUTE' 'isSameDocument' 'function readCardTarget('; do
     if ! grep -qF -- "$oc1_token" "$hub_template_file"; then
-      record_failure "$test_name" "T25-106: hub_template.html 에 $oc1_token 이 없음"
-      return 1
+      note_failure "T25-106: hub_template.html 에 $oc1_token 이 없음"
     fi
   done
   if grep -qF -- 'openDashboardKey' "$hub_template_file"; then
@@ -4227,12 +3985,10 @@ PYEOF
   local card_open_rule
   card_open_rule=$(grep -oE '\.card\.card-open\{[^}]*\}' "$hub_template_file" | head -1)
   if [[ -z "$card_open_rule" ]] || echo "$card_open_rule" | grep -qE '#[0-9a-fA-F]{3}'; then
-    record_failure "$test_name" "T25-108: .card.card-open 규칙에 하드코딩된 # 색 리터럴이 있거나 규칙을 찾지 못함(G9)"
-    return 1
+    note_failure "T25-108: .card.card-open 규칙에 하드코딩된 # 색 리터럴이 있거나 규칙을 찾지 못함(G9)"
   fi
   if grep -qF -- '.card[data-dashboard-key]{cursor:pointer}' "$hub_template_file"; then
-    record_failure "$test_name" "T25-108: hub_template.html 에 옛 단독 커서 셀렉터가 남아 있음(결정 OC5 회귀)"
-    return 1
+    note_failure "T25-108: hub_template.html 에 옛 단독 커서 셀렉터가 남아 있음(결정 OC5 회귀)"
   fi
   if grep -qF -- "? 'button' : 'span'" "$hub_template_file"; then
     record_failure "$test_name" "T25-108: hub_template.html 에 옛 <span> 분기가 남아 있음(결정 OC11 회귀)"
@@ -4245,8 +4001,7 @@ PYEOF
   local readme_oc_token
   for readme_oc_token in '어느 카드든' '사유' '배경색'; do
     if ! grep -qF -- "$readme_oc_token" "$hub_readme_file"; then
-      record_failure "$test_name" "T25-109: hub/README.md 에 $readme_oc_token 토큰이 없음"
-      return 1
+      note_failure "T25-109: hub/README.md 에 $readme_oc_token 토큰이 없음"
     fi
   done
   if grep -qF -- '클릭 대상이 아니다' "$hub_readme_file"; then
@@ -4261,13 +4016,11 @@ PYEOF
   local head_comment_oc_token
   for head_comment_oc_token in 'data-panel-empty-reason' 'aria-current'; do
     if ! echo "$head_comment_body_109" | grep -qF -- "$head_comment_oc_token"; then
-      record_failure "$test_name" "T25-109: hub_template.html 머리 주석에 $head_comment_oc_token 이 없음"
-      return 1
+      note_failure "T25-109: hub_template.html 머리 주석에 $head_comment_oc_token 이 없음"
     fi
   done
   if echo "$head_comment_body_109" | grep -qF -- '카드에는 패널 열림 상태를 반영하지 않는다'; then
-    record_failure "$test_name" "T25-109: hub_template.html 머리 주석에 옛 조항 ③(카드에는 패널 열림 상태를 반영하지 않는다)이 남아 있음"
-    return 1
+    note_failure "T25-109: hub_template.html 머리 주석에 옛 조항 ③(카드에는 패널 열림 상태를 반영하지 않는다)이 남아 있음"
   fi
   if grep -qF -- '프로젝트 대시보드 모달' "$hub_template_file"; then
     record_failure "$test_name" "T25-109: hub_template.html 에 '프로젝트 대시보드 모달' 잔재가 남아 있음"
@@ -4344,17 +4097,14 @@ print("; ".join(problems) if problems else "OK")
 PYEOF
 )
   if [[ "$open_card_contrast_output" != "OK" ]]; then
-    record_failure "$test_name" "T25-110: 라이트 테마 열린 카드 대비 — $open_card_contrast_output"
-    return 1
+    note_failure "T25-110: 라이트 테마 열린 카드 대비 — $open_card_contrast_output"
   fi
   # 위 부등식은 색 토큰만 본다 — 규칙이 실제로 두 채널을 쓰는지는 따로 고정해야 한다.
   if ! grep -qF -- '.card.card-open{background:var(--accent-soft);border-color:var(--accent)}' "$hub_template_file"; then
-    record_failure "$test_name" "T25-110: .card.card-open 이 면색+테두리 2채널을 함께 쓰지 않음"
-    return 1
+    note_failure "T25-110: .card.card-open 이 면색+테두리 2채널을 함께 쓰지 않음"
   fi
 
-  log_ok "$test_name 통과"
-  ((passed_tests++))
+  finish_group "$test_name"
 }
 
 register_and_run_tests() {
