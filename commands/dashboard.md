@@ -1318,7 +1318,14 @@ DZ:DASHBOARD 갱신 맵 (동적 영역 — 셀렉터 기반 정밀 치환, comma
   .entry summary::marker{content:""}
   .entry .time{font-size:11px;color:var(--muted);flex:none;width:40px}
   .entry .lead{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-weight:600;color:var(--ink)}
-  .entry .detail{margin:6px 0 0 48px;font-size:12.5px;color:var(--muted);white-space:pre-wrap}
+  /* overflow-wrap:anywhere 는 pre-wrap 의 사각지대를 메운다 — pre-wrap 은 "줄바꿈 기회에서"
+     접을 뿐이고, 식별자를 가운뎃점으로 이어 붙인 사슬(예: aFn·bFn·cFn)에는 그 기회가
+     하나도 없어 상자를 그대로 뚫고 나갔다. 허브 상세 패널(폭 550px)에서 실측: 이 요소
+     clientWidth 399 / scrollWidth 504, 문서 전체가 549 대비 603 으로 넘쳐 오른쪽 글자가
+     잘렸다. anywhere 를 주면 문서 넘침이 549 로 사라진다. break-word 가 아니라 anywhere
+     인 이유: break-word 는 min-content 폭 계산에서 이 강제 분리를 빼기 때문에, 좁은
+     상자에서는 여전히 넘칠 수 있다. */
+  .entry .detail{margin:6px 0 0 48px;font-size:12.5px;color:var(--muted);white-space:pre-wrap;overflow-wrap:anywhere}
   .log-title,.impl-title{font-size:13px;font-weight:700;color:var(--muted);margin:0 0 10px}
   .foot{font-size:12px;color:var(--muted);text-align:right}
   /* 페이지 헤더 — .wrap 과 같은 폭 상자를 써서 카드와 좌우가 정렬된다.

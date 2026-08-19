@@ -81,7 +81,10 @@ DZH:HUB 데이터 계약
     color-scheme:light;
     --bg:#EEF3F8;--surface:#FFFFFF;--ink:#172033;--head:#12335B;--muted:#5A6879;
     --line:#D9E2EC;--soft:#F4F7FB;
-    --accent:#0072B2;--accent-ink:#005B8F;--accent-soft:#E4F0F8;
+    /* --accent-soft 는 열린 카드의 면색(.card.card-open)과 실행중 에이전트 칩
+       (.agent-chip-running)이 공유한다. 라이트 테마에서 이 값을 정하는 제약은 칩이
+       아니라 카드다 — 아래 .card.card-open 주석의 대비 계산을 함께 볼 것. */
+    --accent:#0072B2;--accent-ink:#005B8F;--accent-soft:#DAE9F7;
     --attention:#B45309;--attention-soft:#FBEEDC;
     --shadow:0 8px 24px rgba(19,51,91,.06);
     /* 패널 폭(SP19, 초판 SP4 번복). 밀어내기 폭·.usage 이동량이 같은 값을 쓰게 하는 단일 출처다. */
@@ -130,13 +133,21 @@ DZH:HUB 데이터 계약
      커서를 바꿔 별도 클래스 없이 화면 상태와 데이터가 항상 일치하게 한다(결정 N2 의 관례). */
   .card[data-dashboard-key],.card[data-panel-empty-reason]{cursor:pointer}
   .card[data-dashboard-key]:hover,.card[data-panel-empty-reason]:hover{border-color:var(--accent)}
-  /* 지금 상세 패널에 열려 있는 카드(결정 OC9). 표면(background)을 쓰는 이유는 다른 채널이
-     전부 점유돼 있기 때문이다 — border-color 는 hover 와 card-working, box-shadow+animation 은
-     card-working, outline 2px 은 포커스 링(.project-name:focus-visible)이 이미 쓴다. 속성이
-     겹치지 않으므로 아래 .card.card-working 규칙과의 소스 순서에 의존하지 않는다(둘 다 붙으면
-     테두리·glow 는 working 이, 면색은 이 규칙이 담당한다). 보조기술 채널은 JS 가 붙이는
-     aria-current="true" 다 — 색 하나에 의존하지 않는다(결정 D4 의 다중 채널 관례). */
-  .card.card-open{background:var(--accent-soft)}
+  /* 지금 상세 패널에 열려 있는 카드(결정 OC9). 면색이 판별 채널이고, 테두리는 그 면색이
+     혼자 감당하지 못하는 몫을 메운다. 왜 면색 혼자로는 안 됐는가(라이트 테마 실측):
+     옛 --accent-soft(#E4F0F8)와 페이지 배경 --bg(#EEF3F8)의 대비는 1.038:1, ΔL* 1.47 로
+     넓은 면적의 식별 한계(ΔL* 약 2) 아래였다 — 열린 카드가 그리드에 뚫린 구멍처럼 보였다.
+     면색을 더 어둡게 하는 데는 천장이 있다: 카드 안에는 --muted(#5A6879) 본문(.path·
+     .session-time)이 있어 그 대비가 4.5:1(WCAG AA) 아래로 내려갈 수 없고, 그 경계가
+     #DAE9F7(muted 4.60:1, ΔL* 3.96)이다. #D2E4F5 부터는 muted 가 4.38:1 로 떨어진다.
+     ΔL* 3.96 은 식별 한계는 넘지만 "카드가 페이지 위에 떠 있다"는 인상까지는 못 되살린다 —
+     그래서 --accent 테두리를 함께 준다(배경 대비 4.64:1, 면색 대비 4.19:1 로 비텍스트
+     3:1 을 넉넉히 넘는다). 초판이 테두리를 피한 이유(hover·card-working 이 이미 쓴다)는
+     충돌이 아니라 중복이었다 — 세 상태가 같은 --accent 테두리를 공유하므로 소스 순서상
+     뒤에 오는 .card.card-working 이 이 선언을 덮어도 결과 색이 같다. 열림의 판별은 여전히
+     면색 단독이고, 보조기술 채널은 JS 가 붙이는 aria-current="true" 다(결정 D4).
+     다크 테마는 손대지 않는다 — #12324A 대 #0E1621 은 ΔL* 12.6 으로 처음부터 넉넉했다. */
+  .card.card-open{background:var(--accent-soft);border-color:var(--accent)}
   /* 지금 작업중인 카드를 훑어 찾기 쉽게 하는 스캔 보조 신호(R3) — 배지의 텍스트+글리프+색
      3채널에 얹는 중복 신호라 새 접근성 부채가 아니다(결정 D4). box-shadow 는 --shadow(카드
      기본 그림자)를 먼저 유지한 뒤 두 번째 그림자로 halo 를 더한다 — 순서를 바꾸면 working
@@ -241,9 +252,11 @@ DZH:HUB 데이터 계약
   .refresh-btn.connection-lost{color:var(--attention);border-color:var(--attention);background:var(--attention-soft)}
   /* 새로고침 회전(PV6) — "클릭이 접수됐다"만 말하는 1회 재생이다. 폴링의 진행/성공/실패는
      이미 data-tooltip 문구와 .connection-lost 색이 말하고 있어 여기서 반복하지 않는다.
-     시간 숫자는 이 한 곳에만 산다 — JS 는 animationend 로 끝을 알므로 시간을 모른다(PV7). */
+     시간 숫자는 이 한 곳에만 산다 — JS 는 animationend 로 끝을 알므로 시간을 모른다(PV7).
+     600ms 는 회전이 눈에 남지 않을 만큼 빨라 "돌았다"가 아니라 "번쩍했다"로 읽혔다. 1회
+     재생이라 길어도 반복 피로가 없으므로, 한 바퀴를 눈으로 따라갈 수 있는 1000ms 로 늦춘다. */
   @keyframes dzh-refresh-spin{from{transform:rotate(0)}to{transform:rotate(360deg)}}
-  .refresh-btn.refresh-spinning svg{animation:dzh-refresh-spin 600ms ease-in-out}
+  .refresh-btn.refresh-spinning svg{animation:dzh-refresh-spin 1000ms ease-in-out}
   /* 무효화는 반드시 위 규칙보다 뒤에 온다(.card.card-working 124행이 세운 관례). */
   @media (prefers-reduced-motion:reduce){.refresh-btn.refresh-spinning svg{animation:none}}
   /* 218px 은 JS 가 못 도는 경우에만 쓰이는 fallback 이다(펼침 실측 186 + 여유 32,

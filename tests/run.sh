@@ -999,7 +999,7 @@ test_manifest_fields_complete() {
 # 설치·문서 정합성만 자동 검증한다 (하위 검증 T22-1~T22-127).
 test_dashboard_template_integrity() {
   local test_name="T22"
-  local test_desc="dashboard 템플릿 무결성 (T22-1~T22-127)"
+  local test_desc="dashboard 템플릿 무결성 (T22-1~T22-128)"
   log_test_name "$test_name" "$test_desc"
 
   local sandbox
@@ -2221,6 +2221,15 @@ test_dashboard_template_integrity() {
     return 1
   fi
 
+  # T22-128(허브 상세 패널 가로 넘침 회귀 방지): `.entry .detail` 은 `white-space:pre-wrap` 만
+  # 갖고 있던 동안, 줄바꿈 기회가 하나도 없는 식별자 사슬(가운뎃점으로 이어 붙인 함수명 등)을
+  # 접지 못해 상자를 뚫고 나갔다 — 폭 550px 인 허브 패널에서 실측 clientWidth 399 / scrollWidth
+  # 504. `break-word` 가 아니라 `anywhere` 를 고정하는 이유는 dashboard.md 의 규칙 주석에 있다.
+  if ! grep -qE '\.entry \.detail\{[^}]*white-space:pre-wrap;overflow-wrap:anywhere\}' "$dashboard_command_file"; then
+    record_failure "$test_name" "T22-128: .entry .detail 규칙에 overflow-wrap:anywhere 가 없음(가로 넘침 회귀)"
+    return 1
+  fi
+
   log_ok "$test_name 통과"
   ((passed_tests++))
 }
@@ -2343,10 +2352,10 @@ test_hub_unit_tests() {
   ((passed_tests++))
 }
 
-# T25: 허브 문서·상수 정합성 (하위 검증 T25-1~T25-109)
+# T25: 허브 문서·상수 정합성 (하위 검증 T25-1~T25-110)
 test_hub_docs_and_constants() {
   local test_name="T25"
-  local test_desc="허브 문서·상수 정합성 (T25-1~T25-109)"
+  local test_desc="허브 문서·상수 정합성 (T25-1~T25-110)"
   log_test_name "$test_name" "$test_desc"
 
   local hub_settings_file="$REPO_ROOT/hub/bin/hub_settings.py"
@@ -4262,6 +4271,85 @@ PYEOF
   fi
   if grep -qF -- '프로젝트 대시보드 모달' "$hub_template_file"; then
     record_failure "$test_name" "T25-109: hub_template.html 에 '프로젝트 대시보드 모달' 잔재가 남아 있음"
+    return 1
+  fi
+
+  # T25-110(라이트 테마 열린 카드 식별): 값이 아니라 **관계**를 고정한다. 열린 카드의 면색
+  # (--accent-soft)은 두 요구를 동시에 만족해야 하고 둘은 서로 반대로 당긴다 — ①페이지 배경
+  # (--bg)과 지각 가능하게 떨어질 만큼 어두워야 하고, ②카드 안 --muted 본문의 WCAG AA 를
+  # 깨뜨릴 만큼 어두워선 안 된다. 한쪽만 보고 값을 고치면 다른 쪽이 조용히 깨지므로(옛
+  # #E4F0F8 은 ①을 ΔL* 1.46 으로 어겼다) 두 부등식을 함께 검사한다. 테두리(--accent)의
+  # 비텍스트 대비도 같이 본다 — 면색 단독으로는 ①의 천장이 낮아 테두리가 필수 채널이다.
+  local open_card_contrast_output
+  open_card_contrast_output=$(python3 - "$hub_template_file" <<'PYEOF'
+import re
+import sys
+
+MIN_MUTED_TEXT_CONTRAST = 4.5      # WCAG 1.4.3 AA — 카드 안 --muted 본문(.path·.session-time)
+MIN_SURFACE_DELTA_LSTAR = 2.0      # 넓은 면적의 명도 식별 한계(CIE L*)
+MIN_BORDER_CONTRAST = 3.0          # WCAG 1.4.11 — 비텍스트(테두리)
+REQUIRED_TOKENS = ("bg", "muted", "accent", "accent-soft")
+
+
+def relative_luminance(hex_color: str) -> float:
+    """#RRGGBB 의 WCAG 상대 휘도."""
+    channels = [int(hex_color[index:index + 2], 16) / 255 for index in (1, 3, 5)]
+    linear = [c / 12.92 if c <= 0.04045 else ((c + 0.055) / 1.055) ** 2.4 for c in channels]
+    return 0.2126 * linear[0] + 0.7152 * linear[1] + 0.0722 * linear[2]
+
+
+def contrast_ratio(first: str, second: str) -> float:
+    """두 색의 WCAG 대비비(1:1 ~ 21:1)."""
+    a, b = relative_luminance(first), relative_luminance(second)
+    return (max(a, b) + 0.05) / (min(a, b) + 0.05)
+
+
+def lightness_star(hex_color: str) -> float:
+    """CIE L* — 대비비와 달리 사람이 느끼는 명도 차를 선형에 가깝게 나타낸다."""
+    luminance = relative_luminance(hex_color)
+    if luminance <= 0.008856:
+        return 903.3 * luminance
+    return 116 * luminance ** (1 / 3) - 16
+
+
+source = open(sys.argv[1], encoding="utf-8").read()
+# 라이트 테마는 맨 앞의 **맨몸** :root 블록이다(다크는 :root[data-theme]·미디어쿼리 안).
+light_root = re.search(r":root\{(.*?)\}", source, re.S)
+if light_root is None:
+    print("라이트 테마 :root 블록을 찾지 못함")
+    raise SystemExit(0)
+tokens = dict(re.findall(r"--([a-z-]+):(#[0-9A-Fa-f]{6})", light_root.group(1)))
+absent = [name for name in REQUIRED_TOKENS if name not in tokens]
+if absent:
+    print("라이트 :root 에 없는 토큰: " + ", ".join(absent))
+    raise SystemExit(0)
+
+problems = []
+muted_contrast = contrast_ratio(tokens["accent-soft"], tokens["muted"])
+if muted_contrast < MIN_MUTED_TEXT_CONTRAST:
+    problems.append(
+        f"열린 카드 면색 위 --muted 본문 {muted_contrast:.2f}:1 < {MIN_MUTED_TEXT_CONTRAST}"
+    )
+surface_delta = lightness_star(tokens["bg"]) - lightness_star(tokens["accent-soft"])
+if surface_delta < MIN_SURFACE_DELTA_LSTAR:
+    problems.append(
+        f"열린 카드 면색과 --bg 의 ΔL* {surface_delta:.2f} < {MIN_SURFACE_DELTA_LSTAR}"
+    )
+border_contrast = contrast_ratio(tokens["accent"], tokens["bg"])
+if border_contrast < MIN_BORDER_CONTRAST:
+    problems.append(
+        f"테두리 --accent 와 --bg 의 대비 {border_contrast:.2f}:1 < {MIN_BORDER_CONTRAST}"
+    )
+print("; ".join(problems) if problems else "OK")
+PYEOF
+)
+  if [[ "$open_card_contrast_output" != "OK" ]]; then
+    record_failure "$test_name" "T25-110: 라이트 테마 열린 카드 대비 — $open_card_contrast_output"
+    return 1
+  fi
+  # 위 부등식은 색 토큰만 본다 — 규칙이 실제로 두 채널을 쓰는지는 따로 고정해야 한다.
+  if ! grep -qF -- '.card.card-open{background:var(--accent-soft);border-color:var(--accent)}' "$hub_template_file"; then
+    record_failure "$test_name" "T25-110: .card.card-open 이 면색+테두리 2채널을 함께 쓰지 않음"
     return 1
   fi
 
