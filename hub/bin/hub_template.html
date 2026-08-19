@@ -30,13 +30,18 @@ DZH:HUB 데이터 계약
   그 사이 dragover 가 #dzh-app 자식의 순서를 직접 바꾸며(라이브 이동), 따라서 드래그
   구간에서는 DOM 이 저장 순서보다 앞서 있다. drop 이 그 DOM 순서를 커밋하고, dragend 가
   한 번 다시 그려 둘을 맞춘다. 취소·카드 밖 드롭은 drop 없이 dragend 만 발화하므로 재렌더가
-  라이브 이동을 자동으로 되돌린다. ③ 밀어내기는 body 의 클래스 하나로만 표현한다 —
-  #dzh-app 이나 카드에는 패널 열림 상태를 반영하지 않는다. 반영하는 순간 매 렌더마다 그
-  상태를 다시 계산해야 하고, 두 IIFE 의 독립성이 깨진다. 원칙은 그대로다 — 사용자 상태
+  라이브 이동을 자동으로 되돌린다. ③ 레이아웃 상태와 선택 상태는 사는 곳이 다르다. 밀어내기
+  (레이아웃)는 body 의 클래스 하나로만 표현한다 — #dzh-app 이나 카드에 밀어내기를 반영하지
+  않는다. 반면 어느 카드가 열려 있는지(선택)는 그 카드에 반영한다(.card-open +
+  .project-name 의 aria-current="true", 정본: docs/prps/hub-panel-empty-state-and-open-card.md
+  결정 OC9). 카드는 렌더마다 전멸하므로 그 표시는 렌더 뒤에 다시 붙어야 한다 — 렌더 IIFE 는
+  자기가 다시 그렸다는 사실만 커스텀 이벤트로 알리고(값을 싣지 않는다), 패널 IIFE 가 카드
+  DOM 을 보고 표시를 복원한다(결정 OC8). 두 IIFE 는 여전히 서로의 변수를 모른다 — 렌더
+  IIFE 는 패널을, 패널 IIFE 는 스냅샷을 모른다. 원칙은 그대로다 — 사용자 상태
   (포커스·접힘·선택·순서·열린 상세 패널)를 가진 것은 재렌더 대상 밖에 둔다. ④ 닫기는
   PANEL_CLOSE_ANIMATION_MS 동안의 슬라이드아웃이며 그 사이 iframe 을 비우지 않는다.
   about:blank 는 같은 시간만큼 지연 실행되고, 대기 중인 그 타이머가 존재하면
-  openDashboardKey 는 반드시 null 이다 — 취소는 openDetailPanel 한 곳에서만 한다(SP15).
+  openPanelTarget 은 반드시 null 이다 — 취소는 openDetailPanel 한 곳에서만 한다(SP15).
 
   #dzh-detail-note 는 패널의 정적 자식이며 detail-note-visible 클래스만 바뀐다(결정 GN6~GN7
   → docs/prps/hub-panel-polish-and-icons.md 결정 PV3). 문구와 data-tooltip 은 마크업에
@@ -66,7 +71,10 @@ DZH:HUB 데이터 계약
   프로젝트 상세 패널(#dzh-detail-panel, docs/prps/hub-detail-side-panel.md 결정 SP1)은
   비모달 <aside> 정적 싱글턴이다. 카드 클릭이 iframe 문서와 제목만 바꾸고, 닫힘에서 iframe 을
   about:blank 로 보내 숨은 폴링을 멈춘다. 열림 상태의 유일한 진실은 패널 IIFE 의
-  openDashboardKey 이며 body.dzh-panel-open 은 그 값의 CSS 투영이다.
+  openPanelTarget(PanelTarget | null)이며, 신원은 data-project-path 다(대시보드 없는
+  프로젝트는 dashboard_key 가 전부 null 이라 신원이 될 수 없다 — 결정 OC1). body.dzh-panel-open
+  은 openPanelTarget !== null 의 CSS 투영이다. 대시보드가 없는 프로젝트는 iframe 을 내리고
+  사유를 보인다 — 사유의 유일한 출처는 카드의 data-panel-empty-reason 이다(결정 OC4·OC7).
 -->
 <style>
   :root{
@@ -116,10 +124,19 @@ DZH:HUB 데이터 계약
      값이다 — 넘치는 세션은 .sessions 만 내부 스크롤된다. 카드 높이를 프로젝트마다 다르게
      만들지 않기 위한 고정값이라 근거 없이 바꾸지 마라. */
   .card{background:var(--surface);border:1px solid var(--line);border-radius:14px;padding:16px 20px;box-shadow:var(--shadow);height:340px;display:flex;flex-direction:column;overflow:hidden}
-  /* 클릭 가능 ⇔ dashboard_key 존재(결정 N2) — 속성 존재만으로 커서를 바꿔 별도 클래스
-     없이도 화면 상태와 데이터가 항상 일치하게 한다(R3). */
-  .card[data-dashboard-key]{cursor:pointer}
-  .card[data-dashboard-key]:hover{border-color:var(--accent)}
+  /* 클릭 가능 ⇔ 패널에 보여줄 것이 있다(결정 OC5) — 대시보드(data-dashboard-key) 또는
+     대시보드가 없는 사유(data-panel-empty-reason). 옛 규칙은 전자만 봤고, 그래서 티어 2·3
+     카드 클릭이 조용히 실패했다(결정 N7 이 금지한 형태 — 이 PRP 의 출발점). 속성 존재만으로
+     커서를 바꿔 별도 클래스 없이 화면 상태와 데이터가 항상 일치하게 한다(결정 N2 의 관례). */
+  .card[data-dashboard-key],.card[data-panel-empty-reason]{cursor:pointer}
+  .card[data-dashboard-key]:hover,.card[data-panel-empty-reason]:hover{border-color:var(--accent)}
+  /* 지금 상세 패널에 열려 있는 카드(결정 OC9). 표면(background)을 쓰는 이유는 다른 채널이
+     전부 점유돼 있기 때문이다 — border-color 는 hover 와 card-working, box-shadow+animation 은
+     card-working, outline 2px 은 포커스 링(.project-name:focus-visible)이 이미 쓴다. 속성이
+     겹치지 않으므로 아래 .card.card-working 규칙과의 소스 순서에 의존하지 않는다(둘 다 붙으면
+     테두리·glow 는 working 이, 면색은 이 규칙이 담당한다). 보조기술 채널은 JS 가 붙이는
+     aria-current="true" 다 — 색 하나에 의존하지 않는다(결정 D4 의 다중 채널 관례). */
+  .card.card-open{background:var(--accent-soft)}
   /* 지금 작업중인 카드를 훑어 찾기 쉽게 하는 스캔 보조 신호(R3) — 배지의 텍스트+글리프+색
      3채널에 얹는 중복 신호라 새 접근성 부채가 아니다(결정 D4). box-shadow 는 --shadow(카드
      기본 그림자)를 먼저 유지한 뒤 두 번째 그림자로 halo 를 더한다 — 순서를 바꾸면 working
@@ -143,8 +160,8 @@ DZH:HUB 데이터 계약
   .card-drag-handle:hover{color:var(--accent-ink);border-color:var(--accent)}
   .card-drag-handle svg{width:14px;height:14px}
   /* font:inherit 를 먼저 두고 font-size·font-weight 를 뒤에 다시 적어, <button> 기본 폰트만
-     리셋하고 크기·굵기는 명시값을 쓰게 한다(순서 의존 — .usage-toggle 과 같은 관례). 티어
-     2·3 은 <span> 으로 렌더돼(R3) 이 리셋은 그때 아무 효과가 없다. */
+     리셋하고 크기·굵기는 명시값을 쓰게 한다(순서 의존 — .usage-toggle 과 같은 관례). 모든
+     카드가 <button> 이므로 이 리셋은 항상 유효하다(결정 OC11). */
   .project-name{font:inherit;font-size:15px;font-weight:800;color:var(--head);overflow:hidden;
                 text-overflow:ellipsis;white-space:nowrap;min-width:0;flex:1 1 auto;
                 border:0;background:none;padding:0;text-align:left}
@@ -347,6 +364,17 @@ DZH:HUB 데이터 계약
   .detail-close:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
   .detail-close svg{width:14px;height:14px}
   .detail-frame{flex:1 1 auto;width:100%;border:0}
+  /* 빈 상태(결정 OC7) — 대시보드가 없는 프로젝트를 열었을 때 iframe 대신 사유를 보인다.
+     상태 클래스는 패널에 붙이고 무엇을 보일지는 CSS 가 고른다(테마 아이콘 2개 중 하나를
+     CSS 가 고르는 결정 PV10 과 같은 관례) — JS 는 클래스 1개와 문구 1개만 만진다.
+     iframe 을 display:none 으로 내리는 것이 필수다: about:blank 만 실으면 --bg 와 다른
+     빈 면이 사유 아래에 남아 "로딩 중"으로 읽히고, 접근성 트리에도 빈 프레임의
+     aria-label("프로젝트 진행 대시보드")이 남아 낭독된다.
+     문구를 마크업에 고정하지 않는 것이 안내 줄(.detail-note, PV3)과 다른 점이다 —
+     사유가 프로젝트마다 다르므로 유일한 출처는 카드 속성이다(결정 OC4). */
+  .detail-empty-reason{display:none;margin:0;padding:0 16px;font-size:13px;color:var(--muted)}
+  .detail-panel.detail-empty .detail-frame{display:none}
+  .detail-panel.detail-empty .detail-empty-reason{display:block}
   /* 안내 줄(결정 GN6 → PV3) — 자리를 항상 차지한다. hidden 속성 토글을 버린 이유:
      [hidden]{display:none} 은 상자를 없애 헤더 높이가 프로젝트마다 달라지고, 패널을 연 채
      다른 카드를 누르면 대시보드가 위아래로 튄다(요구 R2). visibility:hidden 은 상자를
@@ -426,6 +454,7 @@ try{
   <p id="dzh-detail-note" class="detail-note"
      data-tooltip="이전 작업의 대시보드입니다 — 지금 진행 중인 세션이 시작된 뒤 갱신되지 않았습니다."
   >이전 작업의 대시보드입니다 — 지금 진행 중인 세션이 시작된 뒤 갱신되지 않았습니다.</p>
+  <p id="dzh-detail-empty-reason" class="detail-empty-reason"></p>
   <iframe id="dzh-detail-frame" class="detail-frame"
           aria-label="프로젝트 진행 대시보드"></iframe>
 </aside>
@@ -688,8 +717,12 @@ try{
     + 'focusable="false"><circle cx="9" cy="12" r="1"/><circle cx="9" cy="5" r="1"/>'
     + '<circle cx="9" cy="19" r="1"/><circle cx="15" cy="12" r="1"/><circle cx="15" cy="5" r="1"/>'
     + '<circle cx="15" cy="19" r="1"/></svg>';
-  // 프로젝트 대시보드 모달(R3, 결정 N7) — file:// 모드는 클릭 대상에서 빠지고 사유를 안내한다.
+  // 프로젝트 상세 패널(결정 N7 → OC6) — file:// 모드는 대시보드를 띄울 수 없고, 그 사유를
+  // 툴팁과 패널 빈 상태 두 곳에서 같은 문구로 알린다.
   var FILE_MODE_DASHBOARD_HINT = '허브 서버를 켜면(/hub server start) 카드에서 대시보드를 볼 수 있습니다';
+  // 카드를 다시 그렸다는 사실만 알리는 이벤트 이름(결정 OC8). 패널 IIFE 가 같은 문자열로
+  // 듣는다 — 공유 스코프가 없어 리터럴이 두 곳에 살고, T25-107 이 "정확히 2회"를 센다.
+  var RENDERED_EVENT_NAME = 'dzh:rendered';
 
   var app = document.getElementById('dzh-app');
   var refreshButton = document.getElementById('dzh-refresh');
@@ -914,12 +947,22 @@ try{
       + escapeHtml(DRAG_HANDLE_HINT) + '">' + DRAG_HANDLE_ICON_SVG + '</span>';
   }
 
-  // 클릭 가능(티어 1 + 서버 모드)이면 <button>, 아니면 <span> — 없는 기능을 있는 척하지
-  // 않는다(결정 N6). data-tooltip 은 R4 로 제거됐다: 보이는 텍스트와 같아 정보 손실이 없다.
-  function renderProjectNameEl(project, isClickable){
-    var tag = isClickable ? 'button' : 'span';
-    var typeAttr = isClickable ? ' type="button"' : '';
-    return '<' + tag + ' class="project-name"' + typeAttr + '>' + escapeHtml(project.display_name) + '</' + tag + '>';
+  // 빈 상태 사유(결정 OC4) — 대시보드를 띄울 수 없는 이유를 카드에 실어 패널로 넘긴다.
+  // 문구를 새로 만들지 않는다: 티어 사유는 배지 툴팁(아래)과 같은 TIER_DESCRIPTION 을,
+  // 서버 미가동 사유는 카드 툴팁과 같은 FILE_MODE_DASHBOARD_HINT 를 쓴다 — 한 화면에서
+  // 같은 사실을 두 문구로 말하지 않기 위한 단일 출처다.
+  function panelEmptyReason(project, isClickable){
+    if(isClickable) return '';                                  // 띄울 대시보드가 있다
+    if(project.dashboard_key) return FILE_MODE_DASHBOARD_HINT;   // 티어 1 인데 서버가 꺼져 있다
+    return TIER_DESCRIPTION[project.tier] || '';                 // 대시보드 자체가 없다
+  }
+
+  // 모든 카드가 패널을 열므로 제목은 항상 <button> 이다(결정 OC11). 티어 2·3 은 대시보드 대신
+  // 사유를 띄운다 — 없는 기능을 있는 척하는 것이 아니라, 있는 기능을 키보드에도 주는 것이다.
+  // data-tooltip 은 R4 로 제거됐다: 보이는 텍스트와 같아 정보 손실이 없다(결정 X1).
+  function renderProjectNameEl(project){
+    return '<button class="project-name" type="button">'
+      + escapeHtml(project.display_name) + '</button>';
   }
 
   function renderProject(project){
@@ -932,11 +975,16 @@ try{
       .filter(shouldRenderSession);
     var sessionsHtml = visibleSessions.length
       ? '<ul class="sessions">' + visibleSessions.map(renderSession).join('') + '</ul>' : '';
-    // 클릭 가능 ⇔ dashboard_key 존재 + 서버 모드(결정 N2·N7). file:// 에서는 안내 툴팁만 준다.
+    // 클릭 가능 ⇔ dashboard_key 존재 + 서버 모드(결정 N2·N7). file:// 에서는 안내 툴팁도 준다.
     var isClickable = Boolean(project.dashboard_key) && isServed;
+    var emptyReason = panelEmptyReason(project, isClickable);      // 결정 OC4
     var cardAttrs = ' data-project-path="' + escapeHtml(project.path || '') + '"';
     if(isClickable) cardAttrs += ' data-dashboard-key="' + escapeHtml(project.dashboard_key) + '"';
-    else if(project.dashboard_key) cardAttrs += ' data-tooltip="' + escapeHtml(FILE_MODE_DASHBOARD_HINT) + '"';
+    // else 로 붙이는 것이 불변식 OC-A 의 강제 지점이다 — 키가 없으면 사유가 반드시 붙는다.
+    else cardAttrs += ' data-panel-empty-reason="' + escapeHtml(emptyReason) + '"';
+    if(project.dashboard_key && !isClickable){
+      cardAttrs += ' data-tooltip="' + escapeHtml(FILE_MODE_DASHBOARD_HINT) + '"';
+    }
     // 속성 하나가 CSS 스코프와 패널 인계를 겸한다(결정 GN4 — data-dashboard-key 와 같은 관례).
     if(project.tier1_is_previous_task) cardAttrs += ' data-tier1-previous="1"';
     // working 만 강조한다 — stale 은 base_state 가 working 이어도 "소식 없음"이므로 강조하면
@@ -945,7 +993,7 @@ try{
     return '<div class="card' + stateClass + '"' + cardAttrs + '>'
       + '<div class="project-head">'
       + renderDragHandle()
-      + renderProjectNameEl(project, isClickable)
+      + renderProjectNameEl(project)
       + '<span class="badge tier" data-tooltip="' + escapeHtml(TIER_DESCRIPTION[project.tier] || '') + '">' + escapeHtml(TIER_LABEL[project.tier] || ('티어 ' + project.tier)) + '</span>'
       + renderStateBadge(project.state)
       + '<span class="last-activity">' + elapsedLabel(project.last_activity_at_ms) + '</span>'
@@ -1181,6 +1229,9 @@ try{
     app.insertAdjacentHTML('beforeend', extra);
     renderConnectionStatus();
     renderUsagePanel(snapshot.usage, snapshot.rate_limit_resets);
+    // 카드가 방금 전멸·재생성됐다(위 insertAdjacentHTML 앞 로직). 누가 듣는지 이 IIFE 는
+    // 모르며 값도 싣지 않는다 — 열린 카드가 무엇인지의 유일한 출처는 카드 DOM 이다(결정 OC8).
+    document.dispatchEvent(new Event(RENDERED_EVENT_NAME));
   }
   // 펼치는 순간 다음 폴링(최대 5초)을 기다리지 않고 그 자리에서 한 번 더 갱신한다(요구 2).
   // ①은 file:// 모드에서도 동작하는 로컬 재계산, ②는 서버 모드에서만 가능한 즉시 fetch 다.
@@ -1302,8 +1353,9 @@ try{
 (function(){
   // 프로젝트 상세 패널(SP1~SP9) — 카드를 누르면 그 프로젝트의 dashboard.html 을 우측 패널의
   // iframe 으로 띄운다. <aside> 는 #dzh-app 바깥의 정적 마크업이라 폴링·틱과 무관하다
-  // (불변식 H1⁗). 카드가 data-dashboard-key 를 가졌는지만으로 클릭 가능 여부가 정해지므로
-  // (결정 N2·N7) 이 IIFE 는 snapshot 을 몰라도 된다 — 렌더 IIFE 와 완전히 분리돼 있다.
+  // (불변식 H1⁗). 카드가 data-dashboard-key(대시보드) 또는 data-panel-empty-reason(사유)을
+  // 가졌는지로 클릭 가능 여부가 정해지므로(결정 OC5) 이 IIFE 는 snapshot 을 몰라도 된다 —
+  // 렌더 IIFE 와 완전히 분리돼 있다.
   var PANEL_OPEN_BODY_CLASS = 'dzh-panel-open';
   var PANEL_PUSH_MIN_WIDTH_PX = 1024;      // CSS 의 @media (min-width:1024px) 와 같은 값(GOTCHA 2)
   var PANEL_CLOSE_ANIMATION_MS = 180;      // CSS 의 transition 시간과 같은 값(T25-84)
@@ -1311,7 +1363,16 @@ try{
   var PROJECT_DASHBOARD_PATH_SUFFIX = '/dashboard.html';
   var BLANK_DOCUMENT_URL = 'about:blank';
   var DASHBOARD_KEY_ATTRIBUTE = 'data-dashboard-key';
-  var CLICKABLE_CARD_SELECTOR = '[' + DASHBOARD_KEY_ATTRIBUTE + ']';
+  var PROJECT_PATH_ATTRIBUTE = 'data-project-path';               // 패널의 신원 키(결정 OC1)
+  var PANEL_EMPTY_REASON_ATTRIBUTE = 'data-panel-empty-reason';   // 결정 OC4
+  var CLICKABLE_CARD_SELECTOR = '[' + DASHBOARD_KEY_ATTRIBUTE + '],['
+                              + PANEL_EMPTY_REASON_ATTRIBUTE + ']';   // 결정 OC5
+  var PANEL_EMPTY_CLASS = 'detail-empty';                  // 결정 OC7
+  var PROJECT_NAME_SELECTOR = '.project-name';
+  var OPEN_CARD_CLASS = 'card-open';                       // 결정 OC9
+  var OPEN_CARD_ARIA_ATTRIBUTE = 'aria-current';
+  var OPEN_CARD_ARIA_VALUE = 'true';
+  var RENDERED_EVENT_NAME = 'dzh:rendered';                // 렌더 IIFE 가 같은 문자열로 발행한다
   // 이전 작업 안내 줄(결정 GN6) — 카드의 data-tier1-previous 속성이 유일한 출처다. 이 IIFE 는
   // 렌더 IIFE 가 쥔 스냅샷 데이터를 여전히 몰라도 된다(T25-89 가 기계적으로 강제한다).
   var TIER1_PREVIOUS_TASK_ATTRIBUTE = 'data-tier1-previous';
@@ -1320,16 +1381,33 @@ try{
   var panelEl = document.getElementById('dzh-detail-panel');
   var panelTitleEl = document.getElementById('dzh-detail-title');
   var panelNoteEl = document.getElementById('dzh-detail-note');
+  var panelEmptyReasonEl = document.getElementById('dzh-detail-empty-reason');
   var panelFrameEl = document.getElementById('dzh-detail-frame');
   var panelCloseButton = document.getElementById('dzh-detail-close');
   var mainEl = document.querySelector('.wrap');
   var usageEl = document.getElementById('dzh-usage');
-  if(!panelEl || !panelTitleEl || !panelNoteEl || !panelFrameEl || !panelCloseButton || !mainEl) return;
+  if(!panelEl || !panelTitleEl || !panelNoteEl || !panelEmptyReasonEl
+     || !panelFrameEl || !panelCloseButton || !mainEl) return;
 
   var pushModeQuery = matchMedia('(min-width:' + PANEL_PUSH_MIN_WIDTH_PX + 'px)');
-  var openDashboardKey = null;      // 열림 상태의 유일한 진실. body 클래스는 이 값의 투영이다
+  var openPanelTarget = null;    // 열림 상태의 유일한 진실. body 클래스는 이 값의 투영이다(결정 OC1)
   var panelOpenerElement = null;    // 닫을 때 포커스를 되돌릴 요소
   var panelBlankTimerId = null;     // 닫기 슬라이드가 끝난 뒤 iframe 을 비울 예약(SP14)
+
+  // 카드 DOM 하나에서 패널이 필요한 값 전부를 읽는다(결정 OC4). 이 함수가 이 IIFE 의 유일한
+  // 입력 경계다 — 여기서 아래로는 PanelTarget 만 흐르고, 티어라는 개념은 등장하지 않는다.
+  // getAttribute 는 없는 속성에 null 을 준다 → dashboardKey 가 자연히 string|null 이 된다.
+  function readCardTarget(cardElement){
+    var nameEl = cardElement.querySelector(PROJECT_NAME_SELECTOR);
+    return {
+      projectPath: cardElement.getAttribute(PROJECT_PATH_ATTRIBUTE),
+      dashboardKey: cardElement.getAttribute(DASHBOARD_KEY_ATTRIBUTE),
+      displayName: nameEl ? nameEl.textContent : '',
+      emptyReason: cardElement.getAttribute(PANEL_EMPTY_REASON_ATTRIBUTE) || '',
+      isPreviousTask: cardElement.getAttribute(TIER1_PREVIOUS_TASK_ATTRIBUTE) === '1',
+      openerElement: nameEl || cardElement
+    };
+  }
 
   // 대시보드 키로 서버 경로를 만든다. 순수 함수.
   function projectDashboardUrl(dashboardKey){
@@ -1355,32 +1433,74 @@ try{
   // 오버레이 모드로 열려 있을 때만 배경을 조작 불가로 만든다(SP3). 포커스 트랩 코드를 쓰지
   // 않는 이유이자, aria-modal 을 상시로 붙이지 않는 이유다 — 실제로 막았을 때만 그렇게 말한다.
   function applyBackgroundInert(){
-    var isOverlayOpen = openDashboardKey !== null && !pushModeQuery.matches;
+    var isOverlayOpen = openPanelTarget !== null && !pushModeQuery.matches;
     mainEl.inert = isOverlayOpen;
     if(usageEl) usageEl.inert = isOverlayOpen;
     if(isOverlayOpen) panelEl.setAttribute('aria-modal', 'true');
     else panelEl.removeAttribute('aria-modal');
   }
 
-  // 패널을 열거나 이미 열린 패널의 내용을 바꾼다. 같은 프로젝트면 아무것도 하지 않는다 —
-  // 재로딩하면 읽던 대시보드의 스크롤 위치가 사라진다(결정 SP8).
-  function openDetailPanel(dashboardKey, displayName, openerElement, isPreviousTask){
-    if(dashboardKey === openDashboardKey) return;
+  // 속성 셀렉터를 조립하지 않고 순회 비교한다 — 프로젝트 경로는 임의의 파일시스템 문자열이라
+  // 큰따옴표·역슬래시가 들어오면 [data-project-path="…"] 가 깨진다. CSS.escape 를 쓰는 대신
+  // 비교로 끝내면 이스케이프 규칙이 아예 없다. 카드 수는 수십 단위다.
+  function findCardByProjectPath(projectPath){
+    var cards = document.querySelectorAll('.card[' + PROJECT_PATH_ATTRIBUTE + ']');
+    for(var i = 0; i < cards.length; i++){
+      if(cards[i].getAttribute(PROJECT_PATH_ATTRIBUTE) === projectPath) return cards[i];
+    }
+    return null;
+  }
+
+  // 열린 프로젝트의 카드에만 표시를 남긴다(결정 OC9). 증분으로 붙이고 떼지 않고 매번 상태
+  // 전체를 다시 그린다 — 적용 지점이 하나면 "표시가 두 카드에 남았다" 같은 상태가 존재할 수
+  // 없다. 카드는 렌더마다 새 노드라 재렌더 직후에는 첫 루프가 0회 돈다(결정 OC8).
+  function applyOpenCardMarking(){
+    var markedCards = document.querySelectorAll('.' + OPEN_CARD_CLASS);
+    for(var i = 0; i < markedCards.length; i++){
+      markedCards[i].classList.remove(OPEN_CARD_CLASS);
+      var markedNameEl = markedCards[i].querySelector(PROJECT_NAME_SELECTOR);
+      if(markedNameEl) markedNameEl.removeAttribute(OPEN_CARD_ARIA_ATTRIBUTE);
+    }
+    if(openPanelTarget === null) return;
+    var card = findCardByProjectPath(openPanelTarget.projectPath);
+    if(!card) return;          // 스냅샷에서 사라진 프로젝트 — 패널은 강제로 닫지 않는다(엣지 E6)
+    card.classList.add(OPEN_CARD_CLASS);
+    var nameEl = card.querySelector(PROJECT_NAME_SELECTOR);
+    if(nameEl) nameEl.setAttribute(OPEN_CARD_ARIA_ATTRIBUTE, OPEN_CARD_ARIA_VALUE);
+  }
+
+  // 패널을 열거나 이미 열린 패널의 내용을 바꾼다. 같은 문서면 iframe 재로딩만 건너뛴다 —
+  // 재로딩하면 읽던 대시보드의 스크롤 위치가 사라진다(결정 SP8 → OC2 로 범위 축소). 제목·안내는
+  // 비용이 0 이므로 매번 다시 쓴다: 그래야 티어가 바뀐 프로젝트를 다시 눌렀을 때 화면이 사실을
+  // 따라온다.
+  function openDetailPanel(target){
     // 닫는 중(지연 창)에 들어온 클릭 — 예약을 취소하지 않으면 방금 연 패널의 문서를 그 타이머가
-    // 지운다. 이 한 줄이 "대기 타이머 ⇒ 닫힘" 불변식의 유일한 보존 지점이다(SP15).
+    // 지운다. 이 한 줄이 "대기 타이머 ⇒ 닫힘" 불변식의 유일한 보존 지점이다(SP15 → OC3).
     if(panelBlankTimerId !== null){ clearTimeout(panelBlankTimerId); panelBlankTimerId = null; }
-    var wasClosed = openDashboardKey === null;
-    openDashboardKey = dashboardKey;
-    panelTitleEl.textContent = displayName;
-    // 열 때 1회 판정한다(결정 GN6, 승인 항목 5) — 다른 카드로 교체할 때도 함께 갱신된다.
+    var wasClosed = openPanelTarget === null;
+    // 경로→키는 서버에서 순수 함수이므로 이 두 필드가 같으면 띄울 문서가 같다(결정 OC2).
+    var isSameDocument = !wasClosed
+      && openPanelTarget.projectPath === target.projectPath
+      && openPanelTarget.dashboardKey === target.dashboardKey;
+    openPanelTarget = target;
+    panelTitleEl.textContent = target.displayName;
     // 안내 줄은 문구·data-tooltip 을 마크업에 고정해 두고 클래스만 토글한다(PV3·PV4) —
     // 자리는 항상 예약돼 있어 프로젝트를 바꿔도 헤더 높이가 변하지 않는다.
-    panelNoteEl.classList.toggle(DETAIL_NOTE_VISIBLE_CLASS, isPreviousTask);
-    loadPanelDocument(projectDashboardUrl(dashboardKey));
+    panelNoteEl.classList.toggle(DETAIL_NOTE_VISIBLE_CLASS, target.isPreviousTask);
+    // 빈 상태는 상태 클래스 1개로 표현하고 무엇을 보일지는 CSS 가 고른다(결정 OC7).
+    panelEmptyReasonEl.textContent = target.emptyReason;
+    panelEl.classList.toggle(PANEL_EMPTY_CLASS, target.dashboardKey === null);
+    // 대시보드가 없으면 about:blank 를 즉시 싣는다 — 지연하면(SP14) 옛 프로젝트의 대시보드가
+    // 사유 문구 뒤에 남아 있는 프레임이 되어 R2 가 고치려는 오해를 그대로 재현한다(결정 OC3).
+    if(!isSameDocument){
+      loadPanelDocument(target.dashboardKey === null
+        ? BLANK_DOCUMENT_URL : projectDashboardUrl(target.dashboardKey));
+    }
     document.body.classList.add(PANEL_OPEN_BODY_CLASS);
     applyBackgroundInert();
+    applyOpenCardMarking();
     if(!wasClosed) return;                  // 내용 교체일 뿐이면 포커스를 건드리지 않는다
-    panelOpenerElement = openerElement;
+    panelOpenerElement = target.openerElement;
     panelCloseButton.focus();
   }
 
@@ -1388,10 +1508,13 @@ try{
   // visibility:hidden 도 display:none 도 iframe 의 타이머를 멈추지 않는다. 제목은 여기서
   // 지우지 않는다 — 지우면 나가는 180ms 동안 머리가 빈 패널이 보인다(GOTCHA 16).
   function closeDetailPanel(){
-    if(openDashboardKey === null) return;   // 여기서 반환되므로 대기 타이머는 존재할 수 없다(SP15)
-    openDashboardKey = null;
+    if(openPanelTarget === null) return;   // 여기서 반환되므로 대기 타이머는 존재할 수 없다(OC3)
+    openPanelTarget = null;
     document.body.classList.remove(PANEL_OPEN_BODY_CLASS);
     applyBackgroundInert();                 // 포커스 복귀보다 먼저 — inert 안의 요소는 포커스를 못 받는다
+    // 표시는 즉시 지운다. 슬라이드아웃 180ms 를 기다리면 "닫혔는데 아직 열린 것으로 표시된"
+    // 구간이 생기고, 백그라운드 탭에서 setTimeout 이 스로틀되면 그 거짓이 길어진다.
+    applyOpenCardMarking();
     scheduleBlankAfterSlide();
     if(panelOpenerElement && panelOpenerElement.isConnected) panelOpenerElement.focus();
     panelOpenerElement = null;
@@ -1411,11 +1534,11 @@ try{
     if((window.getSelection() || {}).toString()) return;          // 결정 N6 — 텍스트 선택 후 클릭 무시
     var card = event.target.closest(CLICKABLE_CARD_SELECTOR);
     if(!card) return;
-    var nameEl = card.querySelector('.project-name');
-    var isPreviousTask = card.getAttribute(TIER1_PREVIOUS_TASK_ATTRIBUTE) === '1';
-    openDetailPanel(card.getAttribute(DASHBOARD_KEY_ATTRIBUTE),
-                    nameEl ? nameEl.textContent : '', nameEl || card, isPreviousTask);
+    openDetailPanel(readCardTarget(card));
   });
+  // 폴링·틱·dragend 가 #dzh-app 을 통째로 교체하면 표시도 함께 사라진다 — 그 직후 복원한다.
+  // 이벤트는 값을 싣지 않으므로 여기서 읽는 것은 카드 DOM 뿐이다(결정 OC8).
+  document.addEventListener(RENDERED_EVENT_NAME, applyOpenCardMarking);
 })();
 </script>
 </body>

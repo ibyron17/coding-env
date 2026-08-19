@@ -2343,10 +2343,10 @@ test_hub_unit_tests() {
   ((passed_tests++))
 }
 
-# T25: 허브 문서·상수 정합성 (하위 검증 T25-1~T25-104)
+# T25: 허브 문서·상수 정합성 (하위 검증 T25-1~T25-109)
 test_hub_docs_and_constants() {
   local test_name="T25"
-  local test_desc="허브 문서·상수 정합성 (T25-1~T25-104)"
+  local test_desc="허브 문서·상수 정합성 (T25-1~T25-109)"
   log_test_name "$test_name" "$test_desc"
 
   local hub_settings_file="$REPO_ROOT/hub/bin/hub_settings.py"
@@ -3584,10 +3584,11 @@ PYEOF
     fi
   done
 
-  # T25-80(결정 SP7·SP9 폴링 정지): 닫힘·교체 모두 about:blank/loadPanelDocument 경로를 쓰고,
-  # openDashboardKey 가 열림 상태의 유일한 진실이다. src 대입으로의 회귀(뒤로가기 오염 재발)를 막는다.
+  # T25-80(결정 SP7·SP9 폴링 정지 → hub-panel-empty-state-and-open-card.md 결정 OC1):
+  # 닫힘·교체 모두 about:blank/loadPanelDocument 경로를 쓰고, openPanelTarget 이 열림 상태의
+  # 유일한 진실이다. src 대입으로의 회귀(뒤로가기 오염 재발)를 막는다.
   local panel_stop_token
-  for panel_stop_token in 'about:blank' 'contentWindow.location.replace(' 'openDashboardKey'; do
+  for panel_stop_token in 'about:blank' 'contentWindow.location.replace(' 'openPanelTarget'; do
     if ! grep -qF -- "$panel_stop_token" "$hub_template_file"; then
       record_failure "$test_name" "T25-80: hub_template.html 에 $panel_stop_token 이 없음"
       return 1
@@ -4115,6 +4116,152 @@ PYEOF
   fi
   if ! grep -qF "hub_session.py" "$hub_dashboard_prp_file"; then
     record_failure "$test_name" "T25-104: docs/prps/hub-dashboard.md 모듈 구성표에 hub_session.py 가 없음"
+    return 1
+  fi
+
+  # T25-105(hub-panel-empty-state-and-open-card.md 결정 OC4·OC5, G1·G2·G3): 대시보드가 없는
+  # 카드도 사유 속성을 실어 패널로 넘기고, 문구의 단일 출처는 TIER_DESCRIPTION 이다. 역방향 —
+  # 옛 단일 속성 셀렉터·패널 IIFE 안 티어 문구 복제·상태 클래스 없는 무조건 iframe 숨김이 없다.
+  local oc4_oc5_token
+  for oc4_oc5_token in 'PANEL_EMPTY_REASON_ATTRIBUTE' \
+      'function panelEmptyReason(' '.detail-panel.detail-empty .detail-frame{display:none}' \
+      '.detail-panel.detail-empty .detail-empty-reason{display:block}' 'id="dzh-detail-empty-reason"'; do
+    if ! grep -qF -- "$oc4_oc5_token" "$hub_template_file"; then
+      record_failure "$test_name" "T25-105: hub_template.html 에 $oc4_oc5_token 이 없음"
+      return 1
+    fi
+  done
+  # 불변식 OC-A(키 부재 ⇔ 사유 존재)의 강제 지점은 무조건 else 다 — else if 로 좁혀지면
+  # 이 리터럴 줄 자체가 사라진다(속성 이름만 보는 substring 검사로는 조건부화를 못 잡는다).
+  if ! grep -qF -- "else cardAttrs += ' data-panel-empty-reason=\"' + escapeHtml(emptyReason) + '\"';" \
+      "$hub_template_file"; then
+    record_failure "$test_name" "T25-105: data-panel-empty-reason 부여가 무조건 else 가 아님(불변식 OC-A 위반)"
+    return 1
+  fi
+  if grep -qF -- "CLICKABLE_CARD_SELECTOR = '[' + DASHBOARD_KEY_ATTRIBUTE + ']';" "$hub_template_file"; then
+    record_failure "$test_name" "T25-105: hub_template.html 에 옛 단일 속성 셀렉터가 남아 있음(결정 OC5 회귀)"
+    return 1
+  fi
+  local panel_iife_start_line_105 tier_text_leak_count
+  panel_iife_start_line_105=$(grep -n 'var PANEL_OPEN_BODY_CLASS' "$hub_template_file" | head -1 | cut -d: -f1)
+  if [[ -z "$panel_iife_start_line_105" ]]; then
+    record_failure "$test_name" "T25-105: hub_template.html 에 var PANEL_OPEN_BODY_CLASS 를 찾지 못함"
+    return 1
+  fi
+  tier_text_leak_count=$(tail -n "+$panel_iife_start_line_105" "$hub_template_file" \
+                           | grep -c '세션 활동은 있지만\|파일시스템에서만')
+  if [[ "$tier_text_leak_count" -ne 0 ]]; then
+    record_failure "$test_name" "T25-105: 패널 IIFE 범위에 티어 문구가 ${tier_text_leak_count}건 복제돼 있음(G3 위반)"
+    return 1
+  fi
+  # 무조건 숨김("상태 클래스 없는 .detail-frame{display:none}")으로의 회귀를 잡는다 — 부분
+  # 문자열로는 스코프가 붙은 정상 규칙과 구분되지 않으므로, "좁은 패턴 등장 횟수"와 "스코프가
+  # 붙은 전체 패턴 등장 횟수"가 같은지를 비교한다(다르면 스코프 없는 규칙이 별도로 존재한다).
+  local unscoped_frame_hide_count scoped_frame_hide_count
+  unscoped_frame_hide_count=$(grep -o '\.detail-frame{display:none}' "$hub_template_file" | wc -l | tr -d ' ')
+  scoped_frame_hide_count=$(grep -o '\.detail-panel\.detail-empty \.detail-frame{display:none}' \
+                              "$hub_template_file" | wc -l | tr -d ' ')
+  if [[ "$unscoped_frame_hide_count" != "$scoped_frame_hide_count" ]]; then
+    record_failure "$test_name" "T25-105: .detail-frame{display:none} 가 detail-empty 스코프 없이 존재함"
+    return 1
+  fi
+
+  # T25-106(결정 OC1 신원 키 교체, G4): 패널의 신원이 dashboardKey 가 아니라 projectPath 다.
+  # 역방향 — 옛 진실(openDashboardKey)이 주석을 포함해 파일 전체에 남아 있지 않다.
+  local oc1_token
+  for oc1_token in 'openPanelTarget' 'PROJECT_PATH_ATTRIBUTE' 'isSameDocument' 'function readCardTarget('; do
+    if ! grep -qF -- "$oc1_token" "$hub_template_file"; then
+      record_failure "$test_name" "T25-106: hub_template.html 에 $oc1_token 이 없음"
+      return 1
+    fi
+  done
+  if grep -qF -- 'openDashboardKey' "$hub_template_file"; then
+    record_failure "$test_name" "T25-106: hub_template.html 에 옛 신원 키(openDashboardKey)가 남아 있음"
+    return 1
+  fi
+
+  # T25-107(결정 OC8 재적용 경로, G6·G7·G8 — 가장 값진 기계적 검사): dzh:rendered 가 정확히
+  # 2회(발행·수신) 있고, 발행 지점이 DOM 최종 확정(insertAdjacentHTML) 뒤·패널 IIFE 시작 앞
+  # 이다. 역방향 — new MutationObserver 등장 횟수가 여전히 2(툴팁 전용, 옵저버 회귀 금지).
+  local oc8_token
+  for oc8_token in 'function applyOpenCardMarking(' 'RENDERED_EVENT_NAME'; do
+    if ! grep -qF -- "$oc8_token" "$hub_template_file"; then
+      record_failure "$test_name" "T25-107: hub_template.html 에 $oc8_token 이 없음"
+      return 1
+    fi
+  done
+  local rendered_event_count observer_count dom_final_line_107 dispatch_line_107 panel_iife_start_line_107
+  rendered_event_count=$(grep -c "dzh:rendered" "$hub_template_file")
+  observer_count=$(grep -c 'new MutationObserver' "$hub_template_file")
+  dom_final_line_107=$(grep -n "app.insertAdjacentHTML('beforeend', extra);" "$hub_template_file" | head -1 | cut -d: -f1)
+  dispatch_line_107=$(grep -n 'dispatchEvent(new Event(RENDERED_EVENT_NAME))' "$hub_template_file" | head -1 | cut -d: -f1)
+  panel_iife_start_line_107=$(grep -n 'var PANEL_OPEN_BODY_CLASS' "$hub_template_file" | head -1 | cut -d: -f1)
+  if [[ "$rendered_event_count" -ne 2 || "$observer_count" -ne 2 \
+      || -z "$dispatch_line_107" || -z "$dom_final_line_107" || -z "$panel_iife_start_line_107" \
+      || "$dispatch_line_107" -le "$dom_final_line_107" \
+      || "$dispatch_line_107" -ge "$panel_iife_start_line_107" ]]; then
+    record_failure "$test_name" "T25-107: dzh:rendered(${rendered_event_count})·MutationObserver(${observer_count}) 개수 또는 발행 위치가 어긋남"
+    return 1
+  fi
+
+  # T25-108(결정 OC9·OC11 표시 채널, G5): 열린 카드 표시(면색+aria-current)와 두 속성을 함께
+  # 보는 커서 셀렉터가 존재한다. 역방향 — 새 규칙에 색 리터럴이 없고(T25-88 관례), 옛 단독
+  # 셀렉터·<span> 분기(OC11 안 A 채택으로 소멸)가 되살아나지 않았다.
+  local oc9_oc11_token
+  for oc9_oc11_token in '.card.card-open{' 'card-open' 'OPEN_CARD_CLASS' 'aria-current' \
+      '.card[data-panel-empty-reason]{cursor:pointer}'; do
+    if ! grep -qF -- "$oc9_oc11_token" "$hub_template_file"; then
+      record_failure "$test_name" "T25-108: hub_template.html 에 $oc9_oc11_token 이 없음"
+      return 1
+    fi
+  done
+  local card_open_rule
+  card_open_rule=$(grep -oE '\.card\.card-open\{[^}]*\}' "$hub_template_file" | head -1)
+  if [[ -z "$card_open_rule" ]] || echo "$card_open_rule" | grep -qE '#[0-9a-fA-F]{3}'; then
+    record_failure "$test_name" "T25-108: .card.card-open 규칙에 하드코딩된 # 색 리터럴이 있거나 규칙을 찾지 못함(G9)"
+    return 1
+  fi
+  if grep -qF -- '.card[data-dashboard-key]{cursor:pointer}' "$hub_template_file"; then
+    record_failure "$test_name" "T25-108: hub_template.html 에 옛 단독 커서 셀렉터가 남아 있음(결정 OC5 회귀)"
+    return 1
+  fi
+  if grep -qF -- "? 'button' : 'span'" "$hub_template_file"; then
+    record_failure "$test_name" "T25-108: hub_template.html 에 옛 <span> 분기가 남아 있음(결정 OC11 회귀)"
+    return 1
+  fi
+
+  # T25-109(문서·주석 정합, G10): README 와 머리 주석이 R2 이후의 화면과 일치한다. 역방향 —
+  # 정본 이관 표기 누락으로 옛 결정이 살아 있는 것처럼 읽히는 옛 문구가 남아 있지 않다
+  # (T25-81·T25-99 와 같은 관례).
+  local readme_oc_token
+  for readme_oc_token in '어느 카드든' '사유' '배경색'; do
+    if ! grep -qF -- "$readme_oc_token" "$hub_readme_file"; then
+      record_failure "$test_name" "T25-109: hub/README.md 에 $readme_oc_token 토큰이 없음"
+      return 1
+    fi
+  done
+  if grep -qF -- '클릭 대상이 아니다' "$hub_readme_file"; then
+    record_failure "$test_name" "T25-109: hub/README.md 에 '클릭 대상이 아니다' 잔재가 남아 있음"
+    return 1
+  fi
+  local head_comment_body_109
+  head_comment_body_109=$(sed -n '/^<!--$/,/^-->$/p' "$hub_template_file")
+  # 'dzh:rendered' 리터럴은 여기서 검사하지 않는다 — T25-107 이 그 문자열의 전체 등장 횟수를
+  # 정확히 2(두 상수 선언)로 고정하므로, 머리 주석에 같은 리터럴을 한 번 더 쓰면 T25-107 이
+  # 실패한다. 머리 주석은 "이벤트로 알린다"고 서술해 같은 사실을 리터럴 없이 전달한다.
+  local head_comment_oc_token
+  for head_comment_oc_token in 'data-panel-empty-reason' 'aria-current'; do
+    if ! echo "$head_comment_body_109" | grep -qF -- "$head_comment_oc_token"; then
+      record_failure "$test_name" "T25-109: hub_template.html 머리 주석에 $head_comment_oc_token 이 없음"
+      return 1
+    fi
+  done
+  if echo "$head_comment_body_109" | grep -qF -- '카드에는 패널 열림 상태를 반영하지 않는다'; then
+    record_failure "$test_name" "T25-109: hub_template.html 머리 주석에 옛 조항 ③(카드에는 패널 열림 상태를 반영하지 않는다)이 남아 있음"
+    return 1
+  fi
+  if grep -qF -- '프로젝트 대시보드 모달' "$hub_template_file"; then
+    record_failure "$test_name" "T25-109: hub_template.html 에 '프로젝트 대시보드 모달' 잔재가 남아 있음"
     return 1
   fi
 
