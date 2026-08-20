@@ -23,16 +23,17 @@ class Tier1GenerationTest(unittest.TestCase):
 
     def _session_facts(self, session_id, started_at_ms, ended_at_ms=None):
         return hub_session.SessionFacts(
-            session_id=session_id, cwd="/repo", started_at_ms=started_at_ms,
+            session_id=session_id, cwd="/repo", observed_cwds=("/repo",), started_at_ms=started_at_ms,
             last_event_at_ms=started_at_ms, last_event_name="UserPromptSubmit",
             turn_state="running" if ended_at_ms is None else "ended",
             ended_at_ms=ended_at_ms, task_excerpt=None, subagents=(),
         )
 
     def _tier1(self, file_mtime_ms):
-        # source_path="/repo" — 이 클래스의 모든 세션이 cwd="/repo" 를 쓴다(WT9 GN 개정으로
-        # tier1_source_path 와 cwd 가 같아야 판정 집합에 들어간다). 워크트리 없는 프로젝트에서는
-        # 완전한 무동작이라는 결정 WT9 의 전제를 여기서 명시적으로 재현한다.
+        # source_path="/repo" — 이 클래스의 모든 세션이 cwd="/repo" 를 쓴다(결정 WT18 GN
+        # 재개정으로 tier1_source_path 가 facts.observed_cwds 에 있어야 판정 집합에 들어간다).
+        # 워크트리 없는 프로젝트에서는 완전한 무동작이라는 결정 WT9 의 전제를 여기서 명시적으로
+        # 재현한다.
         return hub_parse.Tier1Snapshot(
             title="t", subtitle="s", completed=1, total=2, percent=50, steps=(),
             matrix_done=None, impl_done=0, impl_total=0, updated_text="-",
@@ -108,7 +109,7 @@ class Tier1GenerationTest(unittest.TestCase):
     def test_gn10_idle_only_session_is_false(self) -> None:
         """결정 GN2 — idle 은 판정 집합 밖이다. 승인 항목 4 가 뒤집히면 이 케이스가 True 로 바뀐다."""
         idle_session = hub_session.SessionFacts(
-            session_id="s-idle", cwd="/repo", started_at_ms=BASE_TIME_MS + 60_000,
+            session_id="s-idle", cwd="/repo", observed_cwds=("/repo",), started_at_ms=BASE_TIME_MS + 60_000,
             last_event_at_ms=BASE_TIME_MS + 60_000, last_event_name="Stop", turn_state="ended",
             ended_at_ms=None, task_excerpt=None, subagents=(),
         )
@@ -130,12 +131,12 @@ class Tier1GenerationTest(unittest.TestCase):
             file_mtime_ms=BASE_TIME_MS, source_path=worktree,
         )
         root_session_before_mtime = hub_session.SessionFacts(
-            session_id="s-root", cwd=root, started_at_ms=BASE_TIME_MS - 60_000,
+            session_id="s-root", cwd=root, observed_cwds=(root,), started_at_ms=BASE_TIME_MS - 60_000,
             last_event_at_ms=BASE_TIME_MS - 60_000, last_event_name="UserPromptSubmit",
             turn_state="running", ended_at_ms=None, task_excerpt=None, subagents=(),
         )
         worktree_session_after_mtime = hub_session.SessionFacts(
-            session_id="s-wt", cwd=worktree, started_at_ms=BASE_TIME_MS + 60_000,
+            session_id="s-wt", cwd=worktree, observed_cwds=(worktree,), started_at_ms=BASE_TIME_MS + 60_000,
             last_event_at_ms=BASE_TIME_MS + 60_000, last_event_name="UserPromptSubmit",
             turn_state="running", ended_at_ms=None, task_excerpt=None, subagents=(),
         )
@@ -152,6 +153,30 @@ class Tier1GenerationTest(unittest.TestCase):
         working_session = self._session_facts("s-working", BASE_TIME_MS + 60_000)
         views = hub_project.compose_project_views(
             tier1_by_path={"/repo": tier1}, sessions_by_path={"/repo": (working_session,)},
+            tier3_last_activity_by_path={}, now_ms=BASE_TIME_MS + 60_000, stale_after_ms=STALE_AFTER_MS,
+        )
+        self.assertTrue(views[0].tier1_is_previous_task)
+
+    def test_u24_label_turns_on_for_session_that_moved_into_the_worktree(self) -> None:
+        """GN 대응 U-24(결정 WT18) — 세션이 워크트리로 **이동**해도 `cwd` 는 여전히 창 안
+        최초 이벤트인 레포 루트에 고정된다(결정 WT14). `observed_cwds` 에 워크트리가 남아
+        있으면 세대 판정에 들어간다. `facts.cwd` 로만 비교하던 이전 규칙(`==`, 뮤테이션 11)
+        이면 이 세션은 판정 집합에서 빠져 라벨이 우연히 꺼졌을 것이다(E15)."""
+        root = "/repo"
+        worktree = "/repo/.claude/worktrees/w"
+        tier1 = hub_parse.Tier1Snapshot(
+            title="t", subtitle="s", completed=1, total=2, percent=50, steps=(),
+            matrix_done=None, impl_done=0, impl_total=0, updated_text="-",
+            file_mtime_ms=BASE_TIME_MS, source_path=worktree,
+        )
+        moved_session = hub_session.SessionFacts(
+            session_id="s-moved", cwd=root, observed_cwds=(root, worktree),
+            started_at_ms=BASE_TIME_MS + 60_000, last_event_at_ms=BASE_TIME_MS + 60_000,
+            last_event_name="UserPromptSubmit", turn_state="running", ended_at_ms=None,
+            task_excerpt=None, subagents=(),
+        )
+        views = hub_project.compose_project_views(
+            tier1_by_path={root: tier1}, sessions_by_path={root: (moved_session,)},
             tier3_last_activity_by_path={}, now_ms=BASE_TIME_MS + 60_000, stale_after_ms=STALE_AFTER_MS,
         )
         self.assertTrue(views[0].tier1_is_previous_task)
@@ -237,29 +262,55 @@ class PlanTier1CandidatesTest(unittest.TestCase):
     실행하는 테스트가 하나도 없었다(참조하는 모든 테스트가 `_read_tier1_for_root` 자체를
     mock.patch 로 우회) — 아래 테스트들이 그 미검출 뮤테이션 2건을 직접 겨냥한다."""
 
-    def _facts(self, cwd: str) -> hub_session.SessionFacts:
+    def _facts(self, cwd: str, observed_cwds: tuple[str, ...] | None = None) -> hub_session.SessionFacts:
+        # observed_cwds 기본값은 (cwd,) — cwd 하나만 관측된 세션(observed_cwds 무기본값의
+        # 정상적인 최소 형태, 결정 WT19). 워크트리를 관측 목록에만 남겨 두고 싶은 테스트는
+        # observed_cwds 를 명시적으로 넘긴다.
         return hub_session.SessionFacts(
-            session_id="s1", cwd=cwd, started_at_ms=BASE_TIME_MS, last_event_at_ms=BASE_TIME_MS,
+            session_id="s1", cwd=cwd,
+            observed_cwds=observed_cwds if observed_cwds is not None else (cwd,),
+            started_at_ms=BASE_TIME_MS, last_event_at_ms=BASE_TIME_MS,
             last_event_name="UserPromptSubmit", turn_state="running", ended_at_ms=None,
             task_excerpt=None, subagents=(),
         )
 
     def test_worktree_member_survives_fold_then_ignore_with_default_globs(self) -> None:
-        """뮤테이션 방어 — `observed_paths = set(sessions_by_path)`(그룹 키만 봄, 워크트리
-        멤버 소실)나 ignore 를 접기 전 원본 경로에 적용하면(결정 WT5 위반) 둘 다 이 결과를
-        `{"/repo": ("/repo",)}` 로 쪼그라뜨린다 — 기본 ignore_globs 의
+        """뮤테이션 방어 — `observed_paths` 를 `facts.observed_cwds` 대신 그룹 키(facts.cwd)만
+        보게 되돌리거나(뮤테이션 7·9) ignore 를 접기 전 원본 경로에 적용하면(결정 WT5 위반,
+        뮤테이션 8) 전부 이 결과를 `{"/repo": ("/repo",)}` 로 쪼그라뜨린다 — 기본 ignore_globs 의
         `**/.claude/worktrees/**` 가 원본 워크트리 경로에는 매칭되지만 접힌 루트에는 매칭되지
-        않기 때문에, 두 뮤테이션 모두 이 단언 하나로 잡힌다."""
-        sessions_by_path = {"/repo": (self._facts("/repo/.claude/worktrees/w"),)}
+        않기 때문에, 세 뮤테이션 전부 이 단언 하나로 잡힌다.
+
+        `cwd` 는 레포 루트로 고정하고 워크트리는 `observed_cwds` 로만 알려준다 — 이것이 결정
+        WT16 이후 프로덕션이 실제로 만드는 값이다(2판 이전 판은 여기서 `cwd` 자체에 워크트리를
+        넣어 두었는데, 그것은 `facts.cwd` 가 창 안 최초 이벤트로 고정된다는 사실(결정 WT14)과
+        맞지 않는, 프로덕션이 만들 수 없는 입력이었다 — 결정 WT20)."""
+        facts = self._facts("/repo", observed_cwds=("/repo", "/repo/.claude/worktrees/w"))
+        sessions_by_path = {"/repo": (facts,)}
         ignore_globs = hub_model.HubConfig().ignore_globs
 
         result = hub_project.plan_tier1_candidates(sessions_by_path, (), ignore_globs)
 
         self.assertEqual(result, {"/repo": ("/repo", "/repo/.claude/worktrees/w")})
 
+    def test_worktree_in_observed_cwds_becomes_a_tier1_member(self) -> None:
+        """U-27(S9 의 순수 단위 대응) — 이번 결함의 최소 재현. `facts.cwd` 는 레포 루트로
+        고정된 채(결정 WT14) `observed_cwds` 에만 워크트리가 있어도 후보 멤버가 된다(결정
+        WT16). 뮤테이션 9(`facts.observed_cwds` → `(facts.cwd,)`)를 넣으면 이 테스트가
+        실패해야 한다."""
+        facts = self._facts("/repo", observed_cwds=("/repo", "/repo/.claude/worktrees/w"))
+        sessions_by_path = {"/repo": (facts,)}
+        ignore_globs = hub_model.HubConfig().ignore_globs
+
+        result = hub_project.plan_tier1_candidates(sessions_by_path, (), ignore_globs)
+
+        self.assertEqual(result["/repo"], ("/repo", "/repo/.claude/worktrees/w"))
+
     def test_ignored_root_is_excluded_entirely(self) -> None:
         """결정 WT5 — ignore 는 접힌 루트에 적용된다. 루트 자체가 무시 패턴에 해당하면
-        (여기서는 `/private/tmp/**`) 그 루트와 멤버 전부가 후보에서 빠진다."""
+        (여기서는 `/private/tmp/**`) 그 루트와 멤버 전부가 후보에서 빠진다. 이 케이스는 세션의
+        모든 이벤트가 워크트리인 「창이 구른 뒤」 시나리오(X-14)도 겸한다 — `cwd` 와
+        `observed_cwds` 가 둘 다 워크트리 경로뿐이다."""
         sessions_by_path = {"/private/tmp/x": (self._facts("/private/tmp/x/.claude/worktrees/w"),)}
         ignore_globs = hub_model.HubConfig().ignore_globs
 
@@ -278,6 +329,19 @@ class PlanTier1CandidatesTest(unittest.TestCase):
         기준 상대경로를 참조하게 된다."""
         result = hub_project.plan_tier1_candidates({}, ("/.claude/worktrees/w",), ())
         self.assertNotIn("", result)
+
+    def test_foreign_observed_path_creates_no_root_and_no_member(self) -> None:
+        """U-30(S12 의 순수 단위 대응) — 앵커 규칙(결정 WT17). 관측 cwd 에 남의 프로젝트나
+        자기 프로젝트의 **하위 디렉토리**가 섞여 있어도 새 루트를 만들거나 멤버로 들어오지
+        않는다(E14 가 실데이터로 이 입력의 존재를 확인했다). 뮤테이션 12(`root in anchors`
+        조건 삭제)를 넣으면 이 테스트가 실패해야 한다."""
+        facts = self._facts("/repo", observed_cwds=("/repo", "/other/project", "/repo/sub"))
+        sessions_by_path = {"/repo": (facts,)}
+
+        result = hub_project.plan_tier1_candidates(sessions_by_path, (), ())
+
+        self.assertEqual(set(result), {"/repo"})
+        self.assertEqual(result["/repo"], ("/repo",))
 
 
 class SelectTier1SourceTest(unittest.TestCase):
@@ -310,7 +374,7 @@ class ComposeProjectViewsTest(unittest.TestCase):
 
     def _session_facts(self, session_id, cwd, last_event_at_ms, ended_at_ms=None):
         return hub_session.SessionFacts(
-            session_id=session_id, cwd=cwd, started_at_ms=last_event_at_ms,
+            session_id=session_id, cwd=cwd, observed_cwds=(cwd,), started_at_ms=last_event_at_ms,
             last_event_at_ms=last_event_at_ms, last_event_name="Stop", turn_state="ended",
             ended_at_ms=ended_at_ms, task_excerpt=None, subagents=(),
         )
@@ -323,7 +387,7 @@ class ComposeProjectViewsTest(unittest.TestCase):
             self._session_facts("s-done-3", "/repo/a", BASE_TIME_MS, ended_at_ms=BASE_TIME_MS),
         )
         working = hub_session.SessionFacts(
-            session_id="s-working", cwd="/repo/a", started_at_ms=BASE_TIME_MS,
+            session_id="s-working", cwd="/repo/a", observed_cwds=("/repo/a",), started_at_ms=BASE_TIME_MS,
             last_event_at_ms=BASE_TIME_MS, last_event_name="UserPromptSubmit",
             turn_state="running", ended_at_ms=None, task_excerpt=None, subagents=(),
         )
@@ -428,7 +492,7 @@ class ComposeProjectViewsDashboardKeyTest(unittest.TestCase):
             matrix_done=None, impl_done=0, impl_total=0, updated_text="-", file_mtime_ms=BASE_TIME_MS,
         )
         tier2_session = hub_session.SessionFacts(
-            session_id="s1", cwd="/repo/tier2", started_at_ms=BASE_TIME_MS,
+            session_id="s1", cwd="/repo/tier2", observed_cwds=("/repo/tier2",), started_at_ms=BASE_TIME_MS,
             last_event_at_ms=BASE_TIME_MS, last_event_name="Stop", turn_state="ended",
             ended_at_ms=None, task_excerpt=None, subagents=(),
         )

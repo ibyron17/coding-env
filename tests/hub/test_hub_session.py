@@ -559,6 +559,35 @@ class SessionRevivalTest(unittest.TestCase):
         self.assertEqual(view.state, "idle")
 
 
+class ObservedCwdsTest(unittest.TestCase):
+    """U-28~U-29 — `SessionFacts.observed_cwds` 누적 규칙(결정 WT16·WT19,
+    docs/prps/hub-worktree-fold.md)."""
+
+    def test_u28_first_element_is_always_cwd_and_dedup_keeps_first_seen_order(self) -> None:
+        """S13 — `observed_cwds[0] == cwd` 가 언제나 참이고, 중복 제거·첫 관측 순서가 지켜진다.
+        세 번째 이벤트가 첫 번째 cwd 로 되돌아와도(루트 → 워크트리 → 루트) 그 값은 다시
+        추가되지 않는다."""
+        events = [
+            _event("UserPromptSubmit", 0, cwd="/repo"),
+            _event("UserPromptSubmit", 1000, cwd="/repo/.claude/worktrees/w"),
+            _event("UserPromptSubmit", 2000, cwd="/repo"),
+        ]
+        facts = _facts_from(events)
+        self.assertEqual(facts.cwd, facts.observed_cwds[0])
+        self.assertEqual(facts.observed_cwds, ("/repo", "/repo/.claude/worktrees/w"))
+
+    def test_u29_internally_filtered_event_still_contributes_its_cwd(self) -> None:
+        """결정 WT19 — 누적 지점은 내부 이벤트 필터(compact 등)보다 앞이다. 필터에 걸려
+        `_apply_tracked_event` 로 넘어가지 못하는 이벤트도 실제로 관측된 cwd 이므로 놓치면
+        안 된다."""
+        events = [
+            _event("UserPromptSubmit", 0, cwd="/repo"),
+            _event("SessionStart", 1000, source="compact", cwd="/repo/.claude/worktrees/w"),
+        ]
+        facts = _facts_from(events)
+        self.assertIn("/repo/.claude/worktrees/w", facts.observed_cwds)
+
+
 class ParseEventLineTest(unittest.TestCase):
     """M11 — 깨진 JSON 줄 · 필드 누락 줄은 건너뛰고 나머지로 상태를 만든다."""
 

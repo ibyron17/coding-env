@@ -122,28 +122,41 @@ def plan_tier1_candidates(
     scanned_paths: Sequence[str],
     ignore_globs: Sequence[str],
 ) -> dict[str, tuple[str, ...]]:
-    """세션 관측 cwd·스캔 경로를 소유 레포 루트별 티어 1 후보 멤버로 묶는다(결정 WT2·WT5).
+    """세션 관측 cwd·스캔 경로를 소유 레포 루트별 티어 1 후보 멤버로 묶는다(결정 WT2·WT5·WT16·WT17).
 
     fold 가 ignore 보다 먼저다 — **접힌 루트에 대해서만** 무시 패턴을 판정해야 워크트리 경로가
     `ignore_globs` 기본값(`**/.claude/worktrees/**`)에 걸려 티어 1 후보 확장이 죽지 않는다
     (검수 1회차 M1 — 이 조립을 `collect_snapshot` 안에 그대로 두면 `mock.patch` 로 우회되는
     통합 테스트에서만 검증돼 실질적으로 아무 테스트도 이 배선을 실행하지 않았다).
 
-    `sessions_by_path` 의 키는 이미 접힌 루트이지만 값(`SessionFacts.cwd`)에는 원본 워크트리
-    경로가 그대로 남아 있어(결정 WT14) 그것으로 루트별 멤버 목록을 되살린다.
+    후보 입력은 `SessionFacts.observed_cwds`(이 창에서 실제 관측된 cwd 전부)다(결정 WT16) —
+    `facts.cwd` 하나만 보면 그 값이 창 안 **최초 이벤트**로 고정돼(결정 WT14) `EnterWorktree`
+    이후의 워크트리 이동이 후보에 반영될 길이 없다(2판 결함 A, E11). `sessions_by_path` 의
+    키는 이미 접힌 루트다(결정 WT14).
+
+    **앵커 규칙**(`root in anchors`, 결정 WT17) — 관측 cwd 는 멤버만 늘리고 루트를 새로 만들지
+    않는다. 앵커는 오늘의 그룹 키 집합(`sessions_by_path`)과 접힌 스캔 경로뿐이다. 이 조건이
+    없으면 프로젝트 **하위 디렉토리** 같은 관측 cwd 가 새 루트가 돼 한 프로젝트가 카드 둘로
+    쪼개진다(E14) — 그런 입력이 실데이터에 존재한다.
 
     빈 문자열 루트는 후보에서 제외한다(검수 1회차 m5) — `fold_worktree_path` 는 워크트리 마커가
     경로 맨 앞에 오는 입력(예: `"/.claude/worktrees/w"`)에서 빈 문자열을 만들 수 있는데, 빈
     문자열은 `should_ignore_cwd` 를 그냥 통과해 `read_tier1_snapshot` 이 프로세스 CWD 기준
     상대경로를 참조하게 만든다.
     """
-    observed_paths = {facts.cwd for group in sessions_by_path.values() for facts in group}
+    anchors = set(sessions_by_path) | {fold_worktree_path(path) for path in scanned_paths}
+    observed_paths = {
+        cwd
+        for group in sessions_by_path.values()
+        for facts in group
+        for cwd in facts.observed_cwds
+    }
     observed_paths |= set(scanned_paths)
     members_by_root = group_paths_by_repo_root(sorted(observed_paths))
     return {
         root: members
         for root, members in members_by_root.items()
-        if root and not should_ignore_cwd(root, ignore_globs)
+        if root and root in anchors and not should_ignore_cwd(root, ignore_globs)
     }
 
 
@@ -232,14 +245,17 @@ def _live_session_start_times_ms(
     `sessions` 와 `session_views` 는 `compose_project_views` 안에서 같은 순서로 만들어지므로
     `zip` 이 안전하다 — 두 튜플을 함수 밖으로 넘겨 다시 조립하지 않는다.
 
-    `tier1_source_path` 와 cwd 가 같은 세션만 담는다(결정 WT9, GN2 개정) — `/dashboard` 는
-    cwd 상대경로에만 쓰므로, 그 파일을 갱신하는 주체는 정확히 그 cwd 의 세션뿐이다. 워크트리가
-    없는 프로젝트는 그룹 키 = cwd = 티어 1 출처가 항상 같아 이 조건이 완전한 무동작이다.
+    `tier1_source_path` 가 `facts.observed_cwds` 에 있는 세션만 담는다(결정 WT18, WT9 재개정) —
+    `/dashboard` 는 cwd 상대경로에만 쓰므로, 그 파일을 갱신하는 주체는 그 cwd 에서 일한 적
+    있는 세션뿐이다. `facts.cwd`(창 안 최초 이벤트의 cwd, 결정 WT14)로 비교하면 워크트리로
+    이동한 세션은 그 값이 레포 루트로 남아 있어 승자가 워크트리 파일일 때 일치하는 세션이
+    0 이 되고, 판정이 `if not live: return False` 분기로 우연히 맞는 상태가 된다(E15). 워크트리가
+    없는 프로젝트는 `observed_cwds == (cwd,)` 라 이 조건이 완전한 무동작이다.
     """
     return tuple(
         facts.started_at_ms
         for facts, view in zip(sessions, session_views)
-        if view.state in LIVE_SESSION_STATES and facts.cwd == tier1_source_path
+        if view.state in LIVE_SESSION_STATES and tier1_source_path in facts.observed_cwds
     )
 
 
