@@ -2249,11 +2249,11 @@ test_hub_unit_tests() {
   ((passed_tests++))
 }
 
-# T25: 허브 문서·상수 정합성 (하위 검증 T25-1~T25-114)
+# T25: 허브 문서·상수 정합성 (하위 검증 T25-1~T25-118)
 test_hub_docs_and_constants() {
   group_failures=()   # 앞 그룹이 조기 return 했을 때의 잔여물 제거
   local test_name="T25"
-  local test_desc="허브 문서·상수 정합성 (T25-1~T25-114)"
+  local test_desc="허브 문서·상수 정합성 (T25-1~T25-118)"
   log_test_name "$test_name" "$test_desc"
 
   local hub_settings_file="$REPO_ROOT/hub/bin/hub_settings.py"
@@ -2273,6 +2273,7 @@ test_hub_docs_and_constants() {
   local readme_file="$REPO_ROOT/README.md"
   local hub_dashboard_prp_file="$REPO_ROOT/docs/prps/hub-dashboard.md"
   local hub_session_revival_prp_file="$REPO_ROOT/docs/prps/hub-session-revival-and-stale-tier1.md"
+  local test_hub_collect_file="$REPO_ROOT/tests/hub/test_hub_collect.py"
 
   # T25-1(개정 R-M5 — 대상 이동): HUB_FILE_COUNT 는 이제 hub/install.sh 가 갖는다(값 10)
   local declared_count actual_count
@@ -4143,6 +4144,51 @@ PYEOF
   # ★순수 계약의 진짜 경계는 docstring 이지 그 grep 이 아니다.
   if grep -qE 'subprocess' "$hub_project_file"; then
     note_failure "T25-114: hub_project.py 에 subprocess 사용 흔적이 있음(★순수 계약 위반)"
+  fi
+
+  # T25-115(결정 WT19, docs/prps/hub-worktree-fold.md 2판): hub_session.py 의
+  # observed_cwds 필드에 기본값이 없다. 기본값 `()` 가 슬쩍 붙으면 손으로 만드는 픽스처가
+  # 조용히 "관측 cwd 없음"이 되어 `in observed_cwds` 판정이 언제나 거짓이 된다 — 이번
+  # 결함과 정확히 같은 모양의 구멍이다.
+  if ! grep -qF 'observed_cwds: tuple[str, ...]' "$hub_session_file"; then
+    note_failure "T25-115: hub_session.py 에 observed_cwds: tuple[str, ...] 선언이 없음"
+  fi
+  if grep -qF 'observed_cwds: tuple[str, ...] = ()' "$hub_session_file"; then
+    note_failure "T25-115: hub_session.py 의 observed_cwds 에 기본값 ()가 붙어 있음(결정 WT19 위반)"
+  fi
+
+  # T25-116(결정 WT16, 2판): hub_project.py 의 plan_tier1_candidates 가 후보 입력을
+  # facts.observed_cwds 에서 읽는다. 옛 표현(facts.cwd 하나만 본다)으로 되돌아가면 워크트리
+  # 경로가 다시 후보에 오를 길이 없어져 이번 결함(결함 A)이 재발한다.
+  # 양성 검사는 반드시 후보 입력 루프 자체를 가리켜야 한다. 그냥 `facts.observed_cwds` 로
+  # 넓게 잡으면 같은 파일의 _live_session_start_times_ms 참조가 대신 만족시켜, 루프를
+  # `for cwd in (facts.cwd,)` 로 되돌려도 이 검사가 조용히 통과한다(검수 3회차 실측).
+  if ! grep -qF 'for cwd in facts.observed_cwds' "$hub_project_file"; then
+    note_failure "T25-116: hub_project.py 의 후보 입력 루프가 facts.observed_cwds 를 돌지 않음(결정 WT16 되돌림)"
+  fi
+  if grep -qF '{facts.cwd for' "$hub_project_file"; then
+    note_failure "T25-116: hub_project.py 의 plan_tier1_candidates 가 옛 입력(facts.cwd 하나)으로 되돌아감"
+  fi
+
+  # T25-117(결정 WT18, 2판): _live_session_start_times_ms 의 GN 판정 비교가
+  # tier1_source_path in facts.observed_cwds 다. facts.cwd == tier1_source_path 로 되돌아가면
+  # 워크트리로 이동한 세션이 판정 집합에서 빠져 "이전 작업" 라벨이 우연히만 맞는 상태로
+  # 되돌아간다(결정 WT9 수준으로 되돌림).
+  if ! grep -qF 'tier1_source_path in facts.observed_cwds' "$hub_project_file"; then
+    note_failure "T25-117: hub_project.py 에 tier1_source_path in facts.observed_cwds 비교가 없음(결정 WT18 되돌림)"
+  fi
+  if grep -qF 'facts.cwd == tier1_source_path' "$hub_project_file"; then
+    note_failure "T25-117: hub_project.py 에 facts.cwd == tier1_source_path 비교가 남아 있음(결정 WT18 되돌림)"
+  fi
+
+  # T25-118(결정 WT20, 2판): 이벤트 파일 입력부터 collect_snapshot() 을 실행하는 이음매
+  # 테스트가 삭제되거나 중간 함수 호출로 "간소화"되지 않는다. grep 은 클래스 존재만 보고
+  # 단언의 강도는 못 본다 — 진짜 안전망은 뮤테이션 9~13 이다(§7 의 한계 기록과 동일).
+  if ! grep -qF 'class CollectSnapshotWorktreeTier1Test' "$test_hub_collect_file"; then
+    note_failure "T25-118: test_hub_collect.py 에 class CollectSnapshotWorktreeTier1Test 가 없음(결정 WT20 이음매 테스트 삭제)"
+  fi
+  if ! grep -qF 'hub_collect.collect_snapshot(' "$test_hub_collect_file"; then
+    note_failure "T25-118: test_hub_collect.py 에 hub_collect.collect_snapshot( 호출이 없음(결정 WT20 이음매 테스트 삭제)"
   fi
 
   finish_group "$test_name"

@@ -56,6 +56,12 @@ class SessionFacts:
 
     session_id: str
     cwd: str
+    # 이 창에서 관측된 모든 cwd. 첫 관측 순서, 중복 제거, **기본값 없음**(결정 WT19,
+    # docs/prps/hub-worktree-fold.md). observed_cwds[0] == cwd 가 언제나 참이다 — 둘 다
+    # 내부 이벤트 필터보다 앞에서 정해진다. `EnterWorktree` 가 살아 있는 세션의 cwd 를
+    # 바꾸므로(E2) `cwd` 하나로는 "이 세션이 어디서 일했는가"를 답할 수 없다. 티어 1
+    # 후보(결정 WT16)와 GN 세대 판정(결정 WT18)이 이 값을 쓴다.
+    observed_cwds: tuple[str, ...]
     started_at_ms: int
     last_event_at_ms: int
     last_event_name: str
@@ -148,6 +154,7 @@ class _MutableSubagent:
 @dataclass
 class _MutableSession:
     cwd: str
+    observed_cwds: list[str]
     started_at_ms: int
     last_event_at_ms: int
     last_event_name: str
@@ -210,6 +217,7 @@ def _apply_tracked_event(session: _MutableSession, event: HookEvent) -> None:
 def _new_session_builder(event: HookEvent) -> _MutableSession:
     return _MutableSession(
         cwd=event.cwd,
+        observed_cwds=[],
         started_at_ms=event.received_at_ms,
         last_event_at_ms=event.received_at_ms,
         last_event_name=event.hook_event_name,
@@ -234,6 +242,7 @@ def _freeze_session(session_id: str, session: _MutableSession) -> SessionFacts:
     return SessionFacts(
         session_id=session_id,
         cwd=session.cwd,
+        observed_cwds=tuple(session.observed_cwds),
         started_at_ms=session.started_at_ms,
         last_event_at_ms=session.last_event_at_ms,
         last_event_name=session.last_event_name,
@@ -254,6 +263,12 @@ def build_session_facts(events: Sequence[HookEvent]) -> dict[str, SessionFacts]:
             builders[event.session_id] = session
         session.last_event_at_ms = event.received_at_ms
         session.last_event_name = event.hook_event_name
+        # observed_cwds 누적은 내부 이벤트 필터보다 앞이다(결정 WT19) — cwd 도 필터 이전
+        # (빌더 생성 시점)에 정해지므로 두 값의 모집단이 같아 observed_cwds[0] == cwd 가
+        # 언제나 참이다. 내부 이벤트(compact 등)도 실제로 관측된 cwd 이므로 여기서 놓치면
+        # 안 된다(U-29).
+        if event.cwd not in session.observed_cwds:
+            session.observed_cwds.append(event.cwd)
 
         is_filtered = is_internal_session_start(event) or is_untracked_internal_subagent_stop(
             event, frozenset(session.known_agent_ids)

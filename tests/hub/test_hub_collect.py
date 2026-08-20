@@ -398,6 +398,166 @@ class RenderHubHtmlWorktreeFoldTest(unittest.TestCase):
         self.assertEqual(worktree_paths, [])
 
 
+class CollectSnapshotWorktreeTier1Test(unittest.TestCase):
+    """U-22~U-26 — `collect_snapshot()` 을 이벤트 파일 입력부터 실행하는 유일한 티어 1
+    테스트다(결정 WT20, docs/prps/hub-worktree-fold.md). 선례는
+    `CollectSnapshotRateLimitIsolationTest`(:804-833) — 같은 방식으로 모듈 상수를 임시
+    디렉토리로 바꾼다.
+
+    이 클래스가 재현하는 것은 2판이 고친 바로 그 결함이다(E11) — 세션의 `SessionFacts.cwd` 는
+    창 안 최초 이벤트인 레포 루트에 고정되고, 워크트리 cwd 는 **이벤트에만** 남는다. 중간
+    함수(`plan_tier1_candidates`·`_read_tier1_for_root` 등)에 손으로 입력을 넣는 테스트는
+    이 이음매를 검증하지 못한다 — 1회차 구현이 정확히 그 방식으로 검수를 통과하고도 실환경
+    확인(S8)에서 결함 A 를 남겼다."""
+
+    _DASHBOARD_HTML_TEMPLATE = (
+        '<h1 id="dz-title">{title}</h1>'
+        '<div class="pct" id="dz-progress-pct">1/2 · 50%</div>'
+        'id="dz-updated">2026-08-20 00:00</div>'
+    )
+    ONE_HOUR_MS = 60 * 60 * 1000
+    ONE_MINUTE_MS = 60 * 1000
+
+    def setUp(self) -> None:
+        self.temp_dir = Path(tempfile.mkdtemp())
+        self.original_events_dir = hub_collect.EVENTS_DIR
+        self.original_projects_dir = hub_collect.PROJECTS_DIR
+        self.original_config_path = hub_collect.CONFIG_PATH
+        self.original_rate_limits_path = hub_collect.RATE_LIMITS_PATH
+        hub_collect.EVENTS_DIR = self.temp_dir / "events"
+        hub_collect.PROJECTS_DIR = self.temp_dir / "projects"      # 티어 3 격리 — 만들지 않으면 무동작
+        hub_collect.CONFIG_PATH = self.temp_dir / "config.json"
+        hub_collect.RATE_LIMITS_PATH = self.temp_dir / "rate_limits.json"
+        self.now_ms = int(time.time() * 1000)
+        self.root = str(self.temp_dir / "repo")
+        self.worktree = str(Path(self.root) / ".claude" / "worktrees" / "w")
+        # /tmp·/private/tmp 를 ignore_globs 에서 뺀다 — tempfile.mkdtemp() 가 TMPDIR 을
+        # 따르므로 환경에 따라 픽스처 전체가 무시 대상이 될 수 있다(U-11 과 같은 이유).
+        # **/.claude/worktrees/** 는 반드시 남긴다 — fold-first 순서를 검증하는 대상이다.
+        # show_usage_panel: false 는 _capture_for_snapshot 이 캡처 파일을 열지도 않게 한다
+        # (hub_collect.py:383, 결정 U4) — 테스트가 사용자 홈의 캡처 파일에 의존하지 않는다.
+        hub_collect.CONFIG_PATH.write_text(
+            json.dumps({"ignore_globs": ["**/.claude/worktrees/**"], "show_usage_panel": False})
+        )
+
+    def tearDown(self) -> None:
+        hub_collect.EVENTS_DIR = self.original_events_dir
+        hub_collect.PROJECTS_DIR = self.original_projects_dir
+        hub_collect.CONFIG_PATH = self.original_config_path
+        hub_collect.RATE_LIMITS_PATH = self.original_rate_limits_path
+        shutil.rmtree(self.temp_dir, ignore_errors=True)
+
+    def _write_dashboard(self, project_path: str, title: str, mtime_offset_ms: int) -> None:
+        dashboard_dir = Path(project_path) / ".claude"
+        dashboard_dir.mkdir(parents=True, exist_ok=True)
+        dashboard_path = dashboard_dir / "dashboard.html"
+        dashboard_path.write_text(self._DASHBOARD_HTML_TEMPLATE.format(title=title), encoding="utf-8")
+        mtime_seconds = (self.now_ms + mtime_offset_ms) / 1000
+        os.utime(dashboard_path, (mtime_seconds, mtime_seconds))
+
+    def _write_events(self, lines: list[dict]) -> None:
+        hub_collect.EVENTS_DIR.mkdir(parents=True, exist_ok=True)
+        today_file = hub_collect.EVENTS_DIR / f"{hub_collect._date_string(self.now_ms)}.jsonl"
+        with today_file.open("w", encoding="utf-8") as handle:
+            for line in lines:
+                handle.write(json.dumps(line) + "\n")
+
+    def _root_then_worktree_event_lines(self, first_offset_ms: int, second_offset_ms: int) -> list[dict]:
+        """실패 시나리오(E11)를 그대로 재현하는 이벤트 두 줄 — 첫 이벤트는 레포 루트,
+        둘째는 워크트리다. 이 두 줄이면 `SessionFacts.cwd == self.root` 이고 워크트리는
+        `observed_cwds` 에만 남는다. 개정 전 코드에서는 이 입력으로 워크트리가 절대 티어 1
+        후보가 되지 않는다."""
+        return [
+            {"t": self.now_ms + first_offset_ms, "e": "UserPromptSubmit", "s": "s1", "c": self.root},
+            {"t": self.now_ms + second_offset_ms, "e": "UserPromptSubmit", "s": "s1", "c": self.worktree},
+        ]
+
+    def test_worktree_dashboard_wins_when_only_events_know_the_worktree(self) -> None:
+        """U-22(S9) — 이번 결함의 정확한 재현. 뮤테이션 9(`facts.observed_cwds` →
+        `(facts.cwd,)`) · 뮤테이션 13(`select_tier1_source` 의 `max` → `min`)을 넣으면 이
+        테스트가 실패해야 한다."""
+        self._write_dashboard(self.root, "루트 작업", mtime_offset_ms=-24 * self.ONE_HOUR_MS)
+        self._write_dashboard(self.worktree, "워크트리 작업", mtime_offset_ms=-10 * self.ONE_MINUTE_MS)
+        self._write_events(
+            self._root_then_worktree_event_lines(-2 * self.ONE_HOUR_MS, -30 * self.ONE_MINUTE_MS)
+        )
+
+        snapshot = hub_collect.collect_snapshot(self.now_ms)
+
+        self.assertEqual(len(snapshot.projects), 1)
+        self.assertEqual(snapshot.projects[0].path, self.root)
+        self.assertEqual(snapshot.projects[0].tier, 1)
+        self.assertEqual(snapshot.projects[0].tier1.title, "워크트리 작업")
+        self.assertEqual(snapshot.projects[0].tier1.source_path, self.worktree)
+
+    def test_root_dashboard_wins_when_it_is_newer(self) -> None:
+        """U-23 — S9 의 대조군. mtime 관계만 뒤집어 결과가 양방향으로 실제로 움직이는
+        테스트임을 보장한다(검수 2회차가 「결과를 줄이는 뮤테이션에만 반응 못 하는 단언」을
+        잡았던 것과 같은 함정을 여기서 미리 방어한다)."""
+        self._write_dashboard(self.root, "루트 작업", mtime_offset_ms=-10 * self.ONE_MINUTE_MS)
+        self._write_dashboard(self.worktree, "워크트리 작업", mtime_offset_ms=-24 * self.ONE_HOUR_MS)
+        self._write_events(
+            self._root_then_worktree_event_lines(-2 * self.ONE_HOUR_MS, -30 * self.ONE_MINUTE_MS)
+        )
+
+        snapshot = hub_collect.collect_snapshot(self.now_ms)
+
+        self.assertEqual(snapshot.projects[0].tier1.title, "루트 작업")
+        self.assertEqual(snapshot.projects[0].tier1.source_path, self.root)
+
+    def test_previous_task_label_turns_on_when_session_started_after_the_worktree_file(self) -> None:
+        """U-24(S11 ON) — (a)안과 (c)안을 가르는 테스트다. `facts.cwd == source_path` 로
+        되돌리면(뮤테이션 11) live 집합이 비어 `False` 가 된다. 세션의 마지막 이벤트를 최근
+        (T-5m)으로 둬 상태가 `working` 으로 살아 있게 한다 — 그래야 세대 판정 집합에 들어간다."""
+        self._write_dashboard(self.root, "루트 작업", mtime_offset_ms=-24 * self.ONE_HOUR_MS)
+        self._write_dashboard(self.worktree, "워크트리 작업", mtime_offset_ms=-2 * self.ONE_HOUR_MS)
+        self._write_events(
+            self._root_then_worktree_event_lines(-1 * self.ONE_HOUR_MS, -5 * self.ONE_MINUTE_MS)
+        )
+
+        snapshot = hub_collect.collect_snapshot(self.now_ms)
+
+        self.assertIs(snapshot.projects[0].tier1_is_previous_task, True)
+
+    def test_previous_task_label_stays_off_when_the_live_session_predates_the_file(self) -> None:
+        """U-25(S11 OFF) — 「우연히 꺼짐」을 통과로 인정하지 않는다.
+
+        라벨이 꺼지는 근거가 「live 집합이 비어서」가 아니라 **실제 대소 비교**임을 보장한다:
+        이 세션의 워크트리 경로가 `observed_cwds` 에 있고 상태가 `working` 이므로 판정 집합은
+        비지 않으며, `False` 는 세션 시작(-2h)이 파일 mtime(-10m)보다 이르다는 비교에서 나온다.
+        뮤테이션 9(`observed_cwds` → `(cwd,)`)를 넣으면 이 단언이 `True` 로 뒤집히는 것이 그
+        증거다(검수 3회차 실측)."""
+        self._write_dashboard(self.root, "루트 작업", mtime_offset_ms=-24 * self.ONE_HOUR_MS)
+        self._write_dashboard(self.worktree, "워크트리 작업", mtime_offset_ms=-10 * self.ONE_MINUTE_MS)
+        self._write_events(
+            self._root_then_worktree_event_lines(-2 * self.ONE_HOUR_MS, -5 * self.ONE_MINUTE_MS)
+        )
+
+        snapshot = hub_collect.collect_snapshot(self.now_ms)
+
+        self.assertIs(snapshot.projects[0].tier1_is_previous_task, False)
+
+    def test_subdirectory_cwd_never_creates_a_second_card(self) -> None:
+        """U-26(S12) — 앵커 규칙(결정 WT17). 이벤트에 프로젝트 **하위 디렉토리** cwd 가 있고
+        그곳에 dashboard.html 이 있어도 카드는 하나다(E14 가 실데이터로 이 입력의 존재를
+        확인했다). 뮤테이션 12(`root in anchors` 조건 삭제)를 넣으면 이 테스트가 실패해야 한다."""
+        subdirectory = str(Path(self.root) / "sub")
+        self._write_dashboard(self.root, "루트 작업", mtime_offset_ms=-24 * self.ONE_HOUR_MS)
+        self._write_dashboard(self.worktree, "워크트리 작업", mtime_offset_ms=-10 * self.ONE_MINUTE_MS)
+        self._write_dashboard(subdirectory, "하위 디렉토리 작업", mtime_offset_ms=-1 * self.ONE_MINUTE_MS)
+        lines = self._root_then_worktree_event_lines(-2 * self.ONE_HOUR_MS, -30 * self.ONE_MINUTE_MS)
+        lines.append(
+            {"t": self.now_ms - 20 * self.ONE_MINUTE_MS, "e": "UserPromptSubmit", "s": "s1", "c": subdirectory}
+        )
+        self._write_events(lines)
+
+        snapshot = hub_collect.collect_snapshot(self.now_ms)
+
+        self.assertEqual(len(snapshot.projects), 1)
+        self.assertEqual(snapshot.projects[0].path, self.root)
+        self.assertTrue(all(not project.path.endswith("/sub") for project in snapshot.projects))
+
+
 class ReadRecentEventsFailureIsolationTest(unittest.TestCase):
     """검수 M7 — collect 파이프라인은 이벤트 파일 하나의 실패로 전체가 죽지 않는다."""
 
