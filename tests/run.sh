@@ -1044,11 +1044,11 @@ test_manifest_fields_complete() {
 }
 
 # T22: dashboard 템플릿 무결성 — LLM 지시문 방식이라 런타임 Edit 결과는 검증 대상이 아니고,
-# 설치·문서 정합성만 자동 검증한다 (하위 검증 T22-1~T22-127).
+# 설치·문서 정합성만 자동 검증한다 (하위 검증 T22-1~T22-129).
 test_dashboard_template_integrity() {
   group_failures=()   # 앞 그룹이 조기 return 했을 때의 잔여물 제거
   local test_name="T22"
-  local test_desc="dashboard 템플릿 무결성 (T22-1~T22-128)"
+  local test_desc="dashboard 템플릿 무결성 (T22-1~T22-129)"
   log_test_name "$test_name" "$test_desc"
 
   local sandbox
@@ -1671,11 +1671,12 @@ test_dashboard_template_integrity() {
     note_failure "T22-85: poll() 실패 경로에서 close()/location.reload 발견 — PiP 고정 회귀"
   fi
 
-  # T22-86: sleep 6 지연과 그 근거(POLL_INTERVAL_MS) — 지연을 "불필요한 대기"로 오해해
+  # T22-86: sleep 61 지연과 그 근거(POLL_INTERVAL_MS) — 지연을 "불필요한 대기"로 오해해
   # 지우면 커밋 화면이 PiP 에 닿지 못한다. log 절 범위로 좁혀서 검사한다(파일 전역이면
-  # 이 지연이 log commit 경로 밖으로 옮겨져도 통과해 버린다).
-  if ! grep -qF 'sleep 6 && pkill' <<< "$log_section"; then
-    note_failure "T22-86: log 절 범위에서 sleep 6 && pkill 미발견"
+  # 이 지연이 log commit 경로 밖으로 옮겨져도 통과해 버린다). 폴링 주기가 5초에서 1분으로
+  # 바뀌며(사용자 요청) 여유 1초를 더한 지연도 6초에서 61초로 함께 바뀌었다.
+  if ! grep -qF 'sleep 61 && pkill' <<< "$log_section"; then
+    note_failure "T22-86: log 절 범위에서 sleep 61 && pkill 미발견"
   fi
   if ! grep -qF 'POLL_INTERVAL_MS' <<< "$log_section"; then
     note_failure "T22-86: log 절 범위에서 POLL_INTERVAL_MS 근거 문구 미발견"
@@ -2128,6 +2129,13 @@ test_dashboard_template_integrity() {
     note_failure "T22-128: .entry .detail 규칙에 overflow-wrap:anywhere 가 없음(가로 넘침 회귀)"
   fi
 
+  # T22-129: 프로젝트 대시보드 폴링 주기 회귀 방지 — 5초는 너무 짧다는 사용자 요청으로
+  # 60000(1분)으로 바뀌었다. 값이 조용히 5000 으로 되돌아가는 것을 막는다(T25-41 의 허브
+  # 쪽 선례와 같은 형태).
+  if ! grep -qF "POLL_INTERVAL_MS = 60000" "$dashboard_command_file"; then
+    note_failure "T22-129: POLL_INTERVAL_MS = 60000 회귀(대시보드 폴링 주기가 바뀜)"
+  fi
+
   finish_group "$test_name"
 }
 
@@ -2249,11 +2257,11 @@ test_hub_unit_tests() {
   ((passed_tests++))
 }
 
-# T25: 허브 문서·상수 정합성 (하위 검증 T25-1~T25-118)
+# T25: 허브 문서·상수 정합성 (하위 검증 T25-1~T25-119)
 test_hub_docs_and_constants() {
   group_failures=()   # 앞 그룹이 조기 return 했을 때의 잔여물 제거
   local test_name="T25"
-  local test_desc="허브 문서·상수 정합성 (T25-1~T25-118)"
+  local test_desc="허브 문서·상수 정합성 (T25-1~T25-119)"
   log_test_name "$test_name" "$test_desc"
 
   local hub_settings_file="$REPO_ROOT/hub/bin/hub_settings.py"
@@ -4189,6 +4197,33 @@ PYEOF
   fi
   if ! grep -qF 'hub_collect.collect_snapshot(' "$test_hub_collect_file"; then
     note_failure "T25-118: test_hub_collect.py 에 hub_collect.collect_snapshot( 호출이 없음(결정 WT20 이음매 테스트 삭제)"
+  fi
+
+  # T25-119: 허브 폴링 게이트 회귀 방지 — 작업중 세션이 없으면 자동 폴링을 건너뛴다는
+  # 사용자 요청이 조용히 되돌아가 hasWorkingProject()가 사라지거나 setInterval 이 게이트
+  # 없이 poll 을 직접 부르는 형태로 후퇴하는 것을 막는다. README 쪽 설명 누락도 함께 본다.
+  if ! grep -qF 'function hasWorkingProject()' "$hub_template_file"; then
+    note_failure "T25-119: hub_template.html 에 function hasWorkingProject() 가 없음(폴링 게이트 삭제)"
+  fi
+  if ! grep -qE 'setInterval\(function\(\)\{ if\(hasWorkingProject\(\)\) poll\(\); \}' "$hub_template_file"; then
+    note_failure "T25-119: hub_template.html 의 setInterval 이 hasWorkingProject() 게이트로 poll 을 감싸지 않음"
+  fi
+  if ! grep -qF '카드가 하나도 없으면 이 1분 타이머가 폴링 자체를 건너뛴다' "$hub_readme_file"; then
+    note_failure "T25-119: hub/README.md 에 게이트 설명 문구가 없음(자동 갱신 건너뜀 설명 유실) — '작업중' 단독 검사는 다른 절에도 있는 단어라 회귀를 못 잡는다"
+  fi
+
+  # T25-119(검수 지적, 2판): renderConnectionStatus() 의 대기 분기("자동 갱신 대기")는
+  # 게이트가 닫힌 동안 아무도 fetch 하지 않아 서버 생존을 아무도 관측하지 못하는 상태다 —
+  # 그 줄에서 "서버 연결됨"을 단정하면 검증되지 않은 사실을 화면에 그리게 된다(HIGH 지적).
+  # 함수 본문만 추출해 검사한다 — 파일 전역이면 정상 분기(작업중 있음)의 정당한
+  # "서버 연결됨" 문구 때문에 항상 통과해 버린다.
+  local connection_status_body
+  connection_status_body=$(sed -n '/function renderConnectionStatus(){/,/^  }$/p' "$hub_template_file")
+  if [[ -z "$connection_status_body" ]]; then
+    note_failure "T25-119: renderConnectionStatus() 범위 추출 실패 — 앵커가 깨졌다"
+  fi
+  if grep '자동 갱신 대기' <<< "$connection_status_body" | grep -qF '서버 연결됨'; then
+    note_failure "T25-119: '자동 갱신 대기' 문구와 같은 줄에 '서버 연결됨'이 있음 — 게이트가 닫힌 동안 연결 상태를 단정함(HIGH 회귀)"
   fi
 
   finish_group "$test_name"
