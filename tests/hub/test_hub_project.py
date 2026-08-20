@@ -30,10 +30,13 @@ class Tier1GenerationTest(unittest.TestCase):
         )
 
     def _tier1(self, file_mtime_ms):
+        # source_path="/repo" — 이 클래스의 모든 세션이 cwd="/repo" 를 쓴다(WT9 GN 개정으로
+        # tier1_source_path 와 cwd 가 같아야 판정 집합에 들어간다). 워크트리 없는 프로젝트에서는
+        # 완전한 무동작이라는 결정 WT9 의 전제를 여기서 명시적으로 재현한다.
         return hub_parse.Tier1Snapshot(
             title="t", subtitle="s", completed=1, total=2, percent=50, steps=(),
             matrix_done=None, impl_done=0, impl_total=0, updated_text="-",
-            file_mtime_ms=file_mtime_ms,
+            file_mtime_ms=file_mtime_ms, source_path="/repo",
         )
 
     def test_gn1_no_live_sessions_is_false(self) -> None:
@@ -116,6 +119,43 @@ class Tier1GenerationTest(unittest.TestCase):
         )
         self.assertFalse(views[0].tier1_is_previous_task)
 
+    def test_u18_only_worktree_session_enters_the_verdict(self) -> None:
+        """U-18(S6) — 승자가 워크트리 파일이면 그 워크트리 cwd 의 세션만 판정에 들어간다(결정 WT9).
+        루트 세션은 대시보드보다 먼저 시작했으니 포함되면 판정을 False 로 뒤집었을 것이다."""
+        root = "/repo"
+        worktree = "/repo/.claude/worktrees/w"
+        tier1 = hub_parse.Tier1Snapshot(
+            title="t", subtitle="s", completed=1, total=2, percent=50, steps=(),
+            matrix_done=None, impl_done=0, impl_total=0, updated_text="-",
+            file_mtime_ms=BASE_TIME_MS, source_path=worktree,
+        )
+        root_session_before_mtime = hub_session.SessionFacts(
+            session_id="s-root", cwd=root, started_at_ms=BASE_TIME_MS - 60_000,
+            last_event_at_ms=BASE_TIME_MS - 60_000, last_event_name="UserPromptSubmit",
+            turn_state="running", ended_at_ms=None, task_excerpt=None, subagents=(),
+        )
+        worktree_session_after_mtime = hub_session.SessionFacts(
+            session_id="s-wt", cwd=worktree, started_at_ms=BASE_TIME_MS + 60_000,
+            last_event_at_ms=BASE_TIME_MS + 60_000, last_event_name="UserPromptSubmit",
+            turn_state="running", ended_at_ms=None, task_excerpt=None, subagents=(),
+        )
+        views = hub_project.compose_project_views(
+            tier1_by_path={root: tier1},
+            sessions_by_path={root: (root_session_before_mtime, worktree_session_after_mtime)},
+            tier3_last_activity_by_path={}, now_ms=BASE_TIME_MS + 60_000, stale_after_ms=STALE_AFTER_MS,
+        )
+        self.assertTrue(views[0].tier1_is_previous_task)
+
+    def test_u19_project_without_worktree_matches_pre_fold_verdict(self) -> None:
+        """U-19(S7) — 워크트리가 없는 프로젝트는 GN 판정이 이 기능 이전과 완전히 같다."""
+        tier1 = self._tier1(BASE_TIME_MS)
+        working_session = self._session_facts("s-working", BASE_TIME_MS + 60_000)
+        views = hub_project.compose_project_views(
+            tier1_by_path={"/repo": tier1}, sessions_by_path={"/repo": (working_session,)},
+            tier3_last_activity_by_path={}, now_ms=BASE_TIME_MS + 60_000, stale_after_ms=STALE_AFTER_MS,
+        )
+        self.assertTrue(views[0].tier1_is_previous_task)
+
 
 class EncodeProjectDirNameTest(unittest.TestCase):
     """M12~M14 — 정방향 인코딩과 미확인 처리."""
@@ -147,6 +187,122 @@ class ShouldIgnoreCwdTest(unittest.TestCase):
         self.assertTrue(hub_project.should_ignore_cwd("/Users/b/repo/.claude/worktrees/f1", ignore_globs))
         self.assertTrue(hub_project.should_ignore_cwd("/private/tmp/claude-501/x", ignore_globs))
         self.assertFalse(hub_project.should_ignore_cwd("/Users/b/private/project/coding-env", ignore_globs))
+
+
+class FoldWorktreePathTest(unittest.TestCase):
+    """U-1~U-5 — 워크트리 경로를 소유 레포 루트로 접는다(결정 WT3, docs/prps/hub-worktree-fold.md)."""
+
+    def test_u1_worktree_path_folds_to_repo_root(self) -> None:
+        self.assertEqual(hub_project.fold_worktree_path("/repo/.claude/worktrees/w"), "/repo")
+
+    def test_u2_non_worktree_path_is_identity(self) -> None:
+        self.assertEqual(hub_project.fold_worktree_path("/repo"), "/repo")
+
+    def test_u3_multi_segment_worktree_name_folds_to_repo_root(self) -> None:
+        """X-2 — EnterWorktree 의 name 은 `/` 로 구분된 다단 세그먼트를 허용한다."""
+        self.assertEqual(
+            hub_project.fold_worktree_path("/repo/.claude/worktrees/feature/sub"), "/repo"
+        )
+
+    def test_u4_nested_worktree_folds_to_outermost_repo_via_first_marker(self) -> None:
+        """X-1 — 중첩 워크트리는 첫 마커에서 잘라야 최외곽 레포까지 한 번에 접힌다.
+        `rfind` 구현이면 `/a/repo/.claude/worktrees/w1` 이 나와 이 테스트가 실패한다(뮤테이션 1)."""
+        nested = "/a/repo/.claude/worktrees/w1/.claude/worktrees/w2"
+        self.assertEqual(hub_project.fold_worktree_path(nested), "/a/repo")
+
+    def test_u5_home_directory_worktree_folds_to_home(self) -> None:
+        """X-3 — 가드를 붙이지 않는다. `$HOME` 바로 아래 워크트리는 `$HOME` 으로 접히는 것이 맞다."""
+        self.assertEqual(hub_project.fold_worktree_path("/Users/u/.claude/worktrees/x"), "/Users/u")
+
+
+class GroupPathsByRepoRootTest(unittest.TestCase):
+    """U-6~U-7 — 경로들을 소유 레포 루트별로 묶는다(결정 WT6 의 동률 처리 순서 근거)."""
+
+    def test_u6_root_is_first_element_even_when_absent_from_input(self) -> None:
+        result = hub_project.group_paths_by_repo_root(["/repo/.claude/worktrees/w"])
+        self.assertEqual(result, {"/repo": ("/repo", "/repo/.claude/worktrees/w")})
+
+    def test_u7_members_are_ordered_root_then_worktrees_alphabetically(self) -> None:
+        paths = ["/repo/.claude/worktrees/b", "/repo", "/repo/.claude/worktrees/a"]
+        result = hub_project.group_paths_by_repo_root(paths)
+        self.assertEqual(
+            result["/repo"],
+            ("/repo", "/repo/.claude/worktrees/a", "/repo/.claude/worktrees/b"),
+        )
+
+
+class PlanTier1CandidatesTest(unittest.TestCase):
+    """검수 1회차 M1 — `collect_snapshot` 조립부(observed_paths/members_by_root/candidate_paths
+    3줄)를 추출한 순수 함수의 단위 테스트. 이 조립이 `collect_snapshot` 안에 있을 때는 이를
+    실행하는 테스트가 하나도 없었다(참조하는 모든 테스트가 `_read_tier1_for_root` 자체를
+    mock.patch 로 우회) — 아래 테스트들이 그 미검출 뮤테이션 2건을 직접 겨냥한다."""
+
+    def _facts(self, cwd: str) -> hub_session.SessionFacts:
+        return hub_session.SessionFacts(
+            session_id="s1", cwd=cwd, started_at_ms=BASE_TIME_MS, last_event_at_ms=BASE_TIME_MS,
+            last_event_name="UserPromptSubmit", turn_state="running", ended_at_ms=None,
+            task_excerpt=None, subagents=(),
+        )
+
+    def test_worktree_member_survives_fold_then_ignore_with_default_globs(self) -> None:
+        """뮤테이션 방어 — `observed_paths = set(sessions_by_path)`(그룹 키만 봄, 워크트리
+        멤버 소실)나 ignore 를 접기 전 원본 경로에 적용하면(결정 WT5 위반) 둘 다 이 결과를
+        `{"/repo": ("/repo",)}` 로 쪼그라뜨린다 — 기본 ignore_globs 의
+        `**/.claude/worktrees/**` 가 원본 워크트리 경로에는 매칭되지만 접힌 루트에는 매칭되지
+        않기 때문에, 두 뮤테이션 모두 이 단언 하나로 잡힌다."""
+        sessions_by_path = {"/repo": (self._facts("/repo/.claude/worktrees/w"),)}
+        ignore_globs = hub_model.HubConfig().ignore_globs
+
+        result = hub_project.plan_tier1_candidates(sessions_by_path, (), ignore_globs)
+
+        self.assertEqual(result, {"/repo": ("/repo", "/repo/.claude/worktrees/w")})
+
+    def test_ignored_root_is_excluded_entirely(self) -> None:
+        """결정 WT5 — ignore 는 접힌 루트에 적용된다. 루트 자체가 무시 패턴에 해당하면
+        (여기서는 `/private/tmp/**`) 그 루트와 멤버 전부가 후보에서 빠진다."""
+        sessions_by_path = {"/private/tmp/x": (self._facts("/private/tmp/x/.claude/worktrees/w"),)}
+        ignore_globs = hub_model.HubConfig().ignore_globs
+
+        result = hub_project.plan_tier1_candidates(sessions_by_path, (), ignore_globs)
+
+        self.assertEqual(result, {})
+
+    def test_scanned_path_becomes_a_candidate_even_without_sessions(self) -> None:
+        """세션이 없어도 스캔된 레포 루트는 티어 1 후보다(S7 계열)."""
+        result = hub_project.plan_tier1_candidates({}, ("/repo",), ())
+        self.assertEqual(result, {"/repo": ("/repo",)})
+
+    def test_empty_string_root_is_excluded(self) -> None:
+        """검수 1회차 m5 — `fold_worktree_path` 가 빈 문자열을 만드는 입력(마커가 경로 맨
+        앞에 옴)은 후보에서 제외된다. 제외하지 않으면 `read_tier1_snapshot` 이 프로세스 CWD
+        기준 상대경로를 참조하게 된다."""
+        result = hub_project.plan_tier1_candidates({}, ("/.claude/worktrees/w",), ())
+        self.assertNotIn("", result)
+
+
+class SelectTier1SourceTest(unittest.TestCase):
+    """U-8~U-10 — 티어 1 후보 중 mtime 최신을 고른다. 동률이면 목록 앞이 이긴다(결정 WT6)."""
+
+    def _tier1(self, file_mtime_ms, source_path):
+        return hub_parse.Tier1Snapshot(
+            title="t", subtitle="s", completed=1, total=2, percent=50, steps=(),
+            matrix_done=None, impl_done=0, impl_total=0, updated_text="-",
+            file_mtime_ms=file_mtime_ms, source_path=source_path,
+        )
+
+    def test_u8_newer_mtime_wins(self) -> None:
+        older = self._tier1(BASE_TIME_MS, "/repo")
+        newer = self._tier1(BASE_TIME_MS + 1000, "/repo/.claude/worktrees/w")
+        self.assertEqual(hub_project.select_tier1_source([older, newer]), newer)
+
+    def test_u9_tie_favors_the_earlier_candidate_in_the_list(self) -> None:
+        """결정 WT6 을 못 박는다 — 후보 순서가 `(루트, 워크트리…)` 면 동률 시 루트가 이긴다."""
+        root = self._tier1(BASE_TIME_MS, "/repo")
+        worktree = self._tier1(BASE_TIME_MS, "/repo/.claude/worktrees/w")
+        self.assertEqual(hub_project.select_tier1_source([root, worktree]), root)
+
+    def test_u10_empty_candidates_returns_none(self) -> None:
+        self.assertIsNone(hub_project.select_tier1_source([]))
 
 
 class ComposeProjectViewsTest(unittest.TestCase):

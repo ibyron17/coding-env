@@ -144,6 +144,14 @@ class ParseEscapedDetailTest(unittest.TestCase):
         self.assertEqual(snapshot.steps[0].detail, "Foo&lt;T&gt; 제네릭 처리")
 
 
+class SourcePathUnsetByPureLayerTest(unittest.TestCase):
+    """U-20 — source_path 는 이 순수 레이어가 채우지 않는다(I/O 레이어의 경계 밖, 결정 WT7)."""
+
+    def test_u20_parsed_snapshot_leaves_source_path_unset(self) -> None:
+        snapshot = hub_parse.parse_dashboard_html(_read_fixture("linear_hub_dashboard.html"))
+        self.assertEqual(snapshot.source_path, hub_parse.UNSET_SOURCE_PATH)
+
+
 class ParseLogSpanningMultipleLinesTest(unittest.TestCase):
     """P5 — 로그 항목이 여러 줄에 걸쳐 있어도 파서가 오작동하지 않고 로그를 무시한다."""
 

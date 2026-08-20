@@ -10,6 +10,7 @@ HubConfig 는 ~/.claude/hub/config.json 과 맺은 계약이며, render_hub_html
 import json
 from dataclasses import asdict, dataclass
 
+from hub_parse import UNSET_SOURCE_PATH
 from hub_project import PROJECT_DASHBOARD_RELATIVE_PATH, ProjectView, project_dashboard_key
 from hub_usage import RateLimitResets, UsageSample
 
@@ -60,9 +61,16 @@ def build_dashboard_registry(snapshot: HubSnapshot) -> dict[str, str]:
     """
     registry: dict[str, str] = {}
     for project in snapshot.projects:
-        if project.tier != 1:
+        if project.tier != 1 or project.tier1 is None:
             continue
-        registry[project_dashboard_key(project.path)] = project.path + "/" + PROJECT_DASHBOARD_RELATIVE_PATH
+        # 불변식: tier==1 인 project.tier1 은 항상 hub_collect._read_tier1_for_root 가
+        # dataclasses.replace 로 source_path 를 채운 결과다(hub_parse.UNSET_SOURCE_PATH 로
+        # 남지 않는다, 결정 WT7·WT8). 그 계약이 깨지면 "" + "/" + PROJECT_DASHBOARD_RELATIVE_PATH
+        # 라는 엉뚱한 경로가 조립되므로, 값이 비어 있는 경우는 등록하지 않는다(방어적 제외).
+        source_path = project.tier1.source_path
+        if source_path == UNSET_SOURCE_PATH:
+            continue
+        registry[project_dashboard_key(project.path)] = source_path + "/" + PROJECT_DASHBOARD_RELATIVE_PATH
     return registry
 
 

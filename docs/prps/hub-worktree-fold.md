@@ -1,0 +1,686 @@
+# 허브 — 워크트리 cwd 를 소유 레포 루트로 **접기**(fold) + 티어 1 **출처 확장** (PRP)
+
+> 요구 2건: **R1** 워크트리에서 도는 세션이 **레포 루트 카드 안에** 나타나고, 창이 굴러도
+> 카드에서 사라지지 않는다 · **R2** 그 카드의 진행률이 **지금 갱신되고 있는 대시보드**를 가리킨다
+> (클릭해서 열리는 파일도 같은 파일이다)
+
+| 항목 | 값 |
+|------|-----|
+| 대상 | `hub/bin/` **4개 파일**(`hub_project.py`·`hub_parse.py`·`hub_collect.py`·`hub_model.py`) + 테스트 **5개** + `tests/run.sh` + `hub/README.md` + PRP 이관 표기 4곳 |
+| 브랜치 | `main` (HEAD `fb054b8`), 작업 위치는 워크트리 `.claude/worktrees/worktree-project-merge` |
+| 상위 설계 정본 | [`hub-dashboard.md`](./hub-dashboard.md)(쟁점 4·CAM P5) → [`hub-card-interactions-and-usage.md`](./hub-card-interactions-and-usage.md)(N1~N3) → [`hub-session-revival-and-stale-tier1.md`](./hub-session-revival-and-stale-tier1.md)(GN1~GN3) → [`hub-model-module-split.md`](./hub-model-module-split.md)(MS1~MS4) → **이 문서** |
+| 워크플로우 경로 | **전체 경로** — 프로젝트 그룹핑 키(공개 데이터 모델의 신원)와 `Tier1Snapshot` 계약이 함께 바뀐다 |
+| 규모 | **Medium** — 신규 파일 0개(이 문서 제외) / 수정 10개. `hub/bin` 순증 약 **+70 / −10줄**, 테스트 약 **+190줄** |
+| **새 모듈** | **없음.** `hub/install.sh:12 HUB_FILE_COUNT=15`·`hub/README.md:18`·`:384`·`tests/run.sh:3881-3886` 네 곳의 「15」 리터럴을 **건드리지 않는다**(근거: 결정 WT13) |
+| 새 외부 의존성 | **없음** (stdlib 만, 서브프로세스 0회) |
+| 새 config 필드 | **0개.** `ignore_globs` 기본값도 **그대로 둔다**(결정 WT4) |
+| 화면 변경 | **없음.** `hub_template.html` 0줄, `SessionView` 0필드, `ProjectView` 0필드(결정 WT11) |
+| 결정 코드 | **WT**(WorkTree). 단일 문자 A~Z 는 소진됐고 두 글자 관례(SP·MD·GN·PV·DG·ZG·RV·MS·OC)가 확립돼 있다. `WT` 가 저장소 전체에서 미사용임을 확인했다(`grep -rn "결정 WT" docs/prps` → 0건) |
+| 리스크 코드 | **P-n**(최근 PRP 전부 이 계열) · 회귀 검사 **T25-111~T25-114**(현재 최대 `T25-110`) |
+| 승인 상태 | **미승인 — 「승인 요청 항목」 1~7 회신 대기** |
+
+### 개정 이력
+
+| 개정 | 내용 |
+|------|------|
+| 초판 (2026-08-20) | 사전 조사(6축 106건 + 공백 보완 3건) 위에서 작성. 결정 WT1~WT14 신설. `hub-dashboard.md` **CAM P5 배제 번복**, `hub-session-revival-and-stale-tier1.md` **GN2 개정**, `hub-card-interactions-and-usage.md` **N3 재진술**, `dashboard-ownership-guard.md` **R4 부분 해소** |
+| 검수 1회차 반영 (2026-08-20) | M1 — `collect_snapshot` 조립부 3줄을 `hub_project.plan_tier1_candidates`(★순수, 신설)로 추출하고 `hub_collect._collect_tier1_snapshots`(신설)가 조립 루프를 맡도록 분리. 참조하는 모든 테스트가 `_read_tier1_for_root` 를 mock.patch 로 우회해 이 조립을 실행하는 테스트가 없었던 결함을 해소(단위 테스트 6건 신설, 뮤테이션 3건 재검증). m2 — `hub_collect._read_tier1_for_root` 의 미사용 `root: str` 인자 제거. m3 — U-12 를 다중 이벤트 시나리오 + 실제 `should_ignore_cwd` 호출로 재작성(항진명제 제거). m5 — `plan_tier1_candidates` 에 빈 문자열 루트 제외 가드 추가. `tests/run.sh` T25-111~114 를 `note_failure`(누적형)로 전환(M2, 8680112 규약 적용) |
+
+> **줄 번호 기준선.** 이 문서의 모든 줄 번호는 **HEAD `fb054b8` 의 커밋 상태**를 직접 열어
+> 확인한 값이다. 작업 트리에 미커밋 변경은 없다(`git status` clean).
+
+---
+
+## 1. 진단의 근거 (E1~E9 — 전부 이 세션에서 직접 재측정했다)
+
+| # | 사실 | 측정 방법 |
+|---|------|-----------|
+| **E1** | `SessionFacts.cwd` 는 **2일 창 안 최초 이벤트**의 cwd 로 한 번 정해지고 이후 절대 갱신되지 않는다 | `hub_session.py:210-212`(`_new_session_builder(cwd=event.cwd)`) + `:184-207`(`_apply_tracked_event` 6개 분기에 cwd 없음) 직접 확인 |
+| **E2** | `EnterWorktree` 는 **이미 살아 있는 세션의 cwd 를 도중에 바꾼다**. 그래서 첫 이벤트는 거의 항상 레포 루트다 — 보존된 8일 134세션 중 **첫 이벤트가 워크트리인 세션 0건** | `~/.claude/hub/events/*.jsonl` 8개 파일 전수 집계 |
+| **E3** | **「워크트리 세션은 허브에 안 보인다」는 전제는 거의 틀렸다.** 지금 이 세션(`5b6a1f57`)은 이미 `coding-env` 카드에 들어 있다 | `hub_collect._group_sessions_by_project(events, cfg.ignore_globs)` 읽기 전용 실행 → `coding-env` 그룹 15세션(`5b6a1f57` 포함) |
+| **E4** | **결함 A(지금 라이브)**: 카드의 티어 1 은 레포 루트 파일(`2026-08-19 17:54:15` · 「허브 상세 패널 — …」 · **100%**)이고, 워크트리의 오늘 파일(`2026-08-20 11:06:02` · 「워크트리 cwd → 레포 루트 병합」 · **0%**)은 **읽히지 않는다** | 두 경로에 `hub_collect.read_tier1_snapshot()` 직접 호출 |
+| **E5** | **결함 B(시한폭탄)**: 창이 굴러 최초 이벤트가 만료되면 세션 cwd 가 워크트리로 바뀌고 `ignore_globs` 에 걸려 **진행 중인 세션이 카드에서 조용히 사라진다** — 그룹 크기 15 → 1 | 첫 워크트리 이벤트 이전을 잘라낸 이벤트 목록으로 `build_session_facts` → `_group_sessions_by_project` 재실행(읽기 전용 시뮬레이션) |
+| **E6** | 창이 날짜 파일 2개(오늘·어제)라 **flip 시점은 「48시간 뒤」가 아니라 「모레 자정」**이다 | `hub_collect.py:167-171` |
+| **E7** | cwd drift 는 워크트리 전용 현상이 **아니다.** 2일 창 다중 cwd 3건 중 워크트리는 1건, 나머지는 scratchpad 로 튀거나 다른 프로젝트로 튄다 | 이벤트 파일 직접 집계 |
+| **E8** | 문자열 접기(`/.claude/worktrees/` 앞 절단)가 git 의 실제 소유 관계와 **일치한다** | `git worktree list`, `cat <worktree>/.git`(=`gitdir: <repo>/.git/worktrees/<name>`), `git rev-parse --git-common-dir` |
+| **E9** | fold-first 로 순서를 뒤집어도 `/tmp`·`/private/tmp` 가드는 **살아남는다**. 접힌 `/private/tmp/x/scratch-repo` 도 여전히 `/private/tmp/**` 에 걸린다 | 7개 경로에 대해 `should_ignore_cwd(fold(p), globs)` 직접 실행(기본값·사용자 config 양쪽) |
+
+### 결정 WT1 — 문제 정의를 실측 위에 다시 쓴다
+
+원래 요구는 「워크트리 세션이 허브에 안 보이니 레포 루트 카드로 합쳐 달라」였다. **E3 이 그 전제를
+반박했다** — 이미 보인다. 따라서 성공 기준을 「워크트리 세션이 보이게 된다」로 잡으면 **이미 되는
+일을 검증하는 공허한 PRP** 가 된다.
+
+이 작업이 고치는 것은 실제로 관측된 결함 두 개다.
+
+| 결함 | 상태 | 증상 | fold 만으로 고쳐지는가 |
+|------|------|------|------------------------|
+| **A. 티어 1 불일치** | **지금 라이브**(E4) | 카드 진행률이 어제의 다른 작업(100%)을 가리키고 「이전 작업」 라벨이 상시 점등. 클릭해도 어제 파일이 열린다 | **아니다** — 티어 1 리더가 여전히 레포 루트 한 파일만 본다 |
+| **B. flip** | **시한폭탄**(E5·E6) | 날짜 경계를 넘으면 진행 중인 세션이 카드에서 통째로 사라진다 | **그렇다** — fold 의 유일하게 실증된 정당화 근거 |
+
+---
+
+## 2. 요구사항 / 사용자 스토리 / 성공 기준
+
+### 사용자 스토리
+
+> 레포 루트에서 작업을 시작해 워크트리로 들어간 사용자로서,
+> 허브의 그 레포 카드 하나만 보면 **워크트리에서 진행 중인 작업의 현재 단계**를 알고 싶다.
+> 워크트리마다 카드가 따로 생기거나, 날짜가 바뀌었다고 세션이 사라지거나,
+> 어제 끝난 다른 작업의 100% 가 붙어 있으면 그 카드를 신뢰할 수 없다.
+
+### 성공 기준 (전부 검증 가능한 형태)
+
+| # | 기준 | 검증 수단 |
+|---|------|-----------|
+| **S1** | 세션의 cwd 가 `<repo>/.claude/worktrees/<name>` 일 때 그 세션은 **`<repo>` 그룹**에 들어간다 | 단위 — `_group_sessions_by_project` 반환 dict 의 키 |
+| **S2** | **E5 의 flip 시나리오를 재현해도** 세션이 사라지지 않는다: 첫 이벤트가 워크트리인 이벤트 목록으로 그룹핑하면 `<repo>` 그룹에 그 세션이 있다 | 단위 — 이벤트 목록을 잘라 넣는 결정적 테스트 |
+| **S3** | 워크트리는 **별도 카드가 되지 않는다** — 스냅샷 `projects[].path` 에 `/.claude/worktrees/` 를 포함한 경로가 하나도 없다 | 단위 + `hub.html` 의 `#dzh-data` JSON 파싱 |
+| **S4** | 레포 루트와 워크트리 양쪽에 `dashboard.html` 이 있을 때 카드의 티어 1 은 **mtime 이 더 새로운 쪽**이다 | 단위(임시 디렉토리 트리 + `os.utime`) |
+| **S5** | `build_dashboard_registry` 가 돌려주는 경로가 **S4 에서 이긴 그 파일**이다(카드 내용과 클릭 대상이 같은 파일) | 단위 — registry 값 직접 단언 |
+| **S6** | 워크트리 파일이 이긴 상태에서 「이전 작업」 라벨은 **그 워크트리의 세션만** 기준으로 판정된다 | 단위 — `tier1_is_previous_task` |
+| **S7** | 워크트리가 없는 프로젝트의 스냅샷은 **변경 전과 완전히 동일**하다 | 기존 375건 전량 통과 + 신규 동치 테스트 |
+| **S8** | 실환경: `hub/install.sh --force` → `/hub server restart` 후 `coding-env` 카드가 **워크트리 대시보드의 제목·진행률**을 보여주고, 카드를 클릭하면 그 대시보드가 열린다 | 수동 확인 1건 |
+
+### 확정된 전제
+
+- 한 세션은 언제나 **정확히 하나의 cwd** 를 갖는다(`build_session_facts` 가 session_id 키 dict 를
+  반환). 접어도 같은 세션이 두 카드에 중복 렌더될 가능성은 **0** 이다.
+- 워크트리 경로는 레포 루트 경로의 **엄격한 하위 경로**다(E8). 접기는 경로를 **짧게만** 만든다.
+- `config.roots` 가 비어 있어 카드는 **오직 이벤트 cwd** 에서 생긴다. 스캔 경로 접기는
+  「`roots` 를 설정한 사용자」를 위한 방어이지 이 사용자의 동작 경로가 아니다.
+- 데이터 마이그레이션은 **불필요**하다 — 훅은 cwd 를 필터 없이 전부 기록해 왔고(`hub_hook.py:98`),
+  수집은 2일치만 읽는다. 배포 즉시 과거 2일치가 새 규칙으로 재해석된다.
+
+### 비목표 (이번에 하지 않는다)
+
+| 비목표 | 이유 | 재방문 트리거 |
+|--------|------|---------------|
+| 티어 3(`~/.claude/projects` 인코딩 디렉토리명) 접기 | 티어 3 은 「세션도 대시보드도 없는 프로젝트」의 마지막 활동 시각 폴백이다. 워크트리에서 일하면 티어 2 세션이 이미 카드를 만든다 → 화면 기여 0. 접으면 `activity[name] = …`(`hub_collect.py:284`)를 max 병합으로, `tier3_by_path` 컴프리헨션(`:379`)도 함께 고쳐야 한다(결정 WT5) | 「2일 창 밖 워크트리의 마지막 활동 시각이 필요하다」는 요구가 실제로 생기면 |
+| 관례 밖 워크트리(`git worktree add ../foo`) | 문자열 규칙으로는 원리적으로 못 잡는다. **오늘도 접히지 않고 별도 카드로 보이므로 회귀가 아니라 커버리지 미달**이다. 잡으려면 I/O 가 필수(결정 WT3) | 관례 밖 워크트리를 실제로 쓰기 시작하면 |
+| 세션 줄에 「어느 워크트리인지」 표시 | `SessionView`(`hub_session.py:81-91`)에 신규 필드 + `#dzh-data` 계약 + 템플릿 + T25 검사까지 범위가 두 배가 된다. 카드 제목은 티어 1 대시보드의 `#dz-title` 을 이미 보여주므로 **무엇을 보고 있는지는 식별 가능**하다(결정 WT11) | 한 카드에 워크트리 세션이 2개 이상 동시에 도는 상황이 실제로 생기면 |
+| 일반적 cwd 정규화(scratchpad·크로스 프로젝트 drift) | E7 이 밝힌 같은 뿌리(첫 이벤트가 승자)의 나머지 2/3. 해법이 서로 다르고(scratchpad 는 접을 대상이 없고, 크로스 프로젝트는 접으면 안 된다) **관측된 증상이 없다**(결정 WT2) | drift 로 세션이 사라지는 사례가 실제로 관측되면 |
+| 허브가 `dashboard_enabled` 스위치를 읽는 것 | 허브 역사상 **두 번째 프로젝트 로컬 파일 계약**이 된다. 지금도 허브는 이 스위치를 전혀 읽지 않는다(결정 WT10) | 개인 off 사용자가 워크트리 대시보드 되살아남을 실제로 신고하면 |
+| 진단용 CLI 출력 / 서버 JSON 엔드포인트 | `render_hub_html` 이 `HubSnapshot` 전체를 `#dzh-data` 에 심으므로 **검증 수단은 이미 있다**(결정 WT12) | — |
+| `commands/dashboard.md` 변경 | 읽기 시점 병합만 하므로 **한 줄도 고칠 필요가 없다**(§9 부수 발견) | — |
+
+---
+
+## 3. 영향 범위
+
+### 수정 파일
+
+| 파일 | 무엇을 | 근거 결정 |
+|------|--------|-----------|
+| `hub/bin/hub_project.py` (★순수) | 상수 1개 + 순수 함수 4개 신설(`fold_worktree_path`·`group_paths_by_repo_root`·`select_tier1_source`·`plan_tier1_candidates`, 마지막은 검수 1회차 M1), `_live_session_start_times_ms` 에 인자 1개 추가, `compose_project_views` 안 3줄 | WT3·WT6·WT9, M1 |
+| `hub/bin/hub_parse.py` (★순수) | `Tier1Snapshot` 에 `source_path` 필드 1개 + `UNSET_SOURCE_PATH` 상수 1개 | WT7 |
+| `hub/bin/hub_collect.py` (I/O) | `_group_sessions_by_project` 그룹 키 접기, `read_tier1_snapshot` 이 `source_path` 도 채움, `_read_tier1_for_root`(검수 1회차 m2 로 `root` 인자 제거) + `_collect_tier1_snapshots`(검수 1회차 M1 신설) 신설, `collect_snapshot` 후보 조립을 `plan_tier1_candidates` 호출로 축소 | WT4·WT5·WT6, M1·m2 |
+| `hub/bin/hub_model.py` (★순수) | `build_dashboard_registry` — `tier1.source_path` 사용 + `tier1 is None`·`UNSET_SOURCE_PATH` 방어 가드와 그 사유 주석(메인 세션 검토 지적 반영). 초판은 「2줄」로 예상했으나 실제 9줄 | WT8 |
+| `tests/hub/test_hub_project.py` | 신규 클래스 4개(`FoldWorktreePathTest`·`GroupPathsByRepoRootTest`·`PlanTier1CandidatesTest`[검수 1회차 M1]·`SelectTier1SourceTest`) + GN 테스트 보강 | §7 |
+| `tests/hub/test_hub_collect.py` | 신규 클래스 3개(`WorktreeFoldGroupingTest`·`Tier1SourceSelectionTest`·`CollectTier1SnapshotsTest`[검수 1회차 M1]). **기존 `Tier3IgnoreFilterTest` 는 무변경**(티어 3 을 접지 않으므로) | §7 |
+| `tests/hub/test_hub_model.py` | `build_dashboard_registry` 가 `tier1.source_path` 를 쓰는지 단언 | §7 |
+| `tests/hub/test_hub_parse.py` | 파서가 `source_path` 를 `UNSET_SOURCE_PATH` 로 남기는지 단언 | §7 |
+| `tests/hub/test_hub_server.py` | `tier=1` 인데 `tier1=None` 인 픽스처를 실제 `Tier1Snapshot` 으로 교체. **초판이 누락한 파일이다** — `build_dashboard_registry` 의 `tier1 is None` 가드가 신설되면서 그 픽스처가 registry 를 비게 만들어 반드시 고쳐야 했다(재검수 2회차 지적) | WT8 |
+| `tests/run.sh` | T25-111~T25-114 신설(검수 1회차 M2 로 `note_failure` 누적형 전환) | §7 |
+| `hub/README.md` | 티어 표(`:340`) 출처 문구 + `ignore_globs` 행(`:359`) 주석 | §6 |
+
+### 미영향 — 건드리지 않는 이유 (전수 확인)
+
+| 대상 | 확인 결과 |
+|------|-----------|
+| `hub.py`·`hub_daemon.py`·`hub_settings.py`·`hub_statusline.py`·`hub_usage.py`·`hub_usage_fetch.py`·`hub_server_state.py` **7개** | `cwd`·`worktree`·`project_path`·`project_root`·`ignore_globs`·`encode_project`·`ProjectView`·`projects` **8개 심볼 grep 전부 0건**. 프로젝트 경로 개념을 아는 모듈은 `hub_project.py`·`hub_collect.py` **둘뿐**임이 전수로 확인됐다 |
+| `hub/bin/hub_template.html` | 결정 WT11 — 새 필드는 `#dzh-data` JSON 에 실리지만 템플릿은 읽지 않는다. `SessionView`·`ProjectView` 무변경이라 렌더 경로가 그대로다 |
+| `hub/bin/hub_server.py` | 라우트 정규식(`^/project/([0-9a-f]{16})/dashboard\.html$`)·`ALLOWED_REQUEST_PATHS` 무변경. registry 의 **값만** 바뀌고 키 계산(`sha256(project.path)`)은 그대로다 |
+| `hub/bin/hub_session.py` | `SessionFacts.cwd` 를 **재작성하지 않는다** — 접기는 그룹 키에서만 일어난다(결정 WT5). 원본 cwd 는 GN 판정에 그대로 필요하다 |
+| `hub/bin/hub_hook.py` | 훅은 payload cwd 를 가공 없이 기록한다. 이벤트 스키마 무변경 |
+| `hub/install.sh` · `hub/README.md:18`·`:384` · `tests/run.sh:3881-3886` | **새 모듈을 만들지 않으므로** 「15개 파일」 리터럴 4곳 전부 무변경(결정 WT13) |
+| `commands/dashboard.md` (1679줄) | 읽기 시점 병합이라 쓰기 쪽 계약(`data-owner-token`·`data-server-port`·포트 스캔)이 전부 그대로다 |
+| `~/.claude/hub/config.json` | 사용자 config 를 고치라고 요구하지 않는다(결정 WT4) |
+| `tests/hub/fixtures/` | `hub_parse` 의 파싱 로직을 안 건드린다 — 새 HTML fixture 불필요 |
+
+---
+
+## 4. 결정 기록
+
+### 결정 WT2 — 범위: fold + 티어 1 출처 확장을 **한 PRP 로 묶되, 2단계로 구현**한다
+
+| 안 | 내용 | 트레이드오프 |
+|----|------|--------------|
+| 안 1 | fold 만 | 결함 B 만 고치고 **결함 A(지금 라이브)는 그대로**. 사용자가 보는 증상(어제 100% + 「이전 작업」 상시 점등)이 하나도 안 바뀐다 |
+| 안 2 | 티어 1 확장만 | 결함 A 는 고쳐지지만 **flip 이 오면 카드째 사라져** 티어 1 도 같이 사라진다. 또 티어 1 후보 목록을 만들려면 「어느 워크트리가 이 레포 소속인가」가 필요한데 그게 곧 fold 다 |
+| **안 3(권고)** | **둘 다, 단계 1 → 단계 2 순서로** | 단계 1 이 만드는 `group_paths_by_repo_root` 의 **멤버 목록이 곧 단계 2 의 티어 1 후보**다. 두 단계가 같은 자료구조를 공유하므로 나눠 만들 이유가 없다. 대신 단계 1 만으로도 테스트가 전부 통과하는 상태를 거쳐 커밋 경계를 남긴다 |
+
+**근거**: 조사가 티어 1 확장을 「분리 가능하지만 생략 불가」로 판정했고, E4 가 그것을 **지금 라이브인
+결함**으로 확정했다. 승인자가 범위를 줄이고 싶다면 **단계 2 를 잘라내는 것**이 유일하게 일관된
+절단선이다(승인 요청 항목 1).
+
+### 결정 WT3 — 판정은 **순수 문자열 마커 절단**이다. git 호출도 `.git` 파일 읽기도 하지 않는다
+
+```python
+WORKTREE_PATH_MARKER = "/.claude/worktrees/"
+```
+
+| 안 | 정확도 | 비용 | 계층 |
+|----|--------|------|------|
+| **안 A(권고) 문자열 마커 절단** | 관례 경로 100%(E8). 관례 밖 워크트리는 못 잡음 | **0** | `hub_project.py`(★순수) — 단위 테스트가 가장 싸다 |
+| 안 B `<worktree>/.git` 평문 파일 읽기 | 관례 밖도 잡음. 서브모듈 워크트리에서 부정확 | 수집 사이클(5초)마다 후보 수만큼 `open`+`read` | `hub_collect.py` 로 강제 이동 |
+| 안 C `git rev-parse --git-common-dir` | 가장 정확 | **5초마다 워크트리 수만큼 fork** | `hub_collect.py` + 실패 경로 신설 |
+
+**근거**: `hub_project.py:3` 의 ★순수 계약(「파일시스템·시각·환경변수에 닿지 않는다」)은 관례가
+아니라 `tests/run.sh:2356-2363`(T25-10)이 `grep -qE 'open\(|Path\(|os\.'` 로 기계 강제한다.
+`os.path.dirname` 조차 걸린다. 안 A 는 `str.find` + 슬라이스만 쓰므로 이 가드를 자연히 통과한다.
+
+> **주의(구현자에게)**: 그 grep 은 `subprocess.run(`·`subprocess.check_output(` 은 **통과시킨다**
+> (실측). 「테스트가 안 막으니 넣어도 된다」로 가지 마라 — 진짜 계약은 docstring 이다.
+
+**절단 방향은 `find`(첫 번째 마커)다.** 중첩 워크트리 `/a/repo/.claude/worktrees/w1/.claude/worktrees/w2`
+에서 첫 마커로 자르면 `/a/repo`(최외곽 레포)까지 한 번에 접히고, 마지막 마커(`rfind`)로 자르면
+`/a/repo/.claude/worktrees/w1` — **여전히 워크트리 경로**라 뒤이은 ignore 에 걸려 세션이 통째로
+사라진다. 실측으로 두 결과가 다름을 확인했다.
+
+### 결정 WT4 — **fold → ignore** 순서. `ignore_globs` 기본값도 사용자 config 도 손대지 않는다
+
+| 안 | 이 사용자에게 켜지는가 | 접기 실패 시 | 비용 |
+|----|----------------------|--------------|------|
+| **안 A(권고) 기본값 유지 + fold 를 ignore 앞에** | **켜진다**(config 내용과 무관) | 워크트리가 **오늘처럼 조용히 숨는다**(안전 실패) | 0 |
+| 안 B 기본값에서 워크트리 glob 제거 | **안 켜진다** | 워크트리가 **별도 카드로 나타난다**(사용자가 명시적으로 원하지 않는 결과) | 사용자 config 편집 안내 필요 |
+| 안 C `fold_worktrees: bool` 신설 | 켜진다 | 선택 가능 | `HubConfig`·`_CONFIG_FIELD_TYPES`·`hub/README.md` 표 동시 변경 + 요청되지 않은 설정 가능성(YAGNI) |
+
+**근거 (실측)**: `config.json` 의 `ignore_globs` 는 기본값과 **병합되지 않고 통째로 대체된다**
+(`hub_collect.py:107` → `:124`). 그리고 이 사용자의 실제 config 에는 기본값 3개가 복제된 뒤
+`/Users/byron` 이 추가돼 있다. **기본값만 고치는 안 B 는 요구를 낸 당사자에게 도달하지 못한다.**
+
+**부작용을 정직하게 적는다**: fold-first 로 가면 `**/.claude/worktrees/**` 는 **티어 1·2 경로에
+대해 죽은 패턴**이 된다(접힌 루트는 이 glob 에 절대 매칭되지 않는다 — E9). 즉 「워크트리를 허브에서
+빼고 싶다」는 손잡이가 사라진다. 그 손잡이를 살리는 안 C 를 **채택하지 않는 이유**는, 요구를 낸
+당사자가 정확히 반대 방향을 요청했고 지금 필요 없는 설정 가능성을 미리 만들지 않기 위해서다(YAGNI).
+그 glob 은 **티어 3 인코딩명 필터에서는 계속 살아 있다**(티어 3 을 접지 않으므로 — 결정 WT5).
+
+**`/tmp` 가드는 안전하다**(E9): `/private/tmp/x/scratch-repo/.claude/worktrees/w` 는 접으면
+`/private/tmp/x/scratch-repo` 이고 이는 여전히 `/private/tmp/**` 에 걸린다.
+
+### 결정 WT5 — 개입 지점은 **두 곳**. 티어 3 은 접지 않는다
+
+`ignore_globs` 는 서로 다른 **세 지점**에 적용된다. 티어별로 개입 여부를 각각 못 박는다.
+
+| 티어 | 적용 지점 | 개입 | 순서 |
+|------|-----------|------|------|
+| 티어 2 (세션 그룹핑) | `hub_collect.py:205`(ignore) → `:207`(그룹 키) | **한다** — `fold_worktree_path(facts.cwd)` 를 먼저 계산하고 **그 결과로** `should_ignore_cwd` 를 호출한 뒤 **접힌 값을 그룹 키로 쓴다** | fold → ignore → group |
+| 티어 1 (후보 경로) | `hub_collect.py:359-363` | **한다** — 관측 경로 전체를 `group_paths_by_repo_root` 로 묶고, **접힌 루트에만** ignore 를 적용한다 | fold → ignore |
+| 티어 3 (인코딩 디렉토리명) | `hub_collect.py:276` | **하지 않는다** | 무변경 |
+
+**ignore 는 접힌 루트에만 적용한다** — 멤버(워크트리 경로)에 개별 적용하면 전부 glob 에 걸려
+티어 1 후보 확장이 그 자리에서 죽는다. 이것이 fold-first 순서의 실질적 내용이다.
+
+**티어 3 을 접지 않는 이유**: (a) 화면 기여 0 — 워크트리에서 일하면 티어 2 세션이 이미 카드를
+만든다. (b) 접으면 `activity[entry.name] = …`(`:284`)이 **뒤엣것이 앞엣것을 덮어쓰는** 대입이라
+max 병합으로 바꿔야 하고, `tier3_by_path` 컴프리헨션(`:379`)도 같은 문제를 갖는다. (c) 기존 테스트
+`test_worktree_and_tmp_encoded_names_are_excluded`(`tests/hub/test_hub_collect.py:169-178`)를
+**뒤집지 않아도 된다** — 접지 않기로 하면 그 단언이 그대로 참으로 남고, 그 glob 도 계속 의미를 갖는다.
+
+### 결정 WT6 — 티어 1 승자는 **mtime 최신**, 동률이면 **레포 루트**
+
+| 안 | 결과 | 채택 여부 |
+|----|------|-----------|
+| 레포 루트 고정 | 결함 A 가 그대로 남는다(E4). 「워크트리 진행률을 보고 싶다」는 요구의 정확한 반대 | ✕ |
+| **mtime 최신(권고)** | 「이 레포에서 **가장 최근에 갱신된 대시보드**」라는 한 줄로 설명되는 규칙. 결정적·순수·테스트 가능 | **○** |
+| 레포 루트 우선 + 히스테리시스 | 승자 요동을 줄이지만 「얼마나 더 새로워야 하는가」라는 임의 상수가 새로 필요하고, 그 상수를 정할 측정치가 없다 | ✕ (YAGNI, P-2 로 관리) |
+| 후보 N개 노출 | `ProjectView.tier1` 단수 → 복수, 라우트 정규식(키 1 : 대시보드 1), 패널 UI 재설계까지 번진다 | ✕ (범위 초과) |
+
+**동률 처리**: 후보 목록을 **`(레포 루트, 워크트리…)` 순서**로 만들고 `max(candidates, key=…)` 를
+쓴다. 파이썬 `max` 는 **동률일 때 앞의 것을 돌려주므로** 레포 루트 우선이 자료 순서에서 자연히
+떨어진다. 이 성질에 암묵적으로 기대지 않도록 **동률 테스트로 못 박는다**(§7 U-9).
+
+**버려진 워크트리 문제**(디렉토리는 남았지만 아무도 안 쓰는 워크트리의 낡은 대시보드가 계속 이기는
+경우)는 성립하지 않는다 — 버려진 파일은 mtime 이 갱신되지 않으므로 레포 루트가 한 번이라도 갱신되면
+곧바로 진다. **살아 있는 두 대시보드가 번갈아 이기는 요동**만 실제 위험이고, 그것은 P-2 로 관리한다.
+
+### 결정 WT7 — 티어 1 출처 경로는 `Tier1Snapshot.source_path` 로 실어 나른다
+
+```python
+# hub_parse.py
+UNSET_SOURCE_PATH = ""      # file_mtime_ms 와 같은 계열 — I/O 레이어가 replace 로 채운다
+
+@dataclass(frozen=True)
+class Tier1Snapshot:
+    ...
+    file_mtime_ms: int
+    source_path: str = UNSET_SOURCE_PATH   # 이 스냅샷을 읽어 온 dashboard.html 의 **소유 디렉토리**
+```
+
+| 안 | 비용 | 판단 |
+|----|------|------|
+| **안 A(권고) `Tier1Snapshot.source_path`** | 필드 1개 + 상수 1개. `compose_project_views` **시그니처 무변경**. 기존 Tier1Snapshot 생성 5곳이 전부 키워드 인자라 **기본값만 주면 무변경**(실측) | **○** |
+| 안 B `ProjectView.tier1_source_path` | `compose_project_views` 에 인자 1개 추가 + **네 번째 `path -> 값` 병렬 dict**. tier1 과 반드시 동기화돼야 하는 값을 따로 들고 다니는 구조 | ✕ |
+
+**근거**: `hub_parse.py:15-17` 이 **바로 이 패턴의 선례를 명시적으로 적어 두었다** —
+「`file_mtime_ms` 는 이 모듈이 채우지 않는다. I/O 레이어(hub_collect.py)가 stat 으로 얻은 실제
+mtime 을 `dataclasses.replace` 로 덮어쓴다」. 경로 **문자열**을 담는 것은 파일시스템에 **닿는** 것이
+아니므로 ★순수 계약(`hub_parse.py:3`)과 충돌하지 않는다.
+
+**저장하는 값은 파일 경로가 아니라 소유 디렉토리다.** `<dir>/.claude/dashboard.html` 의 상대경로
+상수(`PROJECT_DASHBOARD_RELATIVE_PATH`)는 이미 정본이 하나뿐이므로(`hub_project.py:18-23`), 결정을
+한 번만 내리고 나르는 목적은 **디렉토리**를 나르는 것으로 충분하다. 이렇게 하면 GN 판정(결정 WT9)이
+`facts.cwd == tier1.source_path` 라는 **직접 비교 한 줄**이 된다(경로에서 디렉토리를 되뽑는 헬퍼 불필요).
+
+### 결정 WT8 — `build_dashboard_registry` 는 경로를 **재조립하지 않고** `tier1.source_path` 를 쓴다
+
+```python
+# 변경 전: registry[project_dashboard_key(project.path)] = project.path + "/" + PROJECT_DASHBOARD_RELATIVE_PATH
+# 변경 후: registry[project_dashboard_key(project.path)] = project.tier1.source_path + "/" + PROJECT_DASHBOARD_RELATIVE_PATH
+```
+
+**키는 그대로 `project.path`(접힌 레포 루트)다.** 카드의 신원(`data-project-path`)·카드 순서
+localStorage·패널 신원이 전부 이 문자열에 묶여 있고(결정 OC1), 워크트리 경로는 **지금까지 한 번도
+렌더된 적이 없으므로** 기존 사용자의 저장 상태를 깨뜨리지 않는다.
+
+**결정 N3(핸들러는 요청 문자열로 경로를 만들지 않는다)은 유지된다** — 값은 여전히 `collect_snapshot`
+이 실제로 발견하고 `is_file()` 로 확인한 경로에서만 나온다. traversal 차단 논거를 다시 세울 필요가 없다.
+
+이 결정을 빠뜨리면 **카드에 보이는 진행률과 클릭해서 열리는 파일이 다른 파일**이 되는 조용한 불일치가
+성립한다. 저장소가 가장 싫어하는 실패 모드다(「경로를 지어내지 않는다」와 같은 계열).
+
+### 결정 WT9 — GN1 의 live 세션 집합을 **티어 1 출처와 같은 cwd** 로 좁힌다 (GN2 개정)
+
+```python
+def _live_session_start_times_ms(sessions, session_views, tier1_source_path: str) -> tuple[int, ...]:
+    return tuple(
+        facts.started_at_ms
+        for facts, view in zip(sessions, session_views)
+        if view.state in LIVE_SESSION_STATES and facts.cwd == tier1_source_path
+    )
+```
+
+**이것은 축소가 아니라 정정이다.** `is_tier1_from_previous_task` 는 「이 그룹의 살아 있는 세션이
+곧 이 파일을 갱신하는 주체」를 전제한다. `/dashboard` 는 **cwd 상대경로**에만 쓰므로
+(`commands/dashboard.md:449`), 파일 `<D>/.claude/dashboard.html` 을 갱신하는 세션은 **cwd 가 정확히
+`<D>` 인 세션뿐**이다. 좁힌 집합이 곧 그 전제의 정확한 표현이다.
+
+**비워크트리 프로젝트에서는 완전한 무동작이다** — 접기 전에는 그룹 키 = cwd = 티어 1 출처였으므로
+`facts.cwd == tier1.source_path` 가 항상 참이다. 즉 이 변경은 **엄격한 일반화**이고 기존 GN 표
+(`hub-session-revival-and-stale-tier1.md:266-290`, 8행)의 판정 결과를 하나도 바꾸지 않는다.
+
+좁히지 않으면: 워크트리 세션이 레포 루트 파일 mtime 이후에 시작했다는 이유만으로 레포 카드에
+「이전 작업」이 붙는(또는 반대로 안 붙는) **우연**이 된다.
+
+| 대안 | 기각 사유 |
+|------|-----------|
+| 워크트리 세션을 live 집합에서 통째 제외 | 승자가 워크트리 파일일 때 **아무도 그 파일의 세대를 판정하지 못한다** |
+| 라벨을 포기(항상 False) | 결정 GN1~GN3 이 해결한 실제 문제(좀비 stale 세션의 세대 오염)를 되돌린다 |
+
+### 결정 WT10 — `dashboard_enabled` 스위치는 이번에도 **읽지 않는다** (현행 유지 + 문서화)
+
+| 안 | 코드 비용 | 위험 |
+|----|-----------|------|
+| **안 A(권고) 무시 + 문서화** | **0** | 개인 off 사용자에게 워크트리 대시보드가 티어 1 로 되살아난다 |
+| 안 B 워크트리 파일을 티어 1 후보에서 제외 | registry·`ProjectView` 무변경 | **결함 A 를 안 고친다** — 이 PRP 의 절반이 사라진다 |
+| 안 C 허브가 소유 레포 루트의 `settings.local.json` 을 읽음 | 허브 역사상 **두 번째 프로젝트 로컬 파일 계약** + T23-7(`tests/run.sh:2192-2197`) 확장 필수 | 규범이 「코드가 신뢰하는 사실」로 승격된다 |
+
+**위험 범위가 실측으로 좁혀진다.** off 스위치는 둘이고 워크트리 전파성이 정반대다.
+
+- **팀 단위 off**(CLAUDE.md 항목 삭제·주석) = **커밋 대상 → 워크트리에 그대로 전파**된다.
+  이 경우 워크트리 세션도 애초에 `/dashboard` 를 부르지 않아 파일이 생기지 않는다 → **안전**.
+- **개인 off**(`.claude/settings.local.json`) = `.gitignore:6` 등재 → 워크트리에 존재하지 않는다
+  → 워크트리 세션은 켜진 채로 돈다 → **손상 시나리오는 여기 하나뿐이다.**
+
+또한 **허브는 오늘도 이 스위치를 모른다**(`grep -rn dashboard_enabled hub/` → 0건). 개인 off 를 눌러도
+기존 `dashboard.html` 은 지워지지 않으므로 카드는 지금도 티어 1 로 뜬다. 이번 변경은 **새로운 종류의
+문제를 만드는 것이 아니라 기존 간극을 넓힌다** — 정직하게 그렇게 적는다.
+
+「워크트리마다 다시 off 를 누르면 된다」는 완화책은 **제시하지 않는다** — 그 파일은 커밋 불가이고
+워크트리와 함께 사라진다(실측 `git check-ignore -v`).
+
+### 결정 WT11 — 화면 표시는 **한 줄도 바꾸지 않는다**
+
+`hub_template.html`·`SessionView`·`ProjectView` 무변경. 「지금 보고 있는 것이 어느 워크트리의
+진행률인가」는 **티어 1 대시보드의 제목(`#dz-title`)이 이미 카드에 렌더되므로** 식별 가능하다
+(E4 의 두 제목이 서로 완전히 다르다). 카드 이름은 `_display_name(레포 루트)` 라 **오염되지 않는다**.
+
+새 필드(`source_path`)는 `#dzh-data` JSON 에 실리지만 템플릿이 읽지 않으므로 화면 영향 0 이다.
+`snapshot_content_key` 에도 실리지만 **시간에 무관한 안정값**이라 매 사이클 `hub.html` 재작성을
+유발하지 않는다.
+
+### 결정 WT12 — 검증은 **순수 단위 테스트 + `#dzh-data` JSON**. 진단 CLI 를 만들지 않는다
+
+- `hub.py collect --json` 은 `projects` 를 **개수로만** 낸다(`hub.py:57-62`). 게다가 개수는
+  fold 검증에 **애매한 신호**다 — 레포 루트가 이미 카드면 fold 후에도 그대로고, 없으면 +1 이다.
+- `cmd_status` 는 프로젝트 정보를 전혀 내지 않는다(`hub.py:211-243`). 서버에도 JSON 엔드포인트가
+  없다(`hub_server.py:27`).
+- **그러나** `render_hub_html` 이 `json.dumps(asdict(snapshot))` 로 `HubSnapshot` 전체를
+  `#dzh-data` 에 심는다(`hub_model.py:77-91`). 최소 템플릿으로 render → payload 를 잘라
+  `json.loads` → `parsed["projects"][0][...]` 를 단언하는 패턴이 **이미 5개 테스트 파일에 있다**.
+
+따라서 새 인프라 없이 S1~S7 을 전부 자동 검증할 수 있다. 진단 출력 추가는 배제한다(YAGNI).
+
+### 결정 WT13 — **새 모듈을 만들지 않는다**
+
+fold 로직은 순수 함수 3개(약 25줄)다. 새 모듈로 빼면 `hub/install.sh:12 HUB_FILE_COUNT=15` ·
+`hub/README.md:18` · `hub/README.md:384` · `tests/run.sh:3881-3886` **네 곳의 리터럴**을 동시에
+고쳐야 하고, `tests/run.sh:3881` 의 grep 은 **하드코딩된 문자열**이라 자동 추종하지 않는다.
+25줄을 위해 배포 게이트를 흔들 이유가 없다.
+
+> 비대칭 기록: `hub/install.sh` 는 복사만 하고 대상의 잔존 파일을 지우지 않는데(`:106-113`) 검증은
+> **대상 디렉토리**의 파일 수를 센다(`:95-102`). 그래서 **파일 수를 늘리는 쪽보다 줄이는 쪽이 훨씬
+> 비싸다**(재설치가 「기대 N개, 실제 N+1개」로 실패하고 rollback 이 없다). 이번 안은 어느 쪽도 아니다.
+
+### 결정 WT14 — 세션 `cwd` 자체는 재작성하지 않는다
+
+접기는 **그룹 키에서만** 일어난다. `SessionFacts.cwd`(원본 워크트리 경로)는 그대로 살아 있어야
+결정 WT9 의 출처 대조가 가능하다.
+
+| 대안 | 기각 사유 |
+|------|-----------|
+| `_new_session_builder` 진입 전 이벤트 cwd 정규화 | 원본이 영구 소실 → WT9 불가능. `hub_session.py`(★순수) 계약도 함께 바뀐다 |
+| `SessionFacts.cwd` 를 **마지막 이벤트 cwd** 로 변경 | flip 을 반대 방향으로 뒤집을 뿐이다 — 지금 레포 루트로 보이는 세션이 **즉시** 워크트리로 이동해 사라진다 |
+| 「창 안 최초의 **비무시** cwd」 로 변경 | flip 을 못 막는다 — 창이 굴러 **모든** 이벤트가 워크트리가 되면 비무시 후보가 0 이 된다(실측 시나리오 E5 가 정확히 그 경우다) |
+
+---
+
+## 5. 데이터 모델·인터페이스 계약
+
+### 신규 (전부 `hub/bin/hub_project.py` — ★순수)
+
+```python
+WORKTREE_PATH_MARKER = "/.claude/worktrees/"
+"""Claude Code 가 만드는 워크트리의 관례 경로 마커. 이 앞이 소유 레포 루트다(결정 WT3)."""
+
+
+def fold_worktree_path(path: str) -> str:
+    """워크트리 경로를 소유 레포 루트로 접는다. 워크트리가 아니면 원본 그대로.
+
+    마커가 여러 번 나오면(중첩 워크트리) **첫 번째**에서 자른다 — 최외곽 레포까지 한 번에 접힌다.
+    """
+
+
+def group_paths_by_repo_root(paths: Sequence[str]) -> dict[str, tuple[str, ...]]:
+    """경로들을 소유 레포 루트별로 묶는다.
+
+    키는 접힌 루트, 값은 **접기 전 원본 경로들**이며 순서는 `(루트, 워크트리…사전순)` 이다.
+    루트는 입력에 없어도 언제나 첫 원소로 들어간다 — 레포 루트의 dashboard.html 은 그 레포에
+    세션이 없어도 티어 1 후보이기 때문이다. 이 순서가 티어 1 동률 처리의 근거다(결정 WT6).
+    """
+
+
+def select_tier1_source(candidates: Sequence[Tier1Snapshot]) -> Tier1Snapshot | None:
+    """티어 1 후보 중 파일 mtime 이 가장 새로운 것을 고른다. 동률이면 목록 앞이 이긴다(결정 WT6)."""
+
+
+def plan_tier1_candidates(
+    sessions_by_path: dict[str, tuple[SessionFacts, ...]],
+    scanned_paths: Sequence[str],
+    ignore_globs: Sequence[str],
+) -> dict[str, tuple[str, ...]]:
+    """세션 관측 cwd·스캔 경로를 소유 레포 루트별 티어 1 후보 멤버로 묶는다(결정 WT2·WT5).
+
+    `collect_snapshot` 조립부 3줄(observed_paths/members_by_root/candidate_paths)을 이
+    함수로 추출한 것이다(검수 1회차 M1 — 그 3줄이 `collect_snapshot` 안에 있을 때는 이를
+    참조하는 모든 테스트가 `_read_tier1_for_root` 를 `mock.patch` 로 우회해 실제로 실행하는
+    테스트가 하나도 없었다). 빈 문자열 루트는 후보에서 제외한다(검수 1회차 m5).
+    """
+```
+
+### 변경 시그니처
+
+| 함수 | 변경 전 | 변경 후 |
+|------|---------|---------|
+| `hub_project._live_session_start_times_ms` | `(sessions, session_views)` | `(sessions, session_views, tier1_source_path: str)` |
+| `hub_collect.read_tier1_snapshot` | 반환 스냅샷에 `file_mtime_ms` 만 채움 | `source_path=project_path` 도 함께 채움 (`dataclasses.replace` 인자 1개 추가) |
+| `hub_collect._read_tier1_for_root` | — (신설) | `(member_paths: Sequence[str]) -> tuple[Tier1Snapshot \| None, tuple[str, ...]]` — 멤버마다 읽고 `select_tier1_source` 로 고른 승자와 경고들을 돌려준다. **검수 1회차 m2 로 `root: str` 인자를 제거했다** — 본문 어디에서도 쓰이지 않았다(멤버 첫 원소가 곧 루트라는 `group_paths_by_repo_root` 의 순서 계약으로 충분하다) |
+| `hub_collect._collect_tier1_snapshots` | — (신설, 검수 1회차 M1) | `(tier1_candidates_by_root: dict[str, tuple[str, ...]]) -> tuple[dict[str, Tier1Snapshot], tuple[str, ...]]` — 후보 루트마다 `_read_tier1_for_root` 를 불러 승자와 경고를 모은다(I/O 레이어, `collect_snapshot` 의 조립 루프를 분리) |
+| `hub_project.plan_tier1_candidates` | — (신설, 검수 1회차 M1) | `(sessions_by_path, scanned_paths, ignore_globs) -> dict[str, tuple[str, ...]]` — 위 「신규」 절 참조 |
+| `hub_model.build_dashboard_registry` | 값 = `project.path + "/" + …` | 값 = `project.tier1.source_path + "/" + …` |
+
+**시그니처가 안 바뀌는 것(중요)**: `compose_project_views` · `should_ignore_cwd` ·
+`resolve_project_dirs` · `encode_project_dir_name` · `render_hub_html` · `snapshot_content_key` ·
+`_tier3_activity_by_encoded_name`.
+
+### `collect_snapshot` 조립부 (검수 1회차 M1 반영 후 형태)
+
+> 최초 설계는 이 조립 3줄(`observed_paths`/`members_by_root`/`candidate_paths`)을
+> `collect_snapshot` 안에 직접 두는 것이었다. 검수 1회차에서 이 조립을 실행하는 테스트가
+> 하나도 없음이 실측으로 드러나(참조하는 모든 테스트가 `_read_tier1_for_root` 를
+> `mock.patch` 로 우회) `hub_project.plan_tier1_candidates`(★순수)로 추출했다. 아래가 그
+> 반영 후 형태다 — `_collect_tier1_snapshots`(hub_collect.py, I/O)가 조립 루프를 맡는다.
+
+```python
+sessions_by_path = _group_sessions_by_project(events, config.ignore_globs)   # 키가 이미 접힌 루트
+scanned_paths = scan_roots_for_projects(config.roots, config.scan_depth)
+
+tier1_candidates_by_root = hub_project.plan_tier1_candidates(
+    sessions_by_path, scanned_paths, config.ignore_globs
+)
+tier1_by_path, tier1_read_warnings = _collect_tier1_snapshots(tier1_candidates_by_root)
+
+# 티어 3 은 무변경 — resolve_project_dirs(list(tier3_by_encoded_name), list(tier1_candidates_by_root))
+```
+
+---
+
+## 6. 정본 이관 표기 (원문은 어느 절에서도 지우지 않는다 — 화살표만 덧붙인다)
+
+| 파일 | 지점 | 덧붙일 표기 |
+|------|------|-------------|
+| `docs/prps/hub-dashboard.md` | `:612-613` 「worktree cwd 를 레포 루트로 병합하는 로직(CAM P5)은 만들지 않는다 — 애초에 제외하기로 했으므로 필요 없다(YAGNI)」 | `→ **번복(2026-08-20, hub-worktree-fold.md)** — 이 배제는 「worktree 를 ignore_globs 로 제외한다」는 전제의 파생 결론이었다. 실측이 전제를 무너뜨렸다: worktree 세션은 이미 카드에 들어와 있고(첫 이벤트가 레포 루트라서), 진짜 결함은 ① 창이 굴렀을 때의 소실 ② 티어 1 이 레포 루트 파일만 읽는 불일치였다. 결정 WT1~WT6 이 정본이다.` |
+| `docs/prps/hub-dashboard.md` | `:928` 기각 대안 표 행 | `**[번복 — hub-worktree-fold.md]**` 를 사유 칸 앞에 붙인다 |
+| `docs/prps/hub-dashboard.md` | `:610-611` 「35개 중 20개가 scratchpad·worktree」 | `→ **재측정(2026-08-20)** — 36개 중 scratchpad 14, worktree 문자열 4 이고 그 4 중 3 은 /private/tmp 스크래치패드 **안**의 worktree 다. 노이즈 논거를 지탱하는 것은 `/private/tmp/**` 이지 worktree glob 이 아니다.` |
+| `docs/prps/hub-session-revival-and-stale-tier1.md` | `:247` 「결정 GN2 — 판정 집합은 `working` 세션뿐이다」 | `→ **개정(2026-08-20, hub-worktree-fold.md 결정 WT9)** — 판정 집합에 조건이 하나 더 붙는다: **티어 1 파일의 소유 디렉토리와 cwd 가 같은** working 세션. 워크트리 fold 이후 한 그룹의 세션이 여러 디렉토리에서 오기 때문이다. 비워크트리 프로젝트에서는 무동작이라 :266-290 의 판정 표 8행은 그대로 유효하다.` |
+| `docs/prps/hub-card-interactions-and-usage.md` | `:588` 「결정 N3 — 핸들러는 요청 문자열로 경로를 만들지 않는다」 | `→ **재진술(2026-08-20)** — registry 의 **값**이 `project.path` 재조립에서 `tier1.source_path` 로 바뀌었다(결정 WT8). 값이 여전히 collect 가 실제로 발견·`is_file()` 확인한 경로에서만 나오므로 N3 의 불변식은 그대로다. **키**는 변함없이 `sha256(project.path)` 다.` |
+| `docs/prps/dashboard-ownership-guard.md` | R4 절(`:685` 부근, 안 1 보류 기록) | `→ **부분 해소(2026-08-20, hub-worktree-fold.md)** — 「프로젝트 1 : 대시보드 1」 전제가 읽기 쪽에서 깨졌다. worktree 는 파일 분리를 토큰이 아니라 **디렉토리로** 이미 달성한 형태이고, 허브는 후보 중 mtime 최신을 고른다(결정 WT6). 쓰기 쪽 소유권 가드(안 1)는 **여전히 보류**다 — 읽기 시점 병합이라 dashboard.md 는 무변경.` |
+| `hub/README.md` | `:340` 티어 표의 티어 1 출처 칸 | `<프로젝트>/.claude/dashboard.html` → `<프로젝트 또는 그 워크트리>/.claude/dashboard.html (여럿이면 mtime 최신)` |
+| `hub/README.md` | `:359` `ignore_globs` 행 | 「이 패턴에 맞는 경로는 제외한다」 뒤에 `. 단 worktree 경로는 **먼저 소유 레포 루트로 접힌 뒤** 이 판정을 받으므로, worktree 패턴은 티어 1·2 에서는 사실상 발동하지 않는다(티어 3 인코딩명 필터에서는 그대로 유효)` |
+
+---
+
+## 7. 테스트 계획
+
+**정본 명령**: `python3 -m unittest discover -s tests/hub -t "$REPO_ROOT"` (stdlib unittest 전용 —
+pytest fixture·parametrize·tmp_path 금지) / `bash tests/run.sh`.
+**기준선(실측)**: `Ran 375 tests / OK`. **테스트 개수를 단언하는 검증 항목은 쓰지 않는다**(T24 는
+종료 코드만 본다).
+
+### 기존 테스트에 대한 영향 (전수 판정)
+
+| 테스트 | 판정 | 근거 |
+|--------|------|------|
+| `test_hub_project.py:145` **M15** (`worktree 경로는 무시 대상`) | **유지 — 무변경** | `should_ignore_cwd` 자체를 안 고친다. 접기가 그 앞에 놓일 뿐이고, 이 술어는 **티어 3 인코딩명 필터에서 계속 살아 있다**(결정 WT5) |
+| `test_hub_collect.py:169` (`티어 3 인코딩명 제외`) | **유지 — 무변경** | 티어 3 을 접지 않기로 했으므로 단언이 그대로 참이다 |
+| `Tier1Snapshot` 을 만드는 5곳(`hub_parse.py:118` + 테스트 4곳) | **무변경** | 전부 키워드 인자이고 신규 필드에 기본값이 있다(실측) |
+| `tier=1` 인데 `tier1=None` 인 `ProjectView` 픽스처(`test_hub_model.py`·`test_hub_server.py`·`test_hub_project.py` 의 `_tier1` 헬퍼) | **수정 — 초판의 예상이 빗나간 지점** | 원인은 신규 필드의 기본값 유무가 **아니라** `build_dashboard_registry` 의 `tier1 is None` 가드와 GN9 의 `facts.cwd == tier1_source_path` 조건이다. 옛 픽스처는 `_project_tier`(`tier==1 ⟺ tier1 is not None`)상 **프로덕션이 만들 수 없는 상태**를 조립하고 있었고, 옛 코드가 `tier1` 을 안 봤기 때문에만 통과했다(검수 1회차에서 정당한 계약 반영으로 판정) |
+| `compose_project_views` 호출 4곳(테스트) | **무변경** | 시그니처를 안 바꾼다 |
+| `test_hub_model.py` registry 테스트 | **수정** | 값의 출처가 `project.path` → `tier1.source_path` |
+| `tests/run.sh` T25-10(순수 가드)·T25-87(필드 순서)·T25-1/2·T25-103/104 | **전부 무변경** | 새 모듈 0개, `ProjectView` 필드 0개 추가, `os.`/`Path(`/`open(` 미사용 |
+
+### 신규 단위 테스트
+
+| # | 클래스/파일 | 입력 | 기대 |
+|---|-------------|------|------|
+| U-1 | `FoldWorktreePathTest` (`test_hub_project.py`) | `/repo/.claude/worktrees/w` | `/repo` |
+| U-2 | 〃 | `/repo` (워크트리 아님) | `/repo` (항등) |
+| U-3 | 〃 | `/repo/.claude/worktrees/feature/sub` (다단 이름) | `/repo` |
+| U-4 | 〃 | `/a/repo/.claude/worktrees/w1/.claude/worktrees/w2` (중첩) | `/a/repo` — **`rfind` 구현이면 실패한다** |
+| U-5 | 〃 | `/Users/u/.claude/worktrees/x` | `/Users/u` (엣지 X-3 을 문서화하는 테스트) |
+| U-6 | `GroupPathsByRepoRootTest` | `["/repo/.claude/worktrees/w"]` | `{"/repo": ("/repo", "/repo/.claude/worktrees/w")}` — **루트가 입력에 없어도 첫 원소** |
+| U-7 | 〃 | 워크트리 2개 + 루트 | 값 순서가 `(루트, 사전순 워크트리 2개)` |
+| U-8 | `SelectTier1SourceTest` | mtime 이 다른 후보 2개 | 큰 쪽 |
+| U-9 | 〃 | **mtime 동률** 후보 2개, 루트가 앞 | **루트가 이긴다**(결정 WT6 을 못 박음) |
+| U-10 | 〃 | 빈 목록 | `None` |
+| U-11 | `WorktreeFoldGroupingTest` (`test_hub_collect.py`) | 워크트리 cwd 이벤트 목록 | 그룹 키가 레포 루트 (**S1**) |
+| U-12 | 〃 | **동일 세션의 이벤트 2건**(둘 다 워크트리 cwd, E5 재현) | 레포 루트 그룹에 그 세션이 있다 (**S2** — 검수 1회차 m3 로 재작성: 「접기 전」 비교는 손수 그룹핑 대신 원본 cwd 에 `should_ignore_cwd` 를 직접 호출해 단언한다. 이전 버전은 손수 재구현이 `should_ignore_cwd` 를 전혀 거치지 않아 항진명제였다) |
+| U-13 | 〃 | 워크트리 cwd 가 `/private/tmp/...` 아래 | 접은 뒤에도 여전히 제외된다 (E9 회귀 방어) |
+| U-14 | `Tier1SourceSelectionTest` | 임시 트리에 루트·워크트리 dashboard.html 2개 + `os.utime` 으로 mtime 조작 | 승자가 새 쪽, `snapshot.source_path` 가 그 디렉토리 (**S4**) |
+| U-15 | 〃 | 워크트리에만 dashboard.html | 레포 루트 카드가 tier 1 로 승격되고 `source_path` = 워크트리 |
+| U-16 | 〃 | 루트에만 dashboard.html | **변경 전과 동일**(`source_path` = 루트) (**S7**) |
+| U-17 | `test_hub_model.py` | tier 1 + `source_path` = 워크트리인 `ProjectView` | registry 값이 워크트리 파일 경로 (**S5**) |
+| U-18 | `test_hub_project.py` GN | 승자 = 워크트리 파일, live 세션 = 루트 세션 1 + 워크트리 세션 1 | 워크트리 세션만 판정에 들어간다 (**S6**) |
+| U-19 | 〃 | 워크트리 없는 프로젝트 | GN 판정 결과가 변경 전과 동일 (**S7**) |
+| U-20 | `test_hub_parse.py` | `parse_dashboard_html` 결과 | `source_path == UNSET_SOURCE_PATH` (순수 레이어가 채우지 않음) |
+| U-21 | `render_hub_html` → `#dzh-data` 파싱 | 워크트리 세션이 있는 스냅샷 | `projects[].path` 중 `/.claude/worktrees/` 포함 경로 0건 (**S3**) |
+
+### `tests/run.sh` 회귀 검사 (신설 — 현재 최대 `T25-110`)
+
+| # | 검사 | 실패 시 잡히는 표류 |
+|---|------|--------------------|
+| **T25-111** | `hub_project.py` 에 `WORKTREE_PATH_MARKER = "/.claude/worktrees/"` 리터럴이 있다 | 마커 문자열이 조용히 바뀌어 아무것도 안 접힘 |
+| **T25-112** | `hub_collect.py` 에서 `fold_worktree_path` 또는 `group_paths_by_repo_root` 호출이 **`should_ignore_cwd` 보다 앞 줄**에 있다(`grep -n` 줄번호 비교 — T25-87 과 같은 방식) | fold-first 순서가 뒤집혀 기능이 통째로 무력화 |
+| **T25-113** | `hub_model.py` 에 `project.path + "/" + PROJECT_DASHBOARD_RELATIVE_PATH` 가 **남아 있지 않다** | 결정 WT8 되돌림(카드/패널 불일치 부활) |
+| **T25-114** | `hub_project.py` 에 `os.`·`Path(`·`open(`·`subprocess` 가 없다 — **`subprocess` 를 명시적으로 추가**한다 | T25-10 의 grep 이 `subprocess.run(` 을 통과시키는 실측 구멍을 메운다 |
+
+### 뮤테이션 검증 (구현자가 반드시 수행)
+
+1. `fold_worktree_path` 의 `find` → `rfind` 로 바꾸면 **U-4 가 실패해야 한다.**
+2. `_group_sessions_by_project` 에서 fold 와 ignore 순서를 뒤집으면 **U-11·U-12 가 실패해야 한다.**
+3. `select_tier1_source` 의 `max` → `min` 으로 바꾸면 **U-8·U-14 가 실패해야 한다.**
+4. `build_dashboard_registry` 를 옛 조립으로 되돌리면 **U-17 이 실패해야 한다.**
+5. `_live_session_start_times_ms` 의 cwd 조건을 지우면 **U-18 이 실패해야 한다.**
+
+**검수 1회차 M1 로 추가된 뮤테이션 3건** (전부 재검증 완료 — 397 OK + run.sh 24/24 로는 잡히지
+않던 것들이었다):
+
+6. `_collect_tier1_snapshots` 에서 `_read_tier1_for_root(member_paths)` → `_read_tier1_for_root((root,))`
+   로 바꾸면(멤버 대신 루트만 넘김) **`CollectTier1SnapshotsTest.test_full_member_tuple_is_forwarded_not_just_the_root`
+   가 실패해야 한다.**
+7. `plan_tier1_candidates` 의 `observed_paths = {facts.cwd for …}` → `set(sessions_by_path)` 로
+   바꾸면 **`PlanTier1CandidatesTest.test_worktree_member_survives_fold_then_ignore_with_default_globs`
+   가 실패해야 한다.**
+8. `plan_tier1_candidates` 에서 ignore 를 (접힌 루트가 아니라) 멤버 각각의 원본 경로에 적용하도록
+   바꾸면 **위 7번과 동일한 테스트가 실패해야 한다.**
+
+   > 재검수 2회차 정정: 초판은 여기에 `test_ignored_root_is_excluded_entirely` 도 함께 실패한다고
+   > 적었으나 실측 결과 그 테스트는 반응하지 않는다. 기대값이 `{}` 라 **결과를 줄이는 방향의
+   > 뮤테이션에는 구조적으로 반응할 수 없다.** 뮤테이션 자체는 앞의 테스트가 검출하므로 커버리지
+   > 구멍은 아니다 — 「전부 검출된다」는 문구 쪽이 틀렸던 것이다.
+
+### 수동 확인 (S8)
+
+```bash
+hub/install.sh --force      # 1. 설치본 갱신 (이 단계를 빠뜨리면 "고쳤는데 화면이 그대로")
+/hub server restart         # 2. 돌고 있는 프로세스를 새 코드로 갈아 끼운다
+```
+
+- [ ] `coding-env` 카드가 **하나만** 있고 `worktree-project-merge` 카드가 없다
+- [ ] 그 카드의 제목·진행률이 **워크트리 대시보드**(오늘 것)를 가리킨다
+- [ ] 「이전 작업」 라벨이 **꺼져 있다**(워크트리 세션이 그 파일을 갱신하는 주체이므로)
+- [ ] 카드를 클릭하면 **워크트리의** dashboard.html 이 패널에 뜬다
+- [ ] 다른 프로젝트 카드(`daily-pulse`·`klago-…`·`claude-agents-manager`)가 **변하지 않았다**
+
+---
+
+## 8. 엣지 케이스
+
+| # | 상황 | 처리 |
+|---|------|------|
+| **X-1** | 중첩 워크트리 | 첫 마커에서 자름 → 최외곽 레포 (U-4) |
+| **X-2** | 다단 워크트리 이름(`a/b`) — `EnterWorktree` 의 `name` 이 `/` 구분 다단 세그먼트를 허용한다 | 고정 깊이·부모의 부모 방식은 **틀린다**. 마커 절단만이 옳다 (U-3) |
+| **X-3** | `$HOME/.claude/worktrees/x` → `$HOME` 으로 접힘 | **가드를 붙이지 않는다.** 관례상 그것이 맞는 답이고(그 워크트리의 소유 레포는 `$HOME` 이다), 이 사용자의 config 에는 `/Users/byron` 이 ignore 로 들어 있어 실질 영향이 없다(실측). 동작을 U-5 로 문서화 |
+| **X-4** | 후행 슬래시가 붙은 cwd | 실데이터에 없다(2일 창 cwd 고유값 전부 후행 슬래시 없는 절대경로). 마커가 있으면 절단이 정상 동작하고, 없으면 **오늘과 동일**하게 별도 키가 된다 — 회귀 아님 |
+| **X-5** | 워크트리가 삭제됐는데 이벤트만 남음 | `read_tier1_snapshot` 이 `is_file()` 로 걸러 후보에서 자동 탈락. registry 는 매 사이클 재생성되고 서빙 실패는 404 로 접힌다 |
+| **X-6** | 워크트리 dashboard.html 이 DOM 계약 불일치 | 그 후보만 `None` + 경고 1건, 나머지 후보로 승자 결정. 후보가 전부 실패하면 티어 2 로 강등(오늘과 같은 동작) |
+| **X-7** | 한 카드의 세션 수가 늘어남(`coding-env` 이미 15) | `.sessions` 는 카드 안에서 내부 스크롤(`overflow-y:auto`)이고 상한이 없다. 카드 높이 340px 고정이라 **레이아웃은 깨지지 않는다**. 스크롤 없이 보이는 예산이 3줄인 것은 오늘과 같다 |
+| **X-8** | 워크트리 세션이 working 이라 레포 루트 카드가 **글로우**한다 | **의도된 동작**이다 — 그 레포에서 실제로 작업이 진행 중이다. `_project_state`(앞이 이긴다)·`_last_activity_at_ms`(max)가 자연히 흡수한다 |
+| **X-9** | 클라이언트 세션 숨김(done+무발췌, 12시간 초과 stale)이 서버 집계와 어긋남 | **오늘도 있는 어긋남**(결정 V1, 클라이언트 전용 필터)이 워크트리 세션 때문에 조금 더 자주 보일 수 있다. 서버로 올리지 않는다 — 별건 |
+
+---
+
+## 9. 부수 발견 — `commands/dashboard.md` 「자동 발행」 3-a
+
+`commands/dashboard.md` 는 허브 서버가 살아 있으면 대시보드 대신 허브 페이지를 열라고 지시하고,
+그 근거로 「허브에서 카드를 클릭하면 그 대시보드가 열린다」를 든다. **워크트리에서는 이 근거가 오늘
+거짓이다** — 클릭하면 레포 루트 파일이 열려 방금 만든 대시보드에 닿지 못한다(결정 WT8 과 같은 뿌리).
+
+**판정: 이번 범위에 넣되 `dashboard.md` 는 한 줄도 고치지 않는다.** 결정 WT8 이 registry 값을
+승자 파일로 바꾸는 순간 그 근거가 **다시 참이 되기 때문**이다. 별건으로 뺄 필요도, 문서를 고칠
+필요도 없다. 수동 확인 S8 의 마지막 항목이 이것을 검증한다.
+
+(예외: 레포 루트 파일이 워크트리 파일보다 새로운 순간에는 여전히 루트 파일이 열린다. 워크트리에서
+작업 중이라면 그 상태는 곧 뒤집히므로 실질 문제가 아니다 — P-2 로 관리.)
+
+---
+
+## 10. 리스크와 완화책
+
+| # | 리스크 | 완화 |
+|---|--------|------|
+| **P-1** | 접기가 **의도치 않은 경로를 합쳐** 카드가 통째로 사라지거나 엉뚱한 곳에 생긴다. `config.roots` 가 비어 있어 그룹 키가 **카드 생성의 유일한 입력**이라 파급이 크다 | 접기는 경로를 **짧게만** 만들고 마커가 없으면 항등이다. U-1~U-7 이 정의역을 못 박고, U-16·U-19·S7 이 「워크트리 없는 프로젝트는 완전 동일」을 단언한다. 배포 후 첫 수집에서 카드 목록을 눈으로 대조(S8 마지막 항목) |
+| **P-2** | **승자 요동** — 레포 루트 세션과 워크트리 세션이 둘 다 `/dashboard` 를 쓰면 mtime 승자가 번갈아 바뀌고, 열려 있는 패널의 내용이 예고 없이 다른 작업의 대시보드로 바뀐다(패널은 `location.pathname` 을 재fetch 한다) | 히스테리시스를 **넣지 않는다**(임의 상수의 근거가 없다 — 결정 WT6). 대신 **카드에 티어 1 제목이 렌더되므로 무엇으로 바뀌었는지는 화면에 드러난다.** 실제로 거슬리면 그때 히스테리시스나 승자 표식을 도입한다(재방문 트리거). **승인 요청 항목 3** |
+| **P-3** | 개인 `/dashboard off` 사용자에게 워크트리 대시보드가 **되살아난다** | 위험 범위가 「개인 off 사용자」로 한정됨을 실측으로 확인(팀 off 는 워크트리에 전파되므로 안전). 허브는 오늘도 이 스위치를 모른다 — 새 문제가 아니라 기존 간극의 확대다. `hub/README.md` 에 한 줄 고지. **승인 요청 항목 4** |
+| **P-4** | 「워크트리를 허브에서 숨기기」 손잡이 상실 | fold-first 의 구조적 귀결이다(결정 WT4). 요구를 낸 당사자가 정확히 반대를 요청했다. 되살리려면 `fold_worktrees: bool` 신설 — 지금은 YAGNI. **승인 요청 항목 2** |
+| **P-5** | 티어 1 읽기 횟수 증가(멤버 수만큼 `is_file()`+`read`, 수집 주기 5초) | 워크트리 없는 프로젝트는 멤버 1개로 **완전히 동일**하다. 증가분은 실제 워크트리 수(현재 1)에 비례하고 상한이 명확하다. **측정된 병목이 아니므로 캐시를 넣지 않는다** — 모듈 전역 캐시는 테스트가 같은 모듈 객체를 공유해 순서 의존 실패를 만든다 |
+| **P-6** | 상주 서버가 **옛 코드로 계속 돈다** → 「고쳤는데 화면이 그대로」로 오진 | S8 의 2단계(`install.sh --force` → `/hub server restart`)를 검증 절차에 못 박았다. 낡은 설치본에서 restart 하면 argparse 가 깨지므로 순서가 중요하다 |
+| **P-7** | 접기 실패가 **화면에 아무 신호도 안 남긴다**(`unresolved_dir_names` 는 렌더되지 않는다) | 단위 테스트가 유일한 안전망임을 인정하고, 그래서 U-1~U-21 이 순수 함수 이음매를 전부 덮는다(결정 WT12). 진단 출력은 만들지 않는다 |
+| **P-8** | 배포 직후 화면이 **즉시** 바뀐다(과거 2일치 워크트리 세션이 갑자기 합류하고 `snapshot_content_key` 가 바뀌어 `hub.html` 이 1회 재작성된다) | 정상 동작이다. S8 에 「어떤 카드가 어떻게 변하는지」 대조 항목을 넣었다 |
+
+---
+
+## 11. 구현 마일스톤
+
+| 단계 | 내용 | 완료 기준 |
+|------|------|-----------|
+| **M0** | 이 PRP 승인 | 「승인 요청 항목」 1~7 회신 |
+| **M1** (단계 1 — fold) | `hub_project.py` 상수 + `fold_worktree_path` + `group_paths_by_repo_root`, `hub_collect.py` 그룹 키·후보 조립 | U-1~U-7·U-11~U-13·U-21 통과, **기존 375건 전량 통과**. 여기서 커밋 경계 |
+| **M2** (단계 2 — 티어 1 출처) | `hub_parse.py` 필드, `hub_collect.py` `_read_tier1_for_root`, `hub_project.py` `select_tier1_source` + GN 좁히기, `hub_model.py` registry | U-8~U-10·U-14~U-20 통과 |
+| **M3** | `tests/run.sh` T25-111~114 + 뮤테이션 검증 5건 | `bash tests/run.sh` 통과, 뮤테이션 5건 전부 「기대한 테스트가 실패」 확인 |
+| **M4** | 문서 — `hub/README.md` 2곳 + 이관 표기 6곳 | grep 으로 표기 존재 확인 |
+| **M5** | 실환경 검증 | S8 체크리스트 5항목 |
+
+---
+
+## 12. 검토했으나 채택하지 않은 대안
+
+| 대안 | 기각 사유 |
+|------|-----------|
+| `ignore_globs` 기본값에서 워크트리 glob 제거 | config 가 통째 대체라 **요구를 낸 당사자에게 도달하지 못한다**. 게다가 접기에 실패한 워크트리가 **별도 카드로 나타나** 요구를 정면으로 위반한다(결정 WT4) |
+| `fold_worktrees: bool` config 필드 신설 | 요청되지 않은 설정 가능성. `HubConfig`·`_CONFIG_FIELD_TYPES`·README 표 동시 변경. 필요해지면 그때(P-4 재방문) |
+| git 서브프로세스로 소유 레포 판정 | 수집 루프가 5초 주기다. `hub_collect` 에 서브프로세스라는 새 실패 경로가 생기고, 순수 레이어에서 접기를 못 하게 된다(결정 WT3) |
+| `<worktree>/.git` 평문 파일 파싱 | 정확도가 조금 오르지만 접기가 I/O 레이어로 내려가 단위 테스트에 디렉토리 트리 빌더가 필요해진다. 관례 밖 워크트리는 **오늘도 별도 카드**라 회귀가 아니다 |
+| 티어 3 인코딩명도 접기 | 화면 기여 0인데 `:284` 대입과 `:379` 컴프리헨션 두 곳을 max 병합으로 바꿔야 하고 기존 테스트 1건을 뒤집는다(결정 WT5) |
+| `ProjectView.tier1_source_path` 필드 | tier1 과 동기화돼야 하는 값을 **네 번째 병렬 dict** 로 나른다. `Tier1Snapshot` 에 넣으면 `file_mtime_ms` 선례와 정확히 같은 모양이 된다(결정 WT7) |
+| 티어 1 후보를 N개 노출(카드에 여러 대시보드) | `ProjectView.tier1` 단수 → 라우트 정규식(키 1 : 대시보드 1) → 패널 UI 재설계로 번진다. `dashboard-ownership-guard.md` R4 안 1 의 전면 도입이며 이번 범위를 크게 넘는다 |
+| 승자 결정에 히스테리시스(`stale_after_minutes` 재사용 등) | 임의 상수의 근거가 될 측정치가 없다. 요동이 실제로 관측되면 그때(P-2) |
+| `SessionFacts.cwd` 를 마지막 이벤트 cwd 로 | flip 을 반대 방향으로 뒤집을 뿐이다(결정 WT14) |
+| 세션 줄에 워크트리 라벨 표시 | `SessionView` 신규 필드 → `#dzh-data` 계약 → 템플릿 → T25 검사로 범위가 두 배. 카드 제목(티어 1 `#dz-title`)이 이미 식별 수단이다(결정 WT11) |
+| 진단용 `collect --json` 확장 | `#dzh-data` 로 이미 기계 검증이 가능하다. `projects` 개수는 fold 검증에 **방향이 케이스마다 다른** 애매한 신호다(결정 WT12) |
+| fold 로직을 새 모듈(`hub_worktree.py`)로 분리 | 25줄을 위해 「15개 파일」 리터럴 4곳과 배포 게이트를 흔든다(결정 WT13) |
+
+---
+
+## 13. 승인 요청 항목 (한눈에 보기)
+
+| # | 쟁점 | 권고 | 다른 선택이 가능한가 |
+|---|------|------|---------------------|
+| 1 | **범위** — fold 만인가, 티어 1 출처 확장까지인가 | **둘 다**(단계 1 → 2) | ○ 단계 2 를 잘라낼 수 있다. 그러면 **결함 A(어제 100% + 「이전 작업」 상시 점등)는 그대로 남는다** |
+| 2 | **`ignore_globs` 처리** | 기본값·사용자 config **무변경**, fold 를 ignore **앞에** | ○ 기본값에서 제거(단 이 사용자에게 안 켜짐) / 별도 스위치 신설 |
+| 3 | **티어 1 승자 규칙** | **mtime 최신, 동률은 레포 루트** | ○ 레포 루트 고정(결함 A 유지) / 히스테리시스 도입 |
+| 4 | **`dashboard_enabled` 충돌** | **무시 + 문서화**(위험은 개인 off 사용자 한정) | ○ 워크트리 파일을 티어 1 후보에서 제외(= 항목 1 의 단계 2 포기와 같음) / 허브가 스위치를 읽음(프로젝트 로컬 파일 계약 +1) |
+| 5 | **GN 세대 판정** | **티어 1 출처와 같은 cwd 의 세션만** — GN2 개정 | ○ 워크트리 세션 통째 제외 / 판정 포기 |
+| 6 | **티어 3 접기** | **하지 않는다**(화면 기여 0, 기존 테스트 2건 보존) | ○ 접는다(그러면 `:284`·`:379` max 병합 + 테스트 1건 반전) |
+| 7 | **화면 표시** | **변경 0** — 워크트리 라벨을 만들지 않는다 | ○ `SessionView` 에 라벨 필드 추가(범위 약 2배) |
+
+### 항목별 상세
+
+**항목 1 — 범위.** 단계 1 만 하면 「모레 자정에 세션이 사라지는 일」은 막지만, 사용자가 **지금
+화면에서 보고 있는 잘못**(어제 작업의 100%, 「이전 작업」 라벨)은 하나도 안 고쳐진다. 두 단계가
+`group_paths_by_repo_root` 의 멤버 목록을 공유하므로 함께 만드는 비용이 따로 만드는 비용보다 싸다.
+
+**항목 2 — `ignore_globs`.** 이 선택이 **「이 사용자에게 기능이 켜지는가」를 직접 결정한다.**
+사용자의 실제 `~/.claude/hub/config.json` 이 기본값 3개를 복제해 두었고, config 는 병합이 아니라
+통째 대체다. 기본값만 고치는 안은 켜지지 않는다.
+
+**항목 3 — 승자 규칙.** mtime 최신을 고르면 **지금 이 순간 워크트리 파일이 이긴다**(E4: 워크트리
+11:06 vs 루트 어제 17:54). 즉 요구가 곧바로 만족된다. 대가는 P-2(승자 요동)이고, 그것이 실제로
+거슬리는지는 써 봐야 안다.
+
+**항목 4 — `dashboard_enabled`.** 세 안의 **비용 등급이 크게 다르다**: 무시 = 코드 0 / 후보 제외 =
+결함 A 포기 / 허브가 읽음 = **허브 역사상 두 번째 프로젝트 로컬 파일 계약** + T23-7 확장. 지금 이
+레포에서는 스위치가 켜져 있어(필드 자체가 없음) **관측된 손상이 아니라 구조적 추론**이다.
+
+**항목 5 — GN 판정.** 권고안은 축소가 아니라 **정정**이다(`/dashboard` 가 cwd 상대경로에만 쓰므로,
+파일을 갱신하는 주체는 그 cwd 의 세션뿐이다). 비워크트리 프로젝트에서는 완전한 무동작이라 기존 GN 표
+8행이 그대로 유효하다.
+
+**항목 6 — 티어 3.** 접지 않으면 기존 테스트 2건(M15·티어 3 인코딩명 제외)을 **하나도 뒤집지
+않는다**. 접으면 조용히 덮어쓰는 두 지점을 max 병합으로 고쳐야 하는데, 그 대가로 얻는 것은 화면에
+드러나지 않는 값 하나다.
+
+**항목 7 — 화면 표시.** 「어느 워크트리인지」는 카드에 이미 렌더되는 **티어 1 대시보드 제목**으로
+구분된다(E4 의 두 제목은 완전히 다르다). 라벨 필드를 만들면 `SessionView` → `#dzh-data` 계약 →
+템플릿 → T25 검사까지 파급된다.
