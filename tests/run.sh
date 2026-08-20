@@ -2257,11 +2257,11 @@ test_hub_unit_tests() {
   ((passed_tests++))
 }
 
-# T25: 허브 문서·상수 정합성 (하위 검증 T25-1~T25-119)
+# T25: 허브 문서·상수 정합성 (하위 검증 T25-1~T25-120)
 test_hub_docs_and_constants() {
   group_failures=()   # 앞 그룹이 조기 return 했을 때의 잔여물 제거
   local test_name="T25"
-  local test_desc="허브 문서·상수 정합성 (T25-1~T25-119)"
+  local test_desc="허브 문서·상수 정합성 (T25-1~T25-120)"
   log_test_name "$test_name" "$test_desc"
 
   local hub_settings_file="$REPO_ROOT/hub/bin/hub_settings.py"
@@ -4199,31 +4199,88 @@ PYEOF
     note_failure "T25-118: test_hub_collect.py 에 hub_collect.collect_snapshot( 호출이 없음(결정 WT20 이음매 테스트 삭제)"
   fi
 
-  # T25-119: 허브 폴링 게이트 회귀 방지 — 작업중 세션이 없으면 자동 폴링을 건너뛴다는
-  # 사용자 요청이 조용히 되돌아가 hasWorkingProject()가 사라지거나 setInterval 이 게이트
-  # 없이 poll 을 직접 부르는 형태로 후퇴하는 것을 막는다. README 쪽 설명 누락도 함께 본다.
-  if ! grep -qF 'function hasWorkingProject()' "$hub_template_file"; then
-    note_failure "T25-119: hub_template.html 에 function hasWorkingProject() 가 없음(폴링 게이트 삭제)"
+  # T25-119(개정 — 폴링 게이트를 "작업중 세션 유무"에서 "탭 가시성"으로 교체, 사용자 결정):
+  # 허브를 보조 화면에 띄워두고 포커스 없이 작업하는 패턴에서 작업중 세션이 0개인 동안
+  # 새로 시작된 세션이 자동으로 안 잡히던 문제(실사용 보고)를 고치며 hasWorkingProject()
+  # 게이트를 폐기했다. 이 검사는 옛 게이트가 되살아나거나 새 게이트(탭 가시성)가 조용히
+  # 사라지는 것을 막는다. README 쪽 설명 누락·회귀도 함께 본다.
+  if grep -qF 'hasWorkingProject' "$hub_template_file"; then
+    note_failure "T25-119: hub_template.html 에 폐기된 hasWorkingProject 흔적이 남아 있음(옛 게이트 회귀)"
   fi
-  if ! grep -qE 'setInterval\(function\(\)\{ if\(hasWorkingProject\(\)\) poll\(\); \}' "$hub_template_file"; then
-    note_failure "T25-119: hub_template.html 의 setInterval 이 hasWorkingProject() 게이트로 poll 을 감싸지 않음"
+  if ! grep -qF "setInterval(function(){ if(document.visibilityState==='visible') poll(); }" "$hub_template_file"; then
+    note_failure "T25-119: hub_template.html 의 setInterval 이 document.visibilityState==='visible' 게이트로 poll 을 감싸지 않음"
   fi
-  if ! grep -qF '카드가 하나도 없으면 이 1분 타이머가 폴링 자체를 건너뛴다' "$hub_readme_file"; then
-    note_failure "T25-119: hub/README.md 에 게이트 설명 문구가 없음(자동 갱신 건너뜀 설명 유실) — '작업중' 단독 검사는 다른 절에도 있는 단어라 회귀를 못 잡는다"
+  if ! grep -qF '탭이 보이지 않는 동안은 이 1분 타이머가 폴링 자체를 건너뛴다' "$hub_readme_file"; then
+    note_failure "T25-119: hub/README.md 에 가시성 기준 게이트 설명 문구가 없음"
+  fi
+  if grep -qF '카드가 하나도 없으면 이 1분 타이머가 폴링 자체를 건너뛴다' "$hub_readme_file"; then
+    note_failure "T25-119: hub/README.md 에 폐기된 '작업중 카드' 게이트 문구가 남아 있음(문서 회귀)"
   fi
 
-  # T25-119(검수 지적, 2판): renderConnectionStatus() 의 대기 분기("자동 갱신 대기")는
-  # 게이트가 닫힌 동안 아무도 fetch 하지 않아 서버 생존을 아무도 관측하지 못하는 상태다 —
-  # 그 줄에서 "서버 연결됨"을 단정하면 검증되지 않은 사실을 화면에 그리게 된다(HIGH 지적).
-  # 함수 본문만 추출해 검사한다 — 파일 전역이면 정상 분기(작업중 있음)의 정당한
-  # "서버 연결됨" 문구 때문에 항상 통과해 버린다.
+  # T25-119(2판, 결정 개정): renderConnectionStatus() 의 "자동 갱신 대기" 분기는 옛 "작업중
+  # 세션 유무" 게이트에서만 의미가 있었다(검수 HIGH 지적으로 도입된 분기 — 게이트가 닫힌
+  # 동안 서버 생존을 관측할 수 없어 "서버 연결됨"을 단정하지 못하게 막았다). 탭 가시성
+  # 게이트에서는 이 분기가 도달 불가다 — 문구는 새로고침 버튼의 data-tooltip 이라 hover·
+  # focus 로만 보이는데, 그건 탭이 visible 일 때만 가능하고 visible 이면 게이트가 항상
+  # 열려 있다. 되살아나지 않는지 문구 부재로 확인한다. 함수 본문만 추출한다 — 앵커가
+  # 깨지면 검사가 조용히 무력화되므로 추출 실패 자체도 본다.
   local connection_status_body
   connection_status_body=$(sed -n '/function renderConnectionStatus(){/,/^  }$/p' "$hub_template_file")
   if [[ -z "$connection_status_body" ]]; then
     note_failure "T25-119: renderConnectionStatus() 범위 추출 실패 — 앵커가 깨졌다"
   fi
-  if grep '자동 갱신 대기' <<< "$connection_status_body" | grep -qF '서버 연결됨'; then
-    note_failure "T25-119: '자동 갱신 대기' 문구와 같은 줄에 '서버 연결됨'이 있음 — 게이트가 닫힌 동안 연결 상태를 단정함(HIGH 회귀)"
+  if grep -qF '자동 갱신 대기' <<< "$connection_status_body"; then
+    note_failure "T25-119: renderConnectionStatus() 에 도달 불가였던 '자동 갱신 대기' 분기가 되살아나 있음"
+  fi
+
+  # T25-120(변경 B — 옛 자동주입 발췌 방어 필터): 훅 필터 도입(a50b6bd) 전에 저장된 옛
+  # 기록은 닫는 태그 없이 잘려 훅 정규식(AUTO_INJECTED_PROMPT_BLOCK, .*?</\1>)으로도
+  # 사후에 걸러지지 않는다 — 표시 단계에 방어 필터(displayableExcerpt)를 신설했다. 이
+  # 검사는 그 필터가 사라지거나, renderSession·shouldRenderSession 이 session.task_excerpt
+  # 를 다시 직접 보는 형태로 어긋나는 것(visibleAgentRuns 의 GOTCHA 3 과 같은 종류의
+  # 함정)을 막는다.
+  if ! grep -qF 'function displayableExcerpt(taskExcerpt){' "$hub_template_file"; then
+    note_failure "T25-120: hub_template.html 에 function displayableExcerpt(taskExcerpt) 가 없음"
+  fi
+  # T25-120(검수 지적 MEDIUM, 재검수 — 단방향 검사 교체): 리터럴 하드코딩으로 "JS 쪽 패턴이
+  # 남아 있는가"만 보면 훅 쪽 태그 집합이 미래에 바뀌고(예: hub_hook.py 가 <cli_notice> 를
+  # 추가) JS 가 못 따라간 경우를 못 잡는다 — displayableExcerpt 는 조용히 낡은 채로 남고
+  # 테스트는 계속 통과한다. 두 파일에서 태그 alternation 을 각각 추출해 방향 무관하게
+  # 비교한다. 이 테스트에 태그 값을 또 하드코딩하면 같은 단방향 문제가 tests/run.sh 로
+  # 옮겨갈 뿐이므로, 어느 쪽 값도 리터럴로 적지 않는다. 추출은 각 파일의 선언 줄에
+  # 앵커링한다(파일 전체를 훑으면 무관한 `<(...)>` 텍스트를 잘못 집을 수 있다) — 그
+  # 선언 줄 자체를 못 찾으면 앵커가 깨진 것이므로 조용히 통과하지 않고 실패로 본다.
+  local hook_declaration_line template_declaration_line
+  local hook_tag_alternation template_tag_alternation
+  hook_declaration_line=$(grep -F 'AUTO_INJECTED_PROMPT_BLOCK = re.compile' "$hub_hook_file")
+  template_declaration_line=$(grep -F 'var AUTO_INJECTED_TAG_START_PATTERN = ' "$hub_template_file")
+  if [[ -z "$hook_declaration_line" ]]; then
+    note_failure "T25-120: hub_hook.py 에서 AUTO_INJECTED_PROMPT_BLOCK 선언을 찾지 못함 — 앵커가 깨졌다"
+  fi
+  if [[ -z "$template_declaration_line" ]]; then
+    note_failure "T25-120: hub_template.html 에서 AUTO_INJECTED_TAG_START_PATTERN 선언을 찾지 못함 — 앵커가 깨졌다"
+  fi
+  hook_tag_alternation=$(grep -oE '<\([^()]*\)>' <<< "$hook_declaration_line" | head -1 | sed -E 's/^<\(//; s/\)>$//')
+  template_tag_alternation=$(grep -oE '<\([^()]*\)>' <<< "$template_declaration_line" | head -1 | sed -E 's/^<\(//; s/\)>$//')
+  if [[ -z "$hook_tag_alternation" || -z "$template_tag_alternation" ]]; then
+    note_failure "T25-120: 태그 alternation 추출 실패 — hook='$hook_tag_alternation' template='$template_tag_alternation'(선언 형태가 바뀌어 앵커가 깨졌을 수 있다)"
+  elif [[ "$hook_tag_alternation" != "$template_tag_alternation" ]]; then
+    note_failure "T25-120: 태그 집합이 어긋남 — hub_hook.py의 AUTO_INJECTED_PROMPT_BLOCK='$hook_tag_alternation' vs hub_template.html의 AUTO_INJECTED_TAG_START_PATTERN='$template_tag_alternation'"
+  fi
+  if ! grep -qF 'renderSessionExcerpt(displayableExcerpt(session.task_excerpt))' "$hub_template_file"; then
+    note_failure "T25-120: renderSession() 이 displayableExcerpt 를 경유하지 않음"
+  fi
+
+  local should_render_session_body
+  should_render_session_body=$(sed -n '/function shouldRenderSession(session){/,/^  }$/p' "$hub_template_file")
+  if [[ -z "$should_render_session_body" ]]; then
+    note_failure "T25-120: shouldRenderSession() 범위 추출 실패 — 앵커가 깨졌다"
+  fi
+  if ! grep -qF '!displayableExcerpt(session.task_excerpt)' <<< "$should_render_session_body"; then
+    note_failure "T25-120: shouldRenderSession() 이 displayableExcerpt 를 경유하지 않음"
+  fi
+  if grep -qF '!session.task_excerpt' <<< "$should_render_session_body"; then
+    note_failure "T25-120: shouldRenderSession() 이 session.task_excerpt 를 직접 봄(displayableExcerpt 를 안 거침 — 옛 조건 회귀)"
   fi
 
   finish_group "$test_name"
