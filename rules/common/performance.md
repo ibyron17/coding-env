@@ -2,20 +2,41 @@
 
 ## Model Selection Strategy
 
-**Haiku** (90% of Sonnet capability, 3x cost savings):
-- Lightweight agents with frequent invocation
-- Pair programming and code generation
-- Worker agents in multi-agent systems
+> Guidance here follows [Choosing a Claude model and effort level](https://claude.com/blog/claude-model-and-effort-level-in-claude-code);
+> alias and effort-support specifics come from the [model configuration docs](https://code.claude.com/docs/en/model-config).
+> Families and their relative strengths shift between releases — the shape of the decision is the durable part, not the names.
 
-**Sonnet** (Best coding model):
-- Main development work
-- Orchestrating multi-agent workflows
-- Complex coding tasks
+Model choice and effort level (see below) are two independent dials. **Model is the capability axis;
+effort is the thoroughness axis.** When Claude gets something wrong, diagnose which one was missing
+before reaching for either:
 
-**Opus** (Deepest reasoning):
-- Complex architectural decisions
-- Maximum reasoning requirements
-- Research and analysis tasks
+- **It lacked knowledge** — a subtle bug, an unfamiliar domain, an architecture decision → pick a **larger model**
+- **It lacked diligence** — skipped a file, did not run the tests, did not double-check its work → raise the **effort level** on the same model
+
+Pick a smaller model when the work is routine: edits you can describe precisely, mechanical changes,
+questions about code already in context. Pick a larger model when the problem is genuinely hard.
+Roughly, Sonnet is a strong generalist and Opus is the expert. Fable is the specialist: on long,
+multi-step work it pulls furthest ahead, finishing jobs that Opus and Sonnet do not reach **at any
+effort level** — the sharpest illustration that raising effort cannot substitute for the right model.
+
+Treat both dials as a standing preference for the kind of work you do, not a decision to relitigate
+per task. For effort in particular, the published guidance is to use the model's default level for
+most tasks and deviate only when you have a reason.
+
+Two things to know before planning around a model:
+
+- **Effort is not available on every model.** The **Effort level** section below lists which models
+  take which levels. Haiku is absent from Anthropic's support table entirely — **it has no effort
+  levels at all** — so on Haiku the model is the only dial you have, and none of the cost tuning
+  below applies.
+- **Prefer family aliases** (`opus`, `sonnet`, `haiku`, `fable`) over pinned versions in agent
+  frontmatter and settings: an alias points to the recommended version for your provider and updates
+  over time, so it does not go stale the way a pinned name does. The caveat is that the recommended
+  version can lag the newest release — name the full model when you specifically need a newer one.
+
+Per-stage model assignment for a project's own workflow — which agent runs on which model — belongs
+in that project's `CLAUDE.md`, not here. Where `CLAUDE.md` defines it, that is the single source of
+truth; this section only covers how to reason about the choice.
 
 ## Context Window Management
 
