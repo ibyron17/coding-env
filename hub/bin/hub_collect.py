@@ -13,6 +13,7 @@ import sys
 import tempfile
 import time
 from pathlib import Path
+from typing import Sequence
 
 import hub_model
 import hub_parse
@@ -199,12 +200,19 @@ def read_recent_events(now_ms: int) -> tuple[list[hub_session.HookEvent], tuple[
 def _group_sessions_by_project(
     events: list[hub_session.HookEvent], ignore_globs: tuple[str, ...]
 ) -> dict[str, tuple[hub_session.SessionFacts, ...]]:
-    """이벤트를 세션 사실로 접고 cwd 별로 묶는다. 무시 패턴에 해당하는 cwd 는 제외한다."""
+    """이벤트를 세션 사실로 접고 소유 레포 루트(워크트리는 fold)별로 묶는다.
+
+    fold 가 ignore 보다 먼저다(결정 WT4·WT5) — 접힌 루트에 대해서만 무시 패턴을 판정해야
+    워크트리 경로가 `ignore_globs` 기본값(`**/.claude/worktrees/**`)에 걸려 접힌 세션이
+    통째로 사라지는 사고를 막는다. `SessionFacts.cwd` 자신은 재작성하지 않는다(결정 WT14) —
+    원본 cwd 는 GN9 의 티어 1 출처 대조에 그대로 필요하다.
+    """
     grouped: dict[str, list[hub_session.SessionFacts]] = {}
     for facts in hub_session.build_session_facts(events).values():
-        if hub_project.should_ignore_cwd(facts.cwd, ignore_globs):
+        folded_cwd = hub_project.fold_worktree_path(facts.cwd)
+        if hub_project.should_ignore_cwd(folded_cwd, ignore_globs):
             continue
-        grouped.setdefault(facts.cwd, []).append(facts)
+        grouped.setdefault(folded_cwd, []).append(facts)
     return {path: tuple(sessions) for path, sessions in grouped.items()}
 
 
@@ -237,7 +245,50 @@ def read_tier1_snapshot(project_path: str) -> tuple[hub_parse.Tier1Snapshot | No
     snapshot = hub_parse.parse_dashboard_html(text)
     if snapshot is None:
         return None, f"{project_path}: dashboard.html DOM 계약 불일치 — 티어 2로 강등"
-    return dataclasses.replace(snapshot, file_mtime_ms=mtime_ms), None
+    return dataclasses.replace(snapshot, file_mtime_ms=mtime_ms, source_path=project_path), None
+
+
+def _read_tier1_for_root(
+    member_paths: Sequence[str],
+) -> tuple[hub_parse.Tier1Snapshot | None, tuple[str, ...]]:
+    """레포 루트와 그 워크트리 멤버 전부의 dashboard.html 을 읽어 mtime 최신 승자를 고른다
+    (결정 WT6). 멤버 첫 원소가 레포 루트다(`group_paths_by_repo_root` 의 순서 계약).
+
+    ignore 는 루트에만 적용됐으므로(결정 WT5) 멤버 각각은 여기서 무조건 읽는다 — 워크트리가
+    없는 프로젝트는 `member_paths == (root,)` 라 오늘과 완전히 동일하게 동작한다(S7).
+
+    (검수 1회차 m2) 이전에는 별도 `root: str` 인자를 받았으나 본문 어디에서도 쓰이지 않았다
+    — 이 함수는 루트를 특별 취급하지 않고 멤버 전부를 동등하게 읽으므로 인자를 제거했다.
+    """
+    candidates: list[hub_parse.Tier1Snapshot] = []
+    warnings: list[str] = []
+    for member_path in member_paths:
+        snapshot, warning = read_tier1_snapshot(member_path)
+        if snapshot is not None:
+            candidates.append(snapshot)
+        if warning is not None:
+            warnings.append(warning)
+    return hub_project.select_tier1_source(candidates), tuple(warnings)
+
+
+def _collect_tier1_snapshots(
+    tier1_candidates_by_root: dict[str, tuple[str, ...]]
+) -> tuple[dict[str, hub_parse.Tier1Snapshot], tuple[str, ...]]:
+    """후보 루트마다 그 멤버 전부를 읽어 승자 스냅샷과 경고를 모은다.
+
+    각 루트의 멤버 튜플을 그대로 `_read_tier1_for_root` 에 넘겨야 한다 — 루트만 넘기면
+    (`(root,)`) 워크트리 멤버가 조용히 빠져 결함 A(레포 루트 파일만 읽힘)가 되살아난다
+    (검수 1회차 M1 — `tests/hub/test_hub_collect.py` 의 `CollectTier1SnapshotsTest` 가 이
+    계약을 직접 검증한다).
+    """
+    tier1_by_path: dict[str, hub_parse.Tier1Snapshot] = {}
+    warnings: list[str] = []
+    for root, member_paths in tier1_candidates_by_root.items():
+        snapshot, tier1_warnings = _read_tier1_for_root(member_paths)
+        if snapshot is not None:
+            tier1_by_path[root] = snapshot
+        warnings.extend(tier1_warnings)
+    return tier1_by_path, tuple(warnings)
 
 
 # ---- 티어 3: ~/.claude/projects 의 mtime ----
@@ -353,31 +404,26 @@ def collect_snapshot(now_ms: int) -> hub_model.HubSnapshot:
     prune_old_event_files(now_ms, config.event_retention_days)
 
     events, event_read_warnings = read_recent_events(now_ms)
-    sessions_by_path = _group_sessions_by_project(events, config.ignore_globs)
+    sessions_by_path = _group_sessions_by_project(events, config.ignore_globs)   # 키가 이미 접힌 루트
     scanned_paths = scan_roots_for_projects(config.roots, config.scan_depth)
 
-    candidate_paths = {
-        path
-        for path in set(sessions_by_path) | set(scanned_paths)
-        if not hub_project.should_ignore_cwd(path, config.ignore_globs)
-    }
-
-    tier1_by_path: dict[str, hub_parse.Tier1Snapshot] = {}
-    warnings: list[str] = [*config_warnings, *event_read_warnings]
-    for path in candidate_paths:
-        snapshot, warning = read_tier1_snapshot(path)
-        if snapshot is not None:
-            tier1_by_path[path] = snapshot
-        if warning is not None:
-            warnings.append(warning)
+    # 티어 1 후보 조립(관측 경로 → 루트별 멤버 → ignore 필터)은 hub_project.py(★순수)로
+    # 옮겨졌다(검수 1회차 M1) — 여기 남겨 두면 이 조립을 실제로 실행하는 테스트가 하나도
+    # 없어(전부 mock.patch 로 우회) 뮤테이션이 검출되지 않았다.
+    tier1_candidates_by_root = hub_project.plan_tier1_candidates(
+        sessions_by_path, scanned_paths, config.ignore_globs
+    )
+    tier1_by_path, tier1_read_warnings = _collect_tier1_snapshots(tier1_candidates_by_root)
 
     tier3_by_encoded_name, tier3_warnings = _tier3_activity_by_encoded_name(config.ignore_globs)
-    warnings.extend(tier3_warnings)
     resolved, unresolved = hub_project.resolve_project_dirs(
-        list(tier3_by_encoded_name), list(candidate_paths)
+        list(tier3_by_encoded_name), list(tier1_candidates_by_root)
     )
     tier3_by_path = {resolved[name]: mtime for name, mtime in tier3_by_encoded_name.items() if name in resolved}
 
+    warnings: list[str] = [
+        *config_warnings, *event_read_warnings, *tier1_read_warnings, *tier3_warnings,
+    ]
     stale_after_ms = config.stale_after_minutes * 60 * 1000
     projects = hub_project.compose_project_views(
         tier1_by_path, sessions_by_path, tier3_by_path, now_ms, stale_after_ms

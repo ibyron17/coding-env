@@ -16,6 +16,10 @@ StepState = Literal["done", "active", "wait"]
 # I/O 레이어(hub_collect.py)가 stat 으로 얻은 실제 mtime 을 dataclasses.replace 로 덮어쓴다.
 UNSET_FILE_MTIME_MS = 0
 
+# source_path 도 file_mtime_ms 와 같은 계열이다 — 이 스냅샷을 읽어 온 dashboard.html 의
+# 소유 디렉토리는 I/O 레이어(hub_collect.py)만 안다(결정 WT7, docs/prps/hub-worktree-fold.md).
+UNSET_SOURCE_PATH = ""
+
 
 @dataclass(frozen=True)
 class StepView:
@@ -43,6 +47,7 @@ class Tier1Snapshot:
     impl_total: int
     updated_text: str
     file_mtime_ms: int
+    source_path: str = UNSET_SOURCE_PATH   # 이 스냅샷을 읽어 온 dashboard.html 의 **소유 디렉토리**
 
 
 _TITLE_PATTERN = re.compile(r'<h1 id="dz-title">(?P<text>.*?)</h1>')

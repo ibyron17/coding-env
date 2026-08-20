@@ -2249,11 +2249,11 @@ test_hub_unit_tests() {
   ((passed_tests++))
 }
 
-# T25: 허브 문서·상수 정합성 (하위 검증 T25-1~T25-110)
+# T25: 허브 문서·상수 정합성 (하위 검증 T25-1~T25-114)
 test_hub_docs_and_constants() {
   group_failures=()   # 앞 그룹이 조기 return 했을 때의 잔여물 제거
   local test_name="T25"
-  local test_desc="허브 문서·상수 정합성 (T25-1~T25-110)"
+  local test_desc="허브 문서·상수 정합성 (T25-1~T25-114)"
   log_test_name "$test_name" "$test_desc"
 
   local hub_settings_file="$REPO_ROOT/hub/bin/hub_settings.py"
@@ -4102,6 +4102,47 @@ PYEOF
   # 위 부등식은 색 토큰만 본다 — 규칙이 실제로 두 채널을 쓰는지는 따로 고정해야 한다.
   if ! grep -qF -- '.card.card-open{background:var(--accent-soft);border-color:var(--accent)}' "$hub_template_file"; then
     note_failure "T25-110: .card.card-open 이 면색+테두리 2채널을 함께 쓰지 않음"
+  fi
+
+  # T25-111(결정 WT3, docs/prps/hub-worktree-fold.md): hub_project.py 에 워크트리 경로 마커
+  # 상수가 리터럴로 있다. 마커 문자열이 조용히 바뀌면 아무 경로도 접히지 않는다.
+  # 독립 서브체크라 note_failure 를 쓴다(검수 1회차 M2) — record_failure + return 1 이면
+  # 이 검사가 무관한 회귀와 동시에 걸렸을 때 그 회귀가 요약에서 소실된다(8680112 의 회귀).
+  if ! grep -qF 'WORKTREE_PATH_MARKER = "/.claude/worktrees/"' "$hub_project_file"; then
+    note_failure "T25-111: hub_project.py 에 WORKTREE_PATH_MARKER 리터럴이 없음"
+  fi
+
+  # T25-112(결정 WT4·WT5, T25-87 과 같은 줄번호 비교 방식): hub_collect.py 에서
+  # fold_worktree_path 또는 group_paths_by_repo_root 호출이 should_ignore_cwd 호출보다
+  # 앞 줄에 있다 — fold-first 순서가 뒤집히면 워크트리 경로가 ignore_globs 기본값
+  # (`**/.claude/worktrees/**`)에 걸려 워크트리 세션이 통째로 사라진다.
+  # `head -1` 은 "파일 전체의 첫 호출"을 비교한다. should_ignore_cwd 호출 자체는 2곳이지만
+  # (`_group_sessions_by_project` 와 `_tier3_activity_by_encoded_name`), fold 와 **함께** 쓰이는
+  # 지점은 전자 하나뿐이고 파일에서도 먼저 나오므로 `head -1` 이 그 지점을 집는다 — 따라서 이
+  # 비교는 곧 그 함수 안의 실제 순서다(재검수 2회차 정정: 이전 주석은 "남은 호출 지점이 하나뿐"
+  # 이라 적었으나 그것은 사실이 아니었다. 결론은 같고 근거만 틀렸다).
+  # 잔여 한계: `_group_sessions_by_project` 에서 ignore 호출만 사라지면 first_ignore 가 티어 3
+  # 쪽으로 밀려 이 검사가 조용히 통과한다. 그 회귀는 단위 테스트 U-13 이 잡는다.
+  local first_fold_call_line first_ignore_call_line
+  first_fold_call_line=$(grep -nE 'hub_project\.(fold_worktree_path|group_paths_by_repo_root)\(' "$hub_collect_file" | head -1 | cut -d: -f1)
+  first_ignore_call_line=$(grep -n 'hub_project\.should_ignore_cwd(' "$hub_collect_file" | head -1 | cut -d: -f1)
+  if [[ -z "$first_fold_call_line" || -z "$first_ignore_call_line" \
+      || "$first_fold_call_line" -ge "$first_ignore_call_line" ]]; then
+    note_failure "T25-112: hub_collect.py 에서 fold 호출이 should_ignore_cwd 보다 먼저 오지 않음(결정 WT4·WT5)"
+  fi
+
+  # T25-113(결정 WT8 되돌림 방지): hub_model.py 에 옛 조립(project.path 를 그대로 재조립하는
+  # 식)이 남아 있으면 안 된다 — 되돌아가면 카드에 보이는 진행률과 클릭해서 열리는 파일이
+  # 서로 다른 파일이 되는 조용한 불일치가 부활한다.
+  if grep -qF 'project.path + "/" + PROJECT_DASHBOARD_RELATIVE_PATH' "$hub_model_file"; then
+    note_failure "T25-113: hub_model.py 에 옛 조립(project.path 재조립)이 남아 있음(결정 WT8 되돌림)"
+  fi
+
+  # T25-114(T25-10 이 남긴 구멍을 메움, 결정 WT3 주의사항): hub_project.py 에 subprocess
+  # 사용 흔적이 없다. T25-10 의 grep(open(/Path(/os.) 은 subprocess.run( 을 통과시킨다(실측) —
+  # ★순수 계약의 진짜 경계는 docstring 이지 그 grep 이 아니다.
+  if grep -qE 'subprocess' "$hub_project_file"; then
+    note_failure "T25-114: hub_project.py 에 subprocess 사용 흔적이 있음(★순수 계약 위반)"
   fi
 
   finish_group "$test_name"

@@ -587,6 +587,10 @@ def build_dashboard_registry(snapshot: HubSnapshot) -> dict[str, str]:
 
 ### 결정 N3 — 핸들러는 **요청 문자열로 경로를 만들지 않는다**
 
+> **재진술(2026-08-20)** — registry 의 **값**이 `project.path` 재조립에서 `tier1.source_path` 로
+> 바뀌었다(결정 WT8, hub-worktree-fold.md). 값이 여전히 collect 가 실제로 발견·`is_file()` 확인한
+> 경로에서만 나오므로 N3 의 불변식은 그대로다. **키**는 변함없이 `sha256(project.path)` 다.
+
 ```python
 ALLOWED_REQUEST_PATHS = ("/", "/hub.html")      # ← 그대로 유지(T25-15)
 PROJECT_DASHBOARD_PATH_PATTERN = re.compile(r"^/project/([0-9a-f]{16})/dashboard\.html$")

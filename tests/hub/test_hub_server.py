@@ -19,6 +19,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "hub", "b
 
 import hub_collect  # noqa: E402
 import hub_model  # noqa: E402
+import hub_parse  # noqa: E402
 import hub_project  # noqa: E402
 import hub_server  # noqa: E402
 import hub_usage  # noqa: E402
@@ -261,9 +262,14 @@ class CollectLoopDashboardRegistryWiringTest(unittest.TestCase):
         return httpd
 
     def test_successful_cycle_fills_dashboard_paths_by_key(self) -> None:
+        tier1 = hub_parse.Tier1Snapshot(
+            title="t", subtitle="s", completed=1, total=2, percent=50, steps=(),
+            matrix_done=None, impl_done=0, impl_total=0, updated_text="-",
+            file_mtime_ms=1, source_path="/repo",
+        )
         tier1_project = hub_project.ProjectView(
             display_name="repo", path="/repo", tier=1, state="idle",
-            last_activity_at_ms=1, sessions=(), tier1=None, note=None,
+            last_activity_at_ms=1, sessions=(), tier1=tier1, note=None,
         )
         snapshot = hub_model.HubSnapshot(
             collected_at_ms=1, projects=(tier1_project,), unresolved_dir_names=(), warnings=(),

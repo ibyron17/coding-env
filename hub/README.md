@@ -337,7 +337,7 @@ hub/install.sh --force      # 1. 설치본 갱신
 
 | 티어 | 배지 문구 | 출처 | 얻는 것 | 없으면 |
 |------|----------|------|--------|-------|
-| 1 | `대시보드 추적` | `<프로젝트>/.claude/dashboard.html` | 제목·단계별 상태·진행률 | 티어 2로 강등 |
+| 1 | `대시보드 추적` | `<프로젝트 또는 그 워크트리>/.claude/dashboard.html (여럿이면 mtime 최신)` | 제목·단계별 상태·진행률 | 티어 2로 강등 |
 | 2 | `세션 활동` | `~/.claude/hub/events/*.jsonl` | 세션 목록·상태·그 세션에서 돌았던 서브에이전트 타입 | 티어 3으로 강등 |
 | 3 | `세션 없음` | `~/.claude/projects/<인코딩>/*.jsonl` 의 **mtime** | 마지막 활동 시각뿐(내용은 절대 읽지 않는다) | 그 프로젝트는 목록에 없다 |
 
@@ -356,7 +356,7 @@ hub/install.sh --force      # 1. 설치본 갱신
 | 필드 | 기본값 | 뜻 |
 |------|--------|-----|
 | `roots` | `[]` | 이 경로들을 훑어 `.claude`·`.git` 이 있는 디렉토리를 프로젝트로 추가한다 |
-| `ignore_globs` | worktree·`/tmp`·`/private/tmp` | 이 패턴에 맞는 경로는 제외한다 |
+| `ignore_globs` | worktree·`/tmp`·`/private/tmp` | 이 패턴에 맞는 경로는 제외한다. 단 worktree 경로는 **먼저 소유 레포 루트로 접힌 뒤** 이 판정을 받으므로, worktree 패턴은 티어 1·2 에서는 사실상 발동하지 않는다(티어 3 인코딩명 필터에서는 그대로 유효) |
 | `scan_depth` | `3` | `roots` 스캔 깊이 |
 | `stale_after_minutes` | `30` | 이 시간 무활동이면 `stale` 로 표시 |
 | `event_retention_days` | `7` | 이보다 오래된 이벤트 파일은 삭제 |

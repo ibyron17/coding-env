@@ -612,6 +612,15 @@ scratchpad·worktree** 경로다(`/private/tmp/claude-501/…`, `.claude/worktre
 `ignore_globs` 가 이들을 제외한다. **worktree cwd 를 레포 루트로 병합하는 로직(CAM P5)은 만들지
 않는다** — 애초에 제외하기로 했으므로 필요 없다(YAGNI).
 
+> **번복(2026-08-20, hub-worktree-fold.md)** — 이 배제는 「worktree 를 ignore_globs 로 제외한다」는
+> 전제의 파생 결론이었다. 실측이 전제를 무너뜨렸다: worktree 세션은 이미 카드에 들어와 있고(첫
+> 이벤트가 레포 루트라서), 진짜 결함은 ① 창이 굴렀을 때의 소실 ② 티어 1 이 레포 루트 파일만
+> 읽는 불일치였다. 결정 WT1~WT6 이 정본이다.
+>
+> **재측정(2026-08-20)** — 36개 중 scratchpad 14, worktree 문자열 4 이고 그 4 중 3 은
+> /private/tmp 스크래치패드 **안**의 worktree 다. 노이즈 논거를 지탱하는 것은 `/private/tmp/**`
+> 이지 worktree glob 이 아니다.
+
 ### 쟁점 5 — 훅 설치기: install.sh 는 훅을 건드리지 않고, `/hub install` 이 옵트인으로 한다
 
 **`~/.claude/settings.json` 은 `install.sh` 의 소유가 아니다.** `session-dashboard.md` 설계 결정 4가
@@ -925,7 +934,7 @@ bash -n install.sh                                  # 셸 구문
 | 세션별 이벤트 파일 | 파일 수가 세션 수만큼 늘고 읽기 비용이 그에 비례한다 |
 | `install.sh` 가 훅을 자동 설치 | `settings.json` 은 install.sh 의 소유가 아니다(기존 설계 결정 4). 사용자 훅을 말없이 건드리는 설치기는 신뢰를 잃는다 |
 | `/dashboard hub` 서브커맨드 | `dashboard.md`(1512줄)는 호출마다 전량 로드된다. 무관한 기능이 `step` 한 번의 비용을 올린다 |
-| worktree cwd → 레포 루트 병합(CAM P5) | worktree·scratchpad 를 애초에 `ignore_globs` 로 제외하기로 했으므로 필요 없다(YAGNI) |
+| worktree cwd → 레포 루트 병합(CAM P5) | **[번복 — hub-worktree-fold.md]** worktree·scratchpad 를 애초에 `ignore_globs` 로 제외하기로 했으므로 필요 없다(YAGNI) |
 | ~~`serve` 포트 스캔 실패 시 자기가 띄운 Popen 핸들을 유지하고 terminate() 하는 안(검수 R1 nit)~~ | **[개정 1로 무의미]** `serve` 자체가 폐기되고, 프로세스 생명주기는 `hub_daemon.py` 의 PID + `ps` 신원 확인이 관리한다 — 이 항목은 더 이상 판단 대상이 아니다 |
 | `events/`·`hub/` 디렉토리를 0o700 으로 제한(검수 R1 nit m7/m10) | 프라이버시 리스크는 이미 120자 절단 + 7일 리텐션 + `record_prompt_excerpt` 스위치로 완화돼 있다. 기존에 다른 권한으로 이미 존재하는 디렉토리에 사후 chmod 를 적용하는 경우까지 고려하면 범위가 넓어져 별건으로 미룬다 |
 

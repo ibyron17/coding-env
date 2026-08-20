@@ -17,7 +17,10 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "hub", "b
 
 import hub_collect  # noqa: E402
 import hub_model  # noqa: E402
+import hub_parse  # noqa: E402
+import hub_project  # noqa: E402
 import hub_server_state  # noqa: E402
+import hub_session  # noqa: E402
 import hub_usage  # noqa: E402
 
 
@@ -211,6 +214,188 @@ class Tier3IgnoreFilterTest(unittest.TestCase):
         self.assertNotIn("-Users-b-flaky", activity)
         self.assertEqual(len(warnings), 1)
         self.assertIn("mtime 조회 실패", warnings[0])
+
+
+class WorktreeFoldGroupingTest(unittest.TestCase):
+    """U-11~U-13 — _group_sessions_by_project 는 fold 를 ignore 보다 먼저 적용한다
+    (결정 WT4·WT5, docs/prps/hub-worktree-fold.md)."""
+
+    BASE_TIME_MS = 1_786_000_000_000
+
+    def _event(self, cwd: str, received_at_ms: int | None = None) -> hub_session.HookEvent:
+        return hub_session.HookEvent(
+            received_at_ms=received_at_ms if received_at_ms is not None else self.BASE_TIME_MS,
+            hook_event_name="UserPromptSubmit",
+            session_id="s1", cwd=cwd, source=None, reason=None, agent_id=None, agent_type=None,
+            prompt_excerpt=None,
+        )
+
+    def test_u11_worktree_cwd_groups_under_repo_root(self) -> None:
+        """S1 — 워크트리 cwd 이벤트가 레포 루트 그룹으로 묶인다. **기본** ignore_globs 를
+        쓴다(빈 튜플이면 워크트리 glob 이 아예 발동하지 않아 fold-먼저 순서를 검증하지 못한다) —
+        기본값에는 `**/.claude/worktrees/**` 가 있어, ignore 가 먼저였다면 이 세션은 통째로
+        사라졌을 것이다."""
+        ignore_globs = hub_model.HubConfig().ignore_globs
+        events = [self._event("/repo/.claude/worktrees/w")]
+        grouped = hub_collect._group_sessions_by_project(events, ignore_globs)
+        self.assertIn("/repo", grouped)
+        self.assertNotIn("/repo/.claude/worktrees/w", grouped)
+
+    def test_u12_flip_scenario_session_survives_when_first_event_is_worktree(self) -> None:
+        """S2(E5 재현) — 창이 굴러 첫 이벤트가 만료되면 남는 이벤트는 전부 워크트리 cwd 다.
+        그 궤적을 **같은 세션의 이벤트 2건**(시각차만 다름)으로 재현한다(검수 1회차 m3 —
+        이벤트 1건짜리는 U-11 과 입력이 사실상 같아 flip 을 실제로 재현하지 못했다).
+
+        「접기 전」 비교는 손수 그룹핑을 재구현하지 않고 실제 술어 `should_ignore_cwd` 를
+        원본(미접힘) cwd 에 직접 호출한다(검수 1회차 m3 — 예전 버전은 `pre_fold_grouped` 에
+        애초에 원본 cwd 로만 키를 넣어 두고 "/repo 가 없다"를 확인했는데, 그 키 자체가
+        `should_ignore_cwd` 를 전혀 거치지 않아 무슨 뮤테이션을 넣어도 항상 참인 항진명제였다).
+        이 단언이 참이라는 것은 곧 「ignore 를 fold 전에 적용하면(결정 WT5 위반) 이 세션이
+        `_group_sessions_by_project` 안에서 통째로 걸러진다」는 실제 위험 경로를 보여준다."""
+        ignore_globs = hub_model.HubConfig().ignore_globs
+        events = [
+            self._event("/repo/.claude/worktrees/w"),
+            self._event("/repo/.claude/worktrees/w", received_at_ms=self.BASE_TIME_MS + 60_000),
+        ]
+
+        grouped = hub_collect._group_sessions_by_project(events, ignore_globs)
+        self.assertEqual(len(grouped.get("/repo", ())), 1)
+        self.assertEqual(grouped["/repo"][0].session_id, "s1")
+
+        raw_cwd = hub_session.build_session_facts(events)["s1"].cwd
+        self.assertTrue(hub_project.should_ignore_cwd(raw_cwd, ignore_globs))
+
+    def test_u13_folded_scratchpad_worktree_is_still_ignored(self) -> None:
+        """E9 회귀 방어 — /private/tmp 아래 워크트리는 접어도 여전히 제외된다."""
+        ignore_globs = hub_model.HubConfig().ignore_globs
+        events = [self._event("/private/tmp/claude-501/scratch-repo/.claude/worktrees/w")]
+        grouped = hub_collect._group_sessions_by_project(events, ignore_globs)
+        self.assertEqual(grouped, {})
+
+
+class Tier1SourceSelectionTest(unittest.TestCase):
+    """U-14~U-16 — _read_tier1_for_root 가 루트·워크트리 후보 중 mtime 최신 승자를 고른다
+    (S4·S7, 결정 WT6)."""
+
+    _DASHBOARD_HTML_TEMPLATE = (
+        '<h1 id="dz-title">{title}</h1>'
+        '<div class="pct" id="dz-progress-pct">1/2 · 50%</div>'
+        'id="dz-updated">2026-08-20 00:00</div>'
+    )
+
+    def setUp(self) -> None:
+        self.temp_dir = Path(tempfile.mkdtemp())
+        self.root = str(self.temp_dir / "repo")
+        self.worktree = str(self.temp_dir / "repo" / ".claude" / "worktrees" / "w")
+
+    def tearDown(self) -> None:
+        shutil.rmtree(self.temp_dir, ignore_errors=True)
+
+    def _write_dashboard(self, project_path: str, title: str, mtime_seconds: float) -> None:
+        dashboard_dir = Path(project_path) / ".claude"
+        dashboard_dir.mkdir(parents=True, exist_ok=True)
+        dashboard_path = dashboard_dir / "dashboard.html"
+        dashboard_path.write_text(self._DASHBOARD_HTML_TEMPLATE.format(title=title), encoding="utf-8")
+        os.utime(dashboard_path, (mtime_seconds, mtime_seconds))
+
+    def test_u14_newer_worktree_dashboard_wins_and_carries_its_own_source_path(self) -> None:
+        """S4 — 승자는 mtime 이 더 새로운 쪽이고, snapshot.source_path 가 그 디렉토리다."""
+        self._write_dashboard(self.root, "루트", mtime_seconds=1_000_000)
+        self._write_dashboard(self.worktree, "워크트리", mtime_seconds=2_000_000)
+
+        snapshot, warnings = hub_collect._read_tier1_for_root((self.root, self.worktree))
+
+        self.assertEqual(warnings, ())
+        self.assertEqual(snapshot.title, "워크트리")
+        self.assertEqual(snapshot.source_path, self.worktree)
+
+    def test_u15_worktree_only_promotes_root_card_to_tier1(self) -> None:
+        self._write_dashboard(self.worktree, "워크트리", mtime_seconds=1_000_000)
+
+        snapshot, warnings = hub_collect._read_tier1_for_root((self.root, self.worktree))
+
+        self.assertEqual(warnings, ())
+        self.assertEqual(snapshot.source_path, self.worktree)
+
+    def test_u16_root_only_is_unchanged_from_before(self) -> None:
+        """S7 — 워크트리가 없는 프로젝트는 오늘과 완전히 동일하게 source_path 가 루트다."""
+        self._write_dashboard(self.root, "루트", mtime_seconds=1_000_000)
+
+        snapshot, warnings = hub_collect._read_tier1_for_root((self.root,))
+
+        self.assertEqual(warnings, ())
+        self.assertEqual(snapshot.source_path, self.root)
+
+
+class CollectTier1SnapshotsTest(unittest.TestCase):
+    """검수 1회차 M1 — `_collect_tier1_snapshots`(collect_snapshot 조립 루프)가 각 루트의
+    멤버 경로 전체를 `_read_tier1_for_root` 에 그대로 넘기는지 직접 확인한다.
+
+    이전에는 이 배선이 `collect_snapshot` 안에 있었는데, 이를 참조하는 테스트가 전부
+    `_read_tier1_for_root` 자체를 `mock.patch` 로 우회해 이 조립 지점을 한 번도 실행하지
+    않았다 — `_read_tier1_for_root(root, members_by_root[root])` → `_read_tier1_for_root(root,
+    (root,))`(멤버 대신 루트만 넘김, 결함 A 완전 복원) 뮤테이션이 397 tests OK 로 통과했다.
+    여기서는 `_read_tier1_for_root` 를 mock 으로 바꿔치기해 실제로 어떤 인자로 불렸는지
+    직접 단언한다."""
+
+    def test_full_member_tuple_is_forwarded_not_just_the_root(self) -> None:
+        candidates_by_root = {"/repo": ("/repo", "/repo/.claude/worktrees/w")}
+        with mock.patch.object(
+            hub_collect, "_read_tier1_for_root", return_value=(None, ())
+        ) as mocked_read:
+            hub_collect._collect_tier1_snapshots(candidates_by_root)
+        mocked_read.assert_called_once_with(("/repo", "/repo/.claude/worktrees/w"))
+
+    def test_snapshot_and_warnings_are_collected_per_root(self) -> None:
+        tier1 = hub_parse.Tier1Snapshot(
+            title="t", subtitle="s", completed=1, total=2, percent=50, steps=(),
+            matrix_done=None, impl_done=0, impl_total=0, updated_text="-",
+            file_mtime_ms=1, source_path="/repo",
+        )
+        candidates_by_root = {"/repo": ("/repo",), "/other": ("/other",)}
+
+        def _fake_read(member_paths):
+            if member_paths == ("/repo",):
+                return tier1, ()
+            return None, (f"{member_paths[0]}: 경고",)
+
+        with mock.patch.object(hub_collect, "_read_tier1_for_root", side_effect=_fake_read):
+            tier1_by_path, warnings = hub_collect._collect_tier1_snapshots(candidates_by_root)
+
+        self.assertEqual(tier1_by_path, {"/repo": tier1})
+        self.assertEqual(warnings, ("/other: 경고",))
+
+
+class RenderHubHtmlWorktreeFoldTest(unittest.TestCase):
+    """U-21(S3) — 워크트리 세션이 있는 스냅샷을 렌더해도 #dzh-data 의 projects[].path 에
+    워크트리 경로가 남지 않는다(워크트리는 별도 카드가 되지 않는다)."""
+
+    BASE_TIME_MS = 1_786_000_000_000
+    WORKTREE_PATH_MARKER = "/.claude/worktrees/"
+
+    def test_u21_no_project_path_contains_the_worktree_marker(self) -> None:
+        event = hub_session.HookEvent(
+            received_at_ms=self.BASE_TIME_MS, hook_event_name="UserPromptSubmit",
+            session_id="s1", cwd="/repo/.claude/worktrees/w", source=None, reason=None,
+            agent_id=None, agent_type=None, prompt_excerpt=None,
+        )
+        sessions_by_path = hub_collect._group_sessions_by_project([event], ())
+        views = hub_project.compose_project_views(
+            tier1_by_path={}, sessions_by_path=sessions_by_path, tier3_last_activity_by_path={},
+            now_ms=self.BASE_TIME_MS, stale_after_ms=30 * 60 * 1000,
+        )
+        snapshot = hub_model.HubSnapshot(
+            collected_at_ms=self.BASE_TIME_MS, projects=views, unresolved_dir_names=(), warnings=(),
+        )
+        template = '<html><body><script type="application/json" id="dzh-data">{}</script></body></html>'
+        rendered = hub_model.render_hub_html(template, snapshot)
+        payload = rendered.split('id="dzh-data">', 1)[1].rsplit("</script>", 1)[0]
+        parsed = json.loads(payload)
+        worktree_paths = [
+            project["path"] for project in parsed["projects"]
+            if self.WORKTREE_PATH_MARKER in (project["path"] or "")
+        ]
+        self.assertEqual(worktree_paths, [])
 
 
 class ReadRecentEventsFailureIsolationTest(unittest.TestCase):

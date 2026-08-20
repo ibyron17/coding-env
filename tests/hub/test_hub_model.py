@@ -10,6 +10,7 @@ import unittest
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "hub", "bin"))
 
 import hub_model  # noqa: E402  (sys.path 조정 후 임포트)
+import hub_parse  # noqa: E402
 import hub_project  # noqa: E402
 import hub_session  # noqa: E402
 import hub_usage  # noqa: E402
@@ -72,19 +73,29 @@ class RenderHubHtmlTest(unittest.TestCase):
 
 
 class BuildDashboardRegistryTest(unittest.TestCase):
-    """U4~U5 — build_dashboard_registry 는 티어 1 만 담고, 값은 <경로>/.claude/dashboard.html."""
+    """U4~U5 — build_dashboard_registry 는 티어 1 만 담고, 값은 <경로>/.claude/dashboard.html.
+    U-17 — 승자가 워크트리 파일이면 값은 project.path 가 아니라 그 워크트리 경로다(S5, 결정 WT8)."""
 
-    def _project_view(self, path: str, tier: int) -> hub_project.ProjectView:
+    def _tier1(self, source_path: str) -> hub_parse.Tier1Snapshot:
+        return hub_parse.Tier1Snapshot(
+            title="t", subtitle="s", completed=1, total=2, percent=50, steps=(),
+            matrix_done=None, impl_done=0, impl_total=0, updated_text="-",
+            file_mtime_ms=BASE_TIME_MS, source_path=source_path,
+        )
+
+    def _project_view(
+        self, path: str, tier: int, tier1: hub_parse.Tier1Snapshot | None = None
+    ) -> hub_project.ProjectView:
         return hub_project.ProjectView(
             display_name=path.rsplit("/", 1)[-1], path=path, tier=tier, state="idle",
-            last_activity_at_ms=BASE_TIME_MS, sessions=(), tier1=None, note=None,
+            last_activity_at_ms=BASE_TIME_MS, sessions=(), tier1=tier1, note=None,
         )
 
     def test_u4_only_tier1_projects_are_registered(self) -> None:
         snapshot = hub_model.HubSnapshot(
             collected_at_ms=BASE_TIME_MS,
             projects=(
-                self._project_view("/repo/one", tier=1),
+                self._project_view("/repo/one", tier=1, tier1=self._tier1("/repo/one")),
                 self._project_view("/repo/two", tier=2),
                 self._project_view("/repo/three", tier=3),
             ),
@@ -97,12 +108,39 @@ class BuildDashboardRegistryTest(unittest.TestCase):
     def test_u5_registry_value_is_dashboard_html_path(self) -> None:
         snapshot = hub_model.HubSnapshot(
             collected_at_ms=BASE_TIME_MS,
-            projects=(self._project_view("/repo/one", tier=1),),
+            projects=(self._project_view("/repo/one", tier=1, tier1=self._tier1("/repo/one")),),
             unresolved_dir_names=(), warnings=(),
         )
         registry = hub_model.build_dashboard_registry(snapshot)
         key = hub_project.project_dashboard_key("/repo/one")
         self.assertEqual(registry[key], "/repo/one/.claude/dashboard.html")
+
+    def test_u17_registry_value_uses_worktree_source_path_when_it_wins(self) -> None:
+        worktree_path = "/repo/one/.claude/worktrees/w"
+        snapshot = hub_model.HubSnapshot(
+            collected_at_ms=BASE_TIME_MS,
+            projects=(self._project_view("/repo/one", tier=1, tier1=self._tier1(worktree_path)),),
+            unresolved_dir_names=(), warnings=(),
+        )
+        registry = hub_model.build_dashboard_registry(snapshot)
+        key = hub_project.project_dashboard_key("/repo/one")
+        self.assertEqual(registry[key], worktree_path + "/.claude/dashboard.html")
+
+    def test_tier1_with_unset_source_path_is_excluded_defensively(self) -> None:
+        """검토 지적 반영 — tier==1 인데 tier1.source_path 가 UNSET_SOURCE_PATH(계약 위반)로
+        남으면 "" + "/.claude/dashboard.html" 이라는 엉뚱한 경로를 등록하지 않고 제외한다."""
+        broken_tier1 = hub_parse.Tier1Snapshot(
+            title="t", subtitle="s", completed=1, total=2, percent=50, steps=(),
+            matrix_done=None, impl_done=0, impl_total=0, updated_text="-",
+            file_mtime_ms=BASE_TIME_MS,   # source_path 생략 → UNSET_SOURCE_PATH
+        )
+        snapshot = hub_model.HubSnapshot(
+            collected_at_ms=BASE_TIME_MS,
+            projects=(self._project_view("/repo/one", tier=1, tier1=broken_tier1),),
+            unresolved_dir_names=(), warnings=(),
+        )
+        registry = hub_model.build_dashboard_registry(snapshot)
+        self.assertEqual(registry, {})
 
 
 class SnapshotContentKeyTest(unittest.TestCase):
