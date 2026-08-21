@@ -115,10 +115,10 @@ cd /path/to/my-project
 | `prp-implement` | 385 | 계획 실행 + 검증 루프 |
 | `prp-pr` | 184 | 브랜치 변경 분석 후 GitHub PR 생성 |
 | `prp-commit` | 131 | 자연어로 파일 지정해 커밋 (컨벤션: 프로젝트 CLAUDE.md > commitlint 설정 > 기본 형식) |
-| `code-review` | 289 | 로컬 변경 또는 PR 검수 |
-| `env-update` | 184 | coding-env 레포 업데이트 (manifest 기반 자동 갱신) |
-| `dashboard` | 1672 | 세션 진행 상황을 프로젝트 로컬 HTML 대시보드로 기록 (init/step/impl/log + on/off 스위치, `serve`로 플로팅) |
-| `hub` | 153 | 로컬 모든 프로젝트 진행 상황을 한 페이지에 집계 (**별도 설치** — [hub/README.md](hub/README.md)) |
+| `code-review` | 311 | 로컬 변경 또는 PR 검수 |
+| `env-update` | 319 | coding-env 레포 업데이트 (manifest 기반 자동 갱신) |
+| `dashboard` | 1684 | 세션 진행 상황을 프로젝트 로컬 HTML 대시보드로 기록 (init/step/impl/log + on/off 스위치, `serve`로 플로팅) |
+| `hub` | 280 | 로컬 모든 프로젝트 진행 상황을 한 페이지에 집계 (**별도 설치** — [hub/README.md](hub/README.md)) |
 
 각 커맨드의 동작:
 
