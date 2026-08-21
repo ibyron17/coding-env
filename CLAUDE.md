@@ -108,6 +108,15 @@
   `.claude/settings.local.json` 에 `"dashboard_enabled": false` 를 추가한다(`/dashboard off` 가 대신 해준다) — 메인 세션은
   `/dashboard` 를 호출하기 전에 이 파일이 있으면 그 값을 확인하고, `false` 면 이번 세션의
   전체 경로 작업에서 `/dashboard` 호출을 생략한다(파일이 없거나 필드가 없으면 기본값 사용).
+  **가용성 사전 확인 금지**: `/dashboard` 를 부르기 전에 `ListSkills` 등으로 "설치돼
+  있는지" 먼저 검색하지 않는다. `ListSkills` 는 마켓플레이스/플러그인 카탈로그 검색
+  도구이지 개인 커스텀 커맨드(`~/.claude/commands/`)를 인덱싱하지 않으므로, 실제 설치
+  여부와 무관하게 항상 빈 결과를 낸다 — 이 오사용이 실제로 대시보드 미발행 사고를 냈다
+  (분석: [`docs/prps/dashboard-availability-check-gap.md`](docs/prps/dashboard-availability-check-gap.md)).
+  위 오프 스위치 확인이 끝났으면 그냥 `Skill(skill: "dashboard", ...)` 을 호출한다 —
+  스킬이 없으면 도구 자체가 실패를 반환하므로 그때 대응하면 충분하다. **호출을
+  생략했거나 실패했으면 그 사실을 착수 보고에 한 줄로 남긴다** — 사유를 알리지 않고
+  조용히 건너뛰지 않는다.
 
 ### 모델 운용 원칙
 - **설계 (design-architect): opus** — 판단 오류의 파급이 가장 큰 단계
